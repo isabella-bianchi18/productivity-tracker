@@ -31,7 +31,6 @@ const SK='pt_v3';
 function saveL(){localStorage.setItem(SK,JSON.stringify(D))}
 function loadL(){const s=localStorage.getItem(SK);if(s)D={...JSON.parse(JSON.stringify(DEFAULT_DATA)),...JSON.parse(s)}}
 let pushTimeout=null;
-let pushTimeout=null;
 async function gistPush(){const{gistId:g,token:t}=D.settings;if(!g||!t)return false;
   const pushData=JSON.parse(JSON.stringify(D));delete pushData.settings.token;delete pushData.settings.gistId;
   try{const r=await fetch(`https://api.github.com/gists/${g}`,{method:'PATCH',headers:{'Authorization':`token ${t}`,'Content-Type':'application/json','Accept':'application/vnd.github.v3+json'},body:JSON.stringify({files:{'productivity_data.json':{content:JSON.stringify(pushData)}}})});return r.ok}catch(e){return false}}
