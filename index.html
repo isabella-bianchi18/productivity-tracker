@@ -9,7 +9,7 @@
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 :root{--bg:#f9fafb;--surface:#fff;--card-task:#ede9fe;--card-reward:#dbeafe;--card-sleep:#f3e8ff;--card-neutral:#f3f4f6;--border:#e5e7eb;--accent:#a78bfa;--accent-dark:#7c3aed;--accent2:#7dd3fc;--success:#86efac;--success-dark:#22c55e;--warning:#fcd34d;--warning-dark:#f59e0b;--danger:#fca5a5;--danger-dark:#ef4444;--text:#1f2937;--text-dim:#6b7280;--radius:14px;--shadow:0 1px 4px rgba(0,0,0,0.05)}
-body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(--text);min-height:100vh;padding:16px;padding-top:max(16px,env(safe-area-inset-top));padding-bottom:90px;-webkit-tap-highlight-color:transparent}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(--text);min-height:100vh;padding:16px;padding-top:max(16px,env(safe-area-inset-top));padding-bottom:100px;-webkit-tap-highlight-color:transparent}
 </style>
 </head>
 <body>
@@ -19,8 +19,8 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-seri
 <div id="modal-container"></div>
 <script>
 // ===== DATA =====
-const APP_VERSION='1.5.0';
-const DEFAULT_DATA={tasks:[],points:0,pointsHistory:[],rewards:[],techniques:[],settings:{gistId:'',token:'',dailyGoal:0},dailyGoalLog:{},streak:0,fractional:0};
+const APP_VERSION='1.7.0';
+const DEFAULT_DATA={tasks:[],points:0,pointsHistory:[],rewards:[],techniques:[],metrics:[],settings:{gistId:'',token:'',dailyGoal:0},dailyGoalLog:{},streak:0,fractional:0};
 let D=JSON.parse(JSON.stringify(DEFAULT_DATA));
 let view='tasks',toolsView='menu',expandedTech=null,inlineMinId=null;
 let T={running:false,paused:false,mode:null,start:null,elapsed:0,workDur:25,breakDur:5,phase:'work',note:'',taskId:'',pts:1,per:15};
@@ -271,8 +271,8 @@ function rHistory(){
   return `<div class="vc"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px"><button class="hnav ibtn" data-d="prev">◀</button><h2 style="font-size:1rem;color:var(--accent-dark)">${mn}</h2><button class="hnav ibtn" data-d="next">▶</button></div><div class="calbox"><div class="cgrid">${['S','M','T','W','T','F','S'].map(x=>`<div class="ch">${x}</div>`).join('')}${cells}</div></div>${selDay?`<div class="fcard" style="margin-top:14px"><h3 style="font-size:.9rem;margin-bottom:10px">${new Date(selDay+'T12:00:00').toLocaleDateString('default',{weekday:'long',month:'short',day:'numeric'})}</h3>${detail}</div>`:''}</div>`}
 
 // ===== TOOLS =====
-function rTools(){if(toolsView==='menu')return rToolsMenu();if(toolsView==='sw')return rSW();if(toolsView==='pm')return rPM();if(toolsView==='tech')return rTech();return rToolsMenu()}
-function rToolsMenu(){const a=T.running||T.paused,m=T.mode;return `<div class="vc"><h2 style="font-size:1.1rem;color:var(--accent-dark);margin-bottom:16px">🧰 Tools</h2><button class="tlcard${a&&m!=='sw'?' dis':''}" data-t="sw" ${a&&m!=='sw'?'disabled':''}>⏱️ <b>Stopwatch</b><br><span class="tdesc">Open-ended timer</span>${a&&m==='sw'?'<br><span style="font-size:.75rem;color:var(--success-dark)">Running...</span>':''}${a&&m!=='sw'?'<br><span style="font-size:.75rem;color:var(--danger-dark)">Stop timer first</span>':''}</button><button class="tlcard${a&&m!=='pm'?' dis':''}" data-t="pm" ${a&&m!=='pm'?'disabled':''}>🍅 <b>Pomodoro</b><br><span class="tdesc">Work/break cycles</span>${a&&m==='pm'?'<br><span style="font-size:.75rem;color:var(--success-dark)">Running...</span>':''}${a&&m!=='pm'?'<br><span style="font-size:.75rem;color:var(--danger-dark)">Stop timer first</span>':''}</button><button class="tlcard" data-t="tech">🧠 <b>Techniques</b><br><span class="tdesc">Anti-procrastination tracker</span></button></div>`}
+function rTools(){if(toolsView==='menu')return rToolsMenu();if(toolsView==='sw')return rSW();if(toolsView==='pm')return rPM();if(toolsView==='tech')return rTech();if(toolsView==='metrics')return rMetrics();return rToolsMenu()}
+function rToolsMenu(){const a=T.running||T.paused,m=T.mode;return `<div class="vc"><h2 style="font-size:1.1rem;color:var(--accent-dark);margin-bottom:16px">🧰 Tools</h2><button class="tlcard${a&&m!=='sw'?' dis':''}" data-t="sw" ${a&&m!=='sw'?'disabled':''}>⏱️ <b>Stopwatch</b><br><span class="tdesc">Open-ended timer</span>${a&&m==='sw'?'<br><span style="font-size:.75rem;color:var(--success-dark)">Running...</span>':''}${a&&m!=='sw'?'<br><span style="font-size:.75rem;color:var(--danger-dark)">Stop timer first</span>':''}</button><button class="tlcard${a&&m!=='pm'?' dis':''}" data-t="pm" ${a&&m!=='pm'?'disabled':''}>🍅 <b>Pomodoro</b><br><span class="tdesc">Work/break cycles</span>${a&&m==='pm'?'<br><span style="font-size:.75rem;color:var(--success-dark)">Running...</span>':''}${a&&m!=='pm'?'<br><span style="font-size:.75rem;color:var(--danger-dark)">Stop timer first</span>':''}</button><button class="tlcard" data-t="tech">🧠 <b>Techniques</b><br><span class="tdesc">Anti-procrastination tracker</span></button><button class="tlcard" data-t="metrics">📊 <b>Metrics</b><br><span class="tdesc">Track daily habits & feelings</span></button></div>`}
 
 function rSW(){
   const opts=visibleTasks().map(t=>`<option value="${t.id}">${t.name}</option>`).join('');
@@ -335,6 +335,72 @@ function showGoalEditModal(){
   document.getElementById('dg-save')?.addEventListener('click',()=>{const v=parseInt(document.getElementById('dg-val').value);D.settings.dailyGoal=Number.isInteger(v)&&v>=1?v:0;saveL();debouncedPush();closeM();render()});
   document.getElementById('dg-clear')?.addEventListener('click',()=>{D.settings.dailyGoal=0;saveL();debouncedPush();closeM();render()});
 }
+// ===== METRICS =====
+let expandedMetric=null;
+function rMetrics(){
+  if(!D.metrics)D.metrics=[];
+  const t=today();
+  const icons=['😩','😕','🙂','😄'];
+  const cards=D.metrics.map(m=>{
+    const todayEntry=m.entries.find(e=>e.date===t);
+    const last7=m.entries.filter(e=>{const diff=(new Date()-new Date(e.date))/864e5;return diff<7});
+    const avg=last7.length>0?Math.round(last7.reduce((s,e)=>s+e.val,0)/last7.length):-1;
+    const avgIcon=avg>=0?icons[Math.min(avg,3)]:'—';
+    const isExp=expandedMetric===m.id;
+    let graphView='';
+    if(isExp){
+      const sorted=[...m.entries].sort((a,b)=>a.date.localeCompare(b.date));
+      const last30=sorted.slice(-30);
+      if(last30.length>1){
+        const w=280,h=100,px=w/(last30.length-1);
+        let path=`M 0 ${h-last30[0].val*h/3}`;
+        for(let i=1;i<last30.length;i++) path+=` L ${Math.round(i*px)} ${Math.round(h-last30[i].val*h/3)}`;
+        graphView=`<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);">
+          <div style="font-size:.8rem;color:var(--text-dim);margin-bottom:6px;">Last ${last30.length} days</div>
+          <div style="position:relative;width:100%;overflow-x:auto;">
+            <svg viewBox="0 0 ${w} ${h+20}" style="width:100%;height:120px;">
+              <line x1="0" y1="${h}" x2="${w}" y2="${h}" stroke="var(--border)" stroke-width="1"/>
+              <line x1="0" y1="${h*2/3}" x2="${w}" y2="${h*2/3}" stroke="var(--border)" stroke-width="0.5" stroke-dasharray="4"/>
+              <line x1="0" y1="${h/3}" x2="${w}" y2="${h/3}" stroke="var(--border)" stroke-width="0.5" stroke-dasharray="4"/>
+              <line x1="0" y1="0" x2="${w}" y2="0" stroke="var(--border)" stroke-width="0.5" stroke-dasharray="4"/>
+              <polyline points="${last30.map((e,i)=>`${Math.round(i*px)},${Math.round(h-e.val*h/3)}`).join(' ')}" fill="none" stroke="var(--accent-dark)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+              ${last30.map((e,i)=>`<circle cx="${Math.round(i*px)}" cy="${Math.round(h-e.val*h/3)}" r="3" fill="var(--accent-dark)"/>`).join('')}
+              <text x="0" y="${h+14}" font-size="8" fill="var(--text-dim)">${new Date(last30[0].date).toLocaleDateString('default',{month:'short',day:'numeric'})}</text>
+              <text x="${w}" y="${h+14}" font-size="8" fill="var(--text-dim)" text-anchor="end">${new Date(last30[last30.length-1].date).toLocaleDateString('default',{month:'short',day:'numeric'})}</text>
+            </svg>
+            <div style="display:flex;justify-content:space-between;font-size:.7rem;color:var(--text-dim);margin-top:2px;"><span>😩</span><span>😕</span><span>🙂</span><span>😄</span></div>
+          </div>
+        </div>`;
+      } else if(last30.length===1){
+        graphView=`<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);font-size:.8rem;color:var(--text-dim);">Only 1 entry so far. Graph appears after 2+ days.</div>`;
+      } else {
+        graphView=`<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);font-size:.8rem;color:var(--text-dim);font-style:italic;">No entries yet.</div>`;
+      }
+    }
+    return `<div class="fcard" style="margin-bottom:10px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+        <b class="mname" data-id="${m.id}" style="cursor:pointer;">${m.name}</b>
+        <span style="font-size:.85rem;">7d: ${avgIcon}</span>
+        <button class="mdel ibtn" data-id="${m.id}" style="font-size:.9rem;">🗑️</button>
+      </div>
+      <div style="display:flex;justify-content:space-around;">
+        ${icons.map((ic,i)=>`<button class="mlog" data-id="${m.id}" data-val="${i}" style="font-size:1.5rem;padding:8px 12px;border-radius:10px;border:${todayEntry&&todayEntry.val===i?'2px solid var(--accent-dark)':'2px solid transparent'};background:${todayEntry&&todayEntry.val===i?'var(--card-task)':'transparent'};cursor:pointer;">${ic}</button>`).join('')}
+      </div>
+      ${graphView}
+    </div>`;
+  }).join('');
+  return `<div class="vc">
+    <button class="tback">← Back</button>
+    <h2 style="font-size:1.1rem;color:var(--accent-dark);margin-bottom:12px;">📊 Metrics</h2>
+    <p style="font-size:.8rem;color:var(--text-dim);margin-bottom:12px;">Tap an icon to log today. Tap the name to see your graph.</p>
+    ${cards||'<p style="color:var(--text-dim);font-style:italic;">No metrics yet. Add one below!</p>'}
+    <div style="display:flex;gap:8px;margin-top:12px;">
+      <input id="met-new" type="text" placeholder="New metric (e.g. Productive)" class="inf" style="flex:1;margin:0;">
+      <button id="met-add" class="btn bpri" style="padding:10px 16px;">+</button>
+    </div>
+  </div>`;
+}
+
 function showRewardEdit(rid){
   const r=D.rewards.find(x=>x.id===rid);if(!r)return;
   modal(`<h2 style="color:var(--accent-dark);margin-bottom:12px">Edit Reward</h2><input id="ren" type="text" value="${r.name}" class="inf"><input id="rec" type="number" value="${r.cost}" min="1" class="inf"><div id="ree" class="err"></div><div style="display:flex;gap:8px;margin-top:8px"><button id="res" class="btn bpri" style="flex:1">Save</button><button id="red" class="btn bdan" style="padding:10px 16px">🗑️</button></div><button data-close class="btn bmut" style="margin-top:10px;width:100%">Close</button>`);
@@ -404,9 +470,21 @@ function bindAll(){
   document.getElementById('pmn')?.addEventListener('input',e=>{if(e.target.value.trim()){document.getElementById('pmt').value='';document.getElementById('pmt').style.display='none'}else{document.getElementById('pmt').style.display=''}valPM()});
   // Techniques
   document.querySelectorAll('.ttog').forEach(b=>b.addEventListener('click',()=>{expandedTech=expandedTech===b.dataset.id?null:b.dataset.id;render()}));
-  document.querySelectorAll('.tlog').forEach(b=>b.addEventListener('click',()=>{const t=D.techniques.find(x=>x.id===b.dataset.id);if(!t)return;const n=document.querySelector(`.tni[data-id="${b.dataset.id}"]`);t.entries.push({date:new Date().toISOString(),note:n?.value||'',thumbsUp:b.dataset.u==='1'});save();render()}));
+  document.querySelectorAll('.tlog').forEach(b=>b.addEventListener('click',()=>{const t=D.techniques.find(x=>x.id===b.dataset.id);if(!t)return;const n=document.querySelector(`.tni[data-id="${b.dataset.id}"]`);t.entries.push({date:new Date().toISOString(),note:n?.value||'',thumbsUp:b.dataset.u==='1'});save();render();showUndo(()=>{t.entries.pop();save();render()})}));
   document.querySelectorAll('.tdelt').forEach(b=>b.addEventListener('click',()=>confirmAction('Delete this technique?',()=>{D.techniques=D.techniques.filter(t=>t.id!==b.dataset.id);expandedTech=null;save();render()})));
   document.getElementById('tna')?.addEventListener('click',()=>{const n=document.getElementById('tnn')?.value.trim();if(!n)return;D.techniques.push({id:id(),name:n,entries:[]});save();render()});
+  // Metrics
+  document.querySelectorAll('.mname').forEach(b=>b.addEventListener('click',()=>{expandedMetric=expandedMetric===b.dataset.id?null:b.dataset.id;render()}));
+  document.querySelectorAll('.mlog').forEach(b=>b.addEventListener('click',()=>{
+    if(!D.metrics)D.metrics=[];
+    const m=D.metrics.find(x=>x.id===b.dataset.id);if(!m)return;
+    const t=today(),val=parseInt(b.dataset.val);
+    const existing=m.entries.findIndex(e=>e.date===t);
+    if(existing>=0)m.entries[existing].val=val;else m.entries.push({date:t,val});
+    save();render();
+  }));
+  document.querySelectorAll('.mdel').forEach(b=>b.addEventListener('click',()=>confirmAction('Delete this metric and all its data?',()=>{D.metrics=D.metrics.filter(x=>x.id!==b.dataset.id);save();render()})));
+  document.getElementById('met-add')?.addEventListener('click',()=>{const n=document.getElementById('met-new')?.value.trim();if(!n)return;if(!D.metrics)D.metrics=[];D.metrics.push({id:id(),name:n,entries:[]});save();render()});
 }
 
 // ===== FORM HELPERS =====
@@ -567,9 +645,10 @@ window.addEventListener('pagehide',()=>{saveL();gistPush()});
 .hpts{font-weight:bold;font-size:.85rem}
 .hpe{color:var(--success-dark)}
 .hps{color:var(--danger-dark)}
-.bnav{position:fixed;bottom:0;left:0;right:0;background:var(--surface);border-top:1px solid var(--border);display:flex;padding:6px 0;padding-bottom:max(6px,env(safe-area-inset-bottom));box-shadow:0 -1px 4px rgba(0,0,0,.03);height:60px}
-.nbtn{flex:1;padding:6px 4px;border:none;background:transparent;color:var(--text-dim);font-size:.7rem;cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:2px;justify-content:center}
+.bnav{position:fixed;bottom:0;left:0;right:0;background:var(--surface);border-top:1px solid var(--border);display:flex;padding:8px 0 20px 0;padding-bottom:max(20px,calc(env(safe-area-inset-bottom) + 8px));box-shadow:0 -1px 4px rgba(0,0,0,.03);height:auto}
+.nbtn{flex:1;padding:8px 4px;border:none;background:transparent;color:var(--text-dim);font-size:.7rem;cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:2px;justify-content:center;position:relative}
 .nact{color:var(--accent-dark)}
+.nact::after{content:'';position:absolute;bottom:0;left:25%;right:25%;height:3px;background:var(--accent-dark);border-radius:2px}
 .tlcard{width:100%;padding:16px;margin-bottom:10px;border-radius:var(--radius);border:1px solid var(--border);background:var(--surface);text-align:left;cursor:pointer;font-size:1rem;box-shadow:var(--shadow)}
 .tlcard:active{transform:scale(.98)}
 .tdesc{font-size:.8rem;color:var(--text-dim)}
