@@ -4,520 +4,575 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
 <title>Productivity Tracker</title>
 <style>
-* { box-sizing: border-box; margin: 0; padding: 0; }
-:root {
-  --bg: #1a1a2e;
-  --surface: #16213e;
-  --card: #0f3460;
-  --accent: #e94560;
-  --accent2: #533483;
-  --text: #eaeaea;
-  --text-dim: #a0a0b0;
-  --success: #4ecdc4;
-  --warning: #f39c12;
-  --radius: 12px;
-}
-body {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
-  background: var(--bg);
-  color: var(--text);
-  min-height: 100vh;
-  padding: 16px;
-  padding-bottom: 100px;
-}
+*{box-sizing:border-box;margin:0;padding:0}
+:root{--bg:#f9fafb;--surface:#fff;--card-task:#ede9fe;--card-reward:#dbeafe;--card-sleep:#f3e8ff;--card-neutral:#f3f4f6;--border:#e5e7eb;--accent:#a78bfa;--accent-dark:#7c3aed;--accent2:#7dd3fc;--success:#86efac;--success-dark:#22c55e;--warning:#fcd34d;--warning-dark:#f59e0b;--danger:#fca5a5;--danger-dark:#ef4444;--text:#1f2937;--text-dim:#6b7280;--radius:14px;--shadow:0 1px 4px rgba(0,0,0,0.05)}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(--text);min-height:100vh;padding:16px;padding-top:max(16px,env(safe-area-inset-top));padding-bottom:90px;-webkit-tap-highlight-color:transparent}
 </style>
 </head>
 <body>
 <div id="app"></div>
+<canvas id="confetti-canvas" style="position:fixed;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:9999;"></canvas>
+<div id="toast-container"></div>
+<div id="modal-container"></div>
 <script>
-// ========== DATA MODEL ==========
-const DEFAULT_DATA = {
-  tasks: [],
-  points: 0,
-  pointsHistory: [],
-  rewards: [],
-  settings: { gistId: '', token: '' }
-};
+// ===== DATA =====
+const DEFAULT_DATA={tasks:[],points:0,pointsHistory:[],rewards:[],techniques:[],settings:{gistId:'',token:'',dailyGoal:0},dailyGoalLog:{},streak:0,fractional:0};
+let D=JSON.parse(JSON.stringify(DEFAULT_DATA));
+let view='tasks',toolsView='menu',expandedTech=null,inlineMinId=null;
+let T={running:false,paused:false,mode:null,start:null,elapsed:0,workDur:25,breakDur:5,phase:'work',note:'',taskId:'',pts:1,per:15};
+let toastTimer=null,tickInterval=null;
 
-let appData = JSON.parse(JSON.stringify(DEFAULT_DATA));
-let currentView = 'tasks';
+// ===== STORAGE =====
+const SK='pt_v3';
+function saveL(){localStorage.setItem(SK,JSON.stringify(D))}
+function loadL(){const s=localStorage.getItem(SK);if(s)D={...JSON.parse(JSON.stringify(DEFAULT_DATA)),...JSON.parse(s)}}
+async function gistPush(){const{gistId:g,token:t}=D.settings;if(!g||!t)return false;try{const r=await fetch(`https://api.github.com/gists/${g}`,{method:'PATCH',headers:{'Authorization':`token ${t}`,'Content-Type':'application/json'},body:JSON.stringify({files:{'productivity_data.json':{content:JSON.stringify(D)}}})});return r.ok}catch(e){return false}}
+async function gistPull(){const{gistId:g,token:t}=D.settings;if(!g||!t)return false;try{const r=await fetch(`https://api.github.com/gists/${g}`,{headers:{'Authorization':`token ${t}`}});if(!r.ok)return false;const j=await r.json();const c=j.files['productivity_data.json']?.content;if(c){const remote=JSON.parse(c);const ls=D.settings;D={...JSON.parse(JSON.stringify(DEFAULT_DATA)),...remote,settings:ls};saveL();return true}}catch(e){}return false}
+function save(){saveL();gistPush()}
 
-// ========== PERSISTENCE (localStorage + Gist sync) ==========
-const STORAGE_KEY = 'productivity_tracker_data';
+// ===== UTILS =====
+function id(){return Date.now().toString(36)+Math.random().toString(36).slice(2,7)}
+function today(){return new Date().toISOString().slice(0,10)}
+function ptsToday(){return D.pointsHistory.filter(h=>h.date.slice(0,10)===today()&&h.type==='earned').reduce((s,h)=>s+h.points,0)}
+function elapsed(){if(T.paused)return T.elapsed;if(T.running)return T.elapsed+Math.floor((Date.now()-T.start)/1000);return 0}
 
-function saveLocal() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(appData));
+// Award points from timer, accumulating fractional remainders
+function awardTimerPts(exactPts){
+  D.fractional=(D.fractional||0)+exactPts;
+  const whole=Math.floor(D.fractional);
+  D.fractional-=whole;
+  return whole;
 }
+function visibleTasks(){const n=new Date();return D.tasks.filter(t=>{if(t.type==='one-time')return!t.completed;if(t.type==='recurring'){if(!t.lastCompleted)return true;return(n-new Date(t.lastCompleted))/864e5>=t.cadenceDays}return true})}
+function sleepingTasks(){const n=new Date();return D.tasks.filter(t=>t.type==='recurring'&&t.lastCompleted&&(n-new Date(t.lastCompleted))/864e5<t.cadenceDays).map(t=>({...t,left:Math.ceil(t.cadenceDays-(new Date()-new Date(t.lastCompleted))/864e5)})).sort((a,b)=>a.left-b.left)}
+function checkGoal(){const t=today(),g=D.settings.dailyGoal;if(!g||g<=0)return;
+  // Check if bonus already earned today by looking at actual history
+  const alreadyEarned=D.pointsHistory.some(h=>h.date.slice(0,10)===t&&h.task==='🎯 Daily goal bonus');
+  if(alreadyEarned)return;
+  if(ptsToday()>=g){const b=Math.floor(g*0.25);D.points+=b;D.pointsHistory.push({date:new Date().toISOString(),task:'🎯 Daily goal bonus',points:b,type:'earned'});D.dailyGoalLog[t]=true;updateStreak();saveL();gistPush();confetti();showGoalModal(g,b)}}
+function updateStreak(){let s=0,d=new Date();while(D.dailyGoalLog[d.toISOString().slice(0,10)]){s++;d.setDate(d.getDate()-1)}D.streak=s}
 
-function loadLocal() {
-  const stored = localStorage.getItem(STORAGE_KEY);
-  if (stored) {
-    appData = { ...DEFAULT_DATA, ...JSON.parse(stored) };
+// ===== ACTIONS =====
+function completeTask(tid,mins){
+  const task=D.tasks.find(t=>t.id===tid);if(!task)return;
+  const now=new Date().toISOString(),prev=JSON.parse(JSON.stringify(task)),prevP=D.points;
+  if(task.type==='one-time'){task.completed=true;task.completedAt=now}
+  else if(task.type==='recurring'){task.lastCompleted=now}
+  let pts=task.points||0;
+  if(task.timeBased&&mins)pts=Math.floor(mins*task.ptsAmount/task.ptsPerMinutes);
+  if(pts<0)pts=0;
+  D.points+=pts;
+  const h={date:now,task:task.name,taskId:task.id,points:pts,type:'earned'};
+  if(mins)h.minutes=mins;
+  const prevHistLen=D.pointsHistory.length;
+  D.pointsHistory.push(h);
+  inlineMinId=null;saveL();gistPush();confetti();checkGoal();render();
+  showUndo(()=>{Object.assign(task,prev);D.points=prevP;D.pointsHistory.length=prevHistLen;saveL();gistPush();render()});
+}
+function deleteTask(tid){D.tasks=D.tasks.filter(t=>t.id!==tid);save();render()}
+function moveTask(tid,dir){
+  const task=D.tasks.find(t=>t.id===tid);if(!task)return;
+  const same=D.tasks.filter(t=>t.type===task.type),ti=same.findIndex(t=>t.id===tid);
+  const si=dir==='up'?ti-1:ti+1;if(si<0||si>=same.length)return;
+  const ai=D.tasks.indexOf(task),bi=D.tasks.indexOf(same[si]);
+  [D.tasks[ai],D.tasks[bi]]=[D.tasks[bi],D.tasks[ai]];save();render();
+}
+function redeemReward(rid){
+  const r=D.rewards.find(x=>x.id===rid);if(!r||D.points<r.cost)return;
+  D.points-=r.cost;D.pointsHistory.push({date:new Date().toISOString(),task:'🎁 '+r.name,points:-r.cost,type:'spent'});save();render();
+}
+function moveReward(rid,dir){
+  const i=D.rewards.findIndex(r=>r.id===rid),si=dir==='up'?i-1:i+1;
+  if(si<0||si>=D.rewards.length)return;
+  [D.rewards[i],D.rewards[si]]=[D.rewards[si],D.rewards[i]];save();render();
+}
+function deleteHistEntry(idx){
+  const e=D.pointsHistory[idx];if(!e)return;
+  if(e.type==='earned')D.points-=e.points;else D.points+=Math.abs(e.points);
+  // If deleting a daily goal bonus, allow re-earning it
+  if(e.task==='🎯 Daily goal bonus'){
+    const day=e.date.slice(0,10);
+    delete D.dailyGoalLog[day];
+    updateStreak();
   }
-}
-
-async function syncToGist() {
-  const { gistId, token } = appData.settings;
-  if (!gistId || !token) return false;
-  try {
-    const resp = await fetch(`https://api.github.com/gists/${gistId}`, {
-      method: 'PATCH',
-      headers: {
-        'Authorization': `token ${token}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        files: { 'productivity_data.json': { content: JSON.stringify(appData) } }
-      })
-    });
-    return resp.ok;
-  } catch (e) { console.error('Sync failed:', e); return false; }
-}
-
-async function syncFromGist() {
-  const { gistId, token } = appData.settings;
-  if (!gistId || !token) return false;
-  try {
-    const resp = await fetch(`https://api.github.com/gists/${gistId}`, {
-      headers: { 'Authorization': `token ${token}` }
-    });
-    if (!resp.ok) return false;
-    const gist = await resp.json();
-    const content = gist.files['productivity_data.json']?.content;
-    if (content) {
-      const remote = JSON.parse(content);
-      // Keep local settings (token) but merge everything else from remote
-      const localSettings = appData.settings;
-      appData = { ...DEFAULT_DATA, ...remote, settings: localSettings };
-      saveLocal();
-      return true;
+  D.pointsHistory.splice(idx,1);
+  // If this was a recurring task completion, check if we need to reset lastCompleted
+  if(e.taskId){
+    const task=D.tasks.find(t=>t.id===e.taskId);
+    if(task&&task.type==='recurring'){
+      const remaining=D.pointsHistory.filter(h=>h.taskId===e.taskId&&h.type==='earned');
+      if(remaining.length>0){task.lastCompleted=remaining[remaining.length-1].date}
+      else{task.lastCompleted=null}
     }
-  } catch (e) { console.error('Pull failed:', e); }
-  return false;
-}
-
-async function save() {
-  saveLocal();
-  await syncToGist();
-}
-
-// ========== TASK LOGIC ==========
-function generateId() {
-  return Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
-}
-
-function getVisibleTasks() {
-  const now = new Date();
-  return appData.tasks.filter(t => {
-    if (t.type === 'one-time') return !t.completed;
-    if (t.type === 'recurring') {
-      if (!t.lastCompleted) return true;
-      const last = new Date(t.lastCompleted);
-      const diffDays = (now - last) / (1000 * 60 * 60 * 24);
-      return diffDays >= t.cadenceDays;
+  }
+  saveL();gistPush();render();
+  // Check if daily bonus should be revoked (non-bonus points now below goal)
+  const day=e.date.slice(0,10);
+  const g=D.settings.dailyGoal;
+  if(g>0){
+    const nonBonusPts=D.pointsHistory.filter(h=>h.date.slice(0,10)===day&&h.type==='earned'&&h.task!=='🎯 Daily goal bonus').reduce((s,h)=>s+h.points,0);
+    const bonusIdx=D.pointsHistory.findIndex(h=>h.date.slice(0,10)===day&&h.task==='🎯 Daily goal bonus');
+    if(nonBonusPts<g&&bonusIdx>=0){
+      const bonus=D.pointsHistory[bonusIdx];
+      D.points-=bonus.points;
+      D.pointsHistory.splice(bonusIdx,1);
+      delete D.dailyGoalLog[day];
+      updateStreak();
+      saveL();gistPush();render();
     }
-    if (t.type === 'evergreen') return true;
-    return true;
-  });
-}
-
-function completeTask(id) {
-  const task = appData.tasks.find(t => t.id === id);
-  if (!task) return;
-  const now = new Date().toISOString();
-
-  if (task.type === 'one-time') {
-    task.completed = true;
-    task.completedAt = now;
-  } else if (task.type === 'recurring') {
-    task.lastCompleted = now;
   }
-  // Evergreen tasks: no state change, just award points
+  // Re-check if goal should be re-awarded (with slight delay so render completes)
+  setTimeout(()=>checkGoal(),100);
+}
+function editHistEntry(idx,newPts){
+  const e=D.pointsHistory[idx];if(!e)return;
+  const diff=newPts-e.points;
+  if(e.type==='earned')D.points+=diff;else D.points-=diff;
+  e.points=newPts;save();render();
+}
 
-  appData.points += task.points;
-  appData.pointsHistory.push({
-    date: now,
-    task: task.name,
-    points: task.points,
-    type: 'earned'
+// ===== CONFETTI =====
+function confetti(){const cv=document.getElementById('confetti-canvas'),cx=cv.getContext('2d');cv.width=innerWidth;cv.height=innerHeight;const cols=['#a78bfa','#7dd3fc','#86efac','#fcd34d','#fca5a5','#f9a8d4'];const ps=Array.from({length:50},()=>({x:Math.random()*cv.width,y:-10,vx:(Math.random()-.5)*7,vy:Math.random()*3+2,c:cols[Math.floor(Math.random()*cols.length)],s:Math.random()*7+3,r:Math.random()*360,rv:(Math.random()-.5)*10}));let f=0;(function a(){cx.clearRect(0,0,cv.width,cv.height);ps.forEach(p=>{p.x+=p.vx;p.y+=p.vy;p.vy+=.12;p.r+=p.rv;cx.save();cx.translate(p.x,p.y);cx.rotate(p.r*Math.PI/180);cx.fillStyle=p.c;cx.fillRect(-p.s/2,-p.s/3,p.s,p.s/2);cx.restore()});if(++f<70)requestAnimationFrame(a);else cx.clearRect(0,0,cv.width,cv.height)})()}
+
+// ===== TOAST =====
+function toast(msg){const c=document.getElementById('toast-container');c.innerHTML=`<div class="toast">${msg}</div>`;if(toastTimer)clearTimeout(toastTimer);toastTimer=setTimeout(()=>{c.innerHTML='';toastTimer=null},3500)}
+function showUndo(fn){const c=document.getElementById('toast-container'),uid='u'+id();c.innerHTML=`<div class="toast">✅ Done! <button id="${uid}" class="undo-btn">Undo</button></div>`;if(toastTimer)clearTimeout(toastTimer);setTimeout(()=>document.getElementById(uid)?.addEventListener('click',()=>{clearTimeout(toastTimer);c.innerHTML='';toastTimer=null;fn()}),0);toastTimer=setTimeout(()=>{c.innerHTML='';toastTimer=null},4000)}
+
+// ===== MODAL =====
+function modal(html){const m=document.getElementById('modal-container');m.innerHTML=`<div class="modal-bg"><div class="modal-box">${html}</div></div>`;m.querySelector('[data-close]')?.addEventListener('click',closeM);m.querySelector('.modal-bg')?.addEventListener('click',e=>{if(e.target.classList.contains('modal-bg'))closeM()})}
+function closeM(){document.getElementById('modal-container').innerHTML=''}
+
+// Inline confirm (no browser popup)
+function confirmAction(msg,onYes){
+  modal(`<p style="margin-bottom:16px;font-size:0.95rem;">${msg}</p>
+    <div style="display:flex;gap:8px;"><button id="ca-yes" class="btn btn-danger" style="flex:1;">Yes, delete</button><button data-close class="btn btn-muted" style="flex:1;">Cancel</button></div>`);
+  document.getElementById('ca-yes')?.addEventListener('click',()=>{closeM();onYes()});
+}
+
+function showInfoModal(){
+  modal(`<h2 style="margin-bottom:12px;color:var(--accent-dark);">📖 Points Guide</h2>
+    <h3 style="font-size:.9rem;margin:10px 0 4px;">Task Points</h3>
+    <table style="width:100%;font-size:.85rem;"><tr><td><b>1–3</b></td><td>Quick (water, make bed)</td></tr><tr><td><b>5–10</b></td><td>Medium (organize, workout)</td></tr><tr><td><b>15–25</b></td><td>Significant (deep clean, study)</td></tr><tr><td><b>50+</b></td><td>Major (finish project)</td></tr><tr><td><b>Timer</b></td><td>~1pt per 10–15 min</td></tr></table>
+    <h3 style="font-size:.9rem;margin:14px 0 4px;">Reward Costs</h3>
+    <table style="width:100%;font-size:.85rem;"><tr><td><b>25–50</b></td><td>Small (coffee)</td></tr><tr><td><b>100–200</b></td><td>Medium (takeout, book)</td></tr><tr><td><b>300–500</b></td><td>Big (gadget)</td></tr><tr><td><b>1000+</b></td><td>Major (trip)</td></tr></table>
+    <button data-close class="btn btn-primary" style="margin-top:16px;width:100%;">Got it</button>`);
+}
+
+function showCongratsModal(note,totalSecs,pts){
+  const mins=Math.floor(totalSecs/60),secs=totalSecs%60;
+  const timeStr=mins>0?`${mins} minute${mins!==1?'s':''}${secs>0?' '+secs+' second'+(secs!==1?'s':''):''}`:`${secs} second${secs!==1?'s':''}`;
+  modal(`<div style="text-align:center;">
+    <div style="font-size:2rem;margin-bottom:8px;">🎉</div>
+    <h2 style="color:var(--accent-dark);margin-bottom:12px;">Great work!</h2>
+    <p style="margin-bottom:8px;">You worked on <strong>${note||'your task'}</strong> for <strong>${timeStr}</strong>, earning <strong>${pts} point${pts!==1?'s':''}.</strong></p>
+    <p style="color:var(--text-dim);font-size:.85rem;margin-bottom:16px;">Keep up the great work! 💪</p>
+    <button data-close class="btn bpri" style="width:100%;">Nice!</button>
+  </div>`);
+}
+
+function showGoalModal(goal,bonus){
+  const streak=D.streak;
+  modal(`<div style="text-align:center;">
+    <div style="font-size:2rem;margin-bottom:8px;">🎯</div>
+    <h2 style="color:var(--accent-dark);margin-bottom:12px;">Daily goal crushed!</h2>
+    <p style="margin-bottom:8px;">You hit your <strong>${goal} point</strong> goal today!</p>
+    <p style="margin-bottom:8px;">Bonus: <strong>+${bonus} points</strong></p>
+    ${streak>1?`<p style="color:var(--warning-dark);font-size:.9rem;margin-bottom:8px;">🔥 ${streak} day streak!</p>`:''}
+    <p style="color:var(--text-dim);font-size:.85rem;margin-bottom:16px;">You're building something great. Keep it going! 🚀</p>
+    <button data-close class="btn bpri" style="width:100%;">Let's go!</button>
+  </div>`);
+}
+
+function showSurpriseModal(){
+  modal(`<div style="text-align:center;">
+    <div style="font-size:2rem;margin-bottom:8px;">🎲</div>
+    <h2 style="color:var(--accent-dark);margin-bottom:12px;">Surprise me!</h2>
+    <p style="color:var(--text-dim);font-size:.85rem;margin-bottom:12px;">Enter a max point value and get a random task.</p>
+    <input id="surp-max" type="number" min="1" placeholder="Max points" class="inf" style="text-align:center">
+    <button id="surp-go" class="btn bsuc" style="width:100%;margin-bottom:8px;">Go!</button>
+    <div id="surp-result" style="margin-top:12px;"></div>
+    <button data-close class="btn bmut" style="width:100%;margin-top:12px;">Close</button>
+  </div>`);
+  document.getElementById('surp-go')?.addEventListener('click',()=>{
+    const max=parseInt(document.getElementById('surp-max')?.value);
+    if(!Number.isInteger(max)||max<1)return;
+    // Include time-based tasks (you can earn any amount by adjusting time) and flat tasks at or below max
+    const candidates=visibleTasks().filter(t=>t.timeBased||t.points<=max);
+    const res=document.getElementById('surp-result');
+    if(candidates.length===0){res.innerHTML='<p style="color:var(--text-dim);font-style:italic;">No tasks available. Try a higher number!</p>';return}
+    const pick=candidates[Math.floor(Math.random()*candidates.length)];
+    let detail='';
+    if(pick.timeBased){
+      const minsNeeded=Math.ceil(max*pick.ptsPerMinutes/pick.ptsAmount);
+      detail=`<div style="font-size:.85rem;color:var(--text-dim);">${pick.type} · ${pick.ptsAmount}pt/${pick.ptsPerMinutes}m</div><div style="font-size:.85rem;color:var(--success-dark);margin-top:4px;">⏱ ~${minsNeeded} min for ${max} pts</div>`;
+    } else {
+      detail=`<div style="font-size:.85rem;color:var(--text-dim);">${pick.type} · ${pick.points} pts</div>`;
+    }
+    res.innerHTML=`<div style="background:var(--card-task);border-radius:var(--radius);padding:16px;"><div style="font-size:1.1rem;font-weight:bold;margin-bottom:4px;">${pick.name}</div>${detail}</div>`;
   });
-  save().then(render);
 }
 
-function deleteTask(id) {
-  appData.tasks = appData.tasks.filter(t => t.id !== id);
-  save().then(render);
+// ===== RENDER =====
+function render(){document.getElementById('app').innerHTML=rHeader()+(view==='tasks'?rTasks():'')+(view==='rewards'?rRewards():'')+(view==='history'?rHistory():'')+(view==='tools'?rTools():'')+rNav();bindAll()}
+function tickRender(){const el=document.getElementById('tld'),pl=document.getElementById('tlp');if(!el){render();return}const e=elapsed();if(T.mode==='sw'){const m=Math.floor(e/60),s=e%60;el.textContent=`${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;if(pl){const p=Math.floor(e*T.pts/(T.per*60));pl.textContent=`${p} point${p!==1?'s':''} earned so far`}}else if(T.mode==='pm'){const tgt=(T.phase==='work'?T.workDur:T.breakDur)*60,rem=Math.max(0,tgt-e),m=Math.floor(rem/60),s=rem%60;el.textContent=`${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;if(pl&&T.phase==='work'){const p=Math.floor(e*T.pts/(T.per*60));pl.textContent=`${p} point${p!==1?'s':''} this session`}}}
+
+function rHeader(){
+  const g=D.settings.dailyGoal||0,e=ptsToday(),p=g>0?Math.min(100,Math.round(e/g*100)):0,sk=D.streak>1?`<div style="font-size:.75rem;color:var(--warning-dark);margin-top:4px;text-align:center">🔥 ${D.streak} day streak</div>`:'';
+  return `<header class="hdr"><div style="display:flex;justify-content:space-between;align-items:center"><h1 style="font-size:1.3rem;color:var(--accent-dark)">⚡ Tracker</h1><div style="display:flex;align-items:center;gap:8px"><span style="font-weight:bold">🪙 ${D.points}</span><button id="goal-btn" class="ibtn">🎯</button><button id="info-btn" class="ibtn">ℹ️</button><button id="set-btn" class="ibtn">⚙️</button></div></div>${g>0?`<div style="margin-top:8px;display:flex;align-items:center;gap:8px"><div class="pbar"><div class="pfill" style="width:${p}%;background:${p>=100?'var(--success)':'var(--accent)'}"></div></div><span style="font-size:.75rem;color:var(--text-dim)">${e}/${g}</span></div>${sk}`:''}</header>`}
+
+function rNav(){
+  const tabs=[{v:'tasks',i:'📋',l:'Tasks'},{v:'rewards',i:'🎁',l:'Rewards'},{v:'history',i:'📅',l:'History'},{v:'tools',i:'🧰',l:'Tools'}];
+  return `<nav class="bnav">${tabs.map(t=>`<button class="nbtn ${view===t.v?'nact':''}" data-v="${t.v}"><span style="font-size:1.3rem">${t.i}</span><span>${t.l}</span></button>`).join('')}</nav>`}
+
+// ===== TASKS =====
+function rTasks(){
+  const vis=visibleTasks(),ot=vis.filter(t=>t.type==='one-time'),rc=vis.filter(t=>t.type==='recurring'),ev=vis.filter(t=>t.type==='evergreen'),sl=sleepingTasks();
+  return `<div class="vc">${rBucket('🎯 One-Time',ot)}${rBucket('🔄 Recurring',rc)}${sl.length?rSleep(sl):''}${rBucket('♾️ Evergreen',ev)}<div style="display:flex;gap:8px;margin-bottom:8px"><button id="show-af" class="abtn" style="flex:1">+ Add Task</button><button id="surprise-btn" class="btn bwar" style="flex-shrink:0;padding:14px 16px;border-radius:var(--radius);font-size:1rem">🎲 Surprise me</button></div><div id="afc"></div></div>`}
+function rBucket(title,tasks){return `<div style="margin-bottom:18px"><h2 style="font-size:1rem;color:var(--accent-dark);margin-bottom:8px">${title}</h2>${tasks.length?tasks.map((t,i)=>rCard(t,i,tasks.length)).join(''):'<p style="color:var(--text-dim);font-size:.85rem;font-style:italic">Nothing here ✨</p>'}</div>`}
+function rCard(t,i,n){
+  const isM=inlineMinId===t.id,pl=t.timeBased?`${t.ptsAmount}/${t.ptsPerMinutes}m`:`+${t.points}`;
+  return `<div class="tcard"><div style="display:flex;align-items:center;gap:10px"><button class="cbtn" data-id="${t.id}">✓</button><div style="flex:1;min-width:0;cursor:pointer" class="tdet" data-id="${t.id}"><div style="font-weight:600;font-size:.9rem">${t.name}</div>${t.type==='recurring'?`<div style="font-size:.7rem;color:var(--text-dim)">Every ${t.cadenceDays}d</div>`:''}${t.timeBased?'<div style="font-size:.7rem;color:var(--accent-dark)">⏱ time-based</div>':''}</div><span style="color:var(--warning-dark);font-weight:bold;font-size:.8rem">${pl}</span><div style="display:flex;flex-direction:column;gap:1px">${i>0?`<button class="mbtn" data-id="${t.id}" data-d="up">▲</button>`:'<div style="height:16px"></div>'}${i<n-1?`<button class="mbtn" data-id="${t.id}" data-d="down">▼</button>`:'<div style="height:16px"></div>'}</div></div>${isM?`<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);display:flex;gap:8px;align-items:center"><input id="imi" type="number" min="1" placeholder="Minutes" class="inf" style="flex:1;margin:0"><button id="ims" data-id="${t.id}" class="btn bsuc" style="padding:8px 14px">Submit</button><button id="imc" class="btn bmut" style="padding:8px 10px">✕</button></div>`:''}</div>`}
+function rSleep(tasks){return `<div style="margin-bottom:18px"><h3 style="font-size:.85rem;color:var(--text-dim);margin-bottom:6px">💤 Upcoming</h3>${tasks.map(t=>`<div class="slcard sldet" data-id="${t.id}" style="cursor:pointer"><span>${t.name}</span><span style="color:var(--accent-dark);font-weight:600">↻ ${t.left}d</span></div>`).join('')}</div>`}
+function rAddForm(){return `<div class="fcard" style="margin-top:12px"><h3 style="margin-bottom:12px;color:var(--accent-dark)">New Task</h3><input id="tfn" type="text" placeholder="Task name" class="inf"><select id="tft" class="inf"><option value="one-time">🎯 One-Time</option><option value="recurring">🔄 Recurring</option><option value="evergreen">♾️ Evergreen</option></select><div id="tfc" style="display:none"><input id="tfcd" type="number" min="1" placeholder="Cadence (days)" class="inf"></div><label class="chlbl"><input id="tftb" type="checkbox"> Time-based</label><div id="tffw"><input id="tfp" type="number" min="1" placeholder="Points" class="inf"></div><div id="tftw" style="display:none"><div style="display:flex;gap:6px;align-items:center;margin-bottom:8px"><input id="tfpa" type="number" min="1" class="inf" style="width:70px;margin:0;text-align:center"><span class="rl">pts per</span><input id="tfpp" type="number" min="1" class="inf" style="width:70px;margin:0;text-align:center"><span class="rl">min</span></div></div><div id="tfe" class="err"></div><button id="tfs" class="btn bpri" style="width:100%;opacity:.5" disabled>Add Task</button></div>`}
+
+// ===== REWARDS =====
+function rRewards(){
+  const cards=D.rewards.map((r,i)=>`<div class="rcard"><div style="display:flex;align-items:center;gap:10px"><div style="flex:1;cursor:pointer" class="rdet" data-id="${r.id}"><strong>${r.name}</strong></div><span style="color:var(--warning-dark);font-weight:bold;font-size:.85rem">${r.cost}pts</span><button class="rbtn btn bsuc" data-id="${r.id}" ${D.points<r.cost?'disabled style="opacity:.4"':''}style="padding:6px 12px;font-size:.8rem">Redeem</button><div style="display:flex;flex-direction:column;gap:1px">${i>0?`<button class="mrbtn" data-id="${r.id}" data-d="up">▲</button>`:'<div style="height:16px"></div>'}${i<D.rewards.length-1?`<button class="mrbtn" data-id="${r.id}" data-d="down">▼</button>`:'<div style="height:16px"></div>'}</div></div></div>`).join('');
+  return `<div class="vc"><h2 style="font-size:1.1rem;color:var(--accent-dark);margin-bottom:4px">🎁 Rewards</h2><p style="font-size:.8rem;color:var(--text-dim);margin-bottom:12px">You have <b>${D.points}</b> pts</p>${cards||'<p style="color:var(--text-dim);font-style:italic;font-size:.85rem">No rewards yet.</p>'}<button id="show-arf" class="abtn" style="margin-top:12px">+ Add Reward</button><div id="arfc"></div></div>`}
+function rAddReward(){return `<div class="fcard" style="margin-top:12px"><h3 style="margin-bottom:10px;color:var(--accent-dark)">New Reward</h3><input id="rfn" type="text" placeholder="Reward name" class="inf"><input id="rfc" type="number" min="1" placeholder="Cost" class="inf"><div id="rfe" class="err"></div><button id="rfs" class="btn bac2" style="width:100%;opacity:.5" disabled>Add Reward</button></div>`}
+
+// ===== HISTORY =====
+let hM=new Date().getMonth(),hY=new Date().getFullYear(),selDay=null;
+function rHistory(){
+  const dim=new Date(hY,hM+1,0).getDate(),fd=new Date(hY,hM,1).getDay(),mn=new Date(hY,hM).toLocaleString('default',{month:'long',year:'numeric'});
+  let cells='';for(let i=0;i<fd;i++)cells+='<div></div>';
+  for(let d=1;d<=dim;d++){
+    const ds=`${hY}-${String(hM+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+    const ents=D.pointsHistory.filter(h=>h.date.slice(0,10)===ds);
+    const earned=ents.filter(h=>h.type==='earned').reduce((s,h)=>s+h.points,0);
+    const sel=selDay===ds,td=ds===today(),has=ents.length>0;
+    let cls='cc';if(sel)cls+=' csel';else if(has)cls+=' cact';if(td)cls+=' ctd';
+    cells+=`<div class="${cls}" data-d="${ds}"><span class="cn">${d}</span>${has?`<span class="cdot${sel?' cdotw':''}">${earned||''}</span>`:''}</div>`}
+
+  let detail='';
+  if(selDay){
+    const ents=D.pointsHistory.filter(h=>h.date.slice(0,10)===selDay);
+    if(ents.length){detail=ents.map(e=>{const time=new Date(e.date).toLocaleTimeString('default',{hour:'numeric',minute:'2-digit'});const idx=D.pointsHistory.indexOf(e);return `<div class="hent"><div style="flex:1"><div style="font-size:.85rem;font-weight:500">${e.task}</div><div style="font-size:.7rem;color:var(--text-dim)">${time}${e.minutes?' · '+e.minutes+'m':''}</div></div><span class="hpts ${e.type==='earned'?'hpe':'hps'}">${e.type==='earned'?'+':''}${e.points}</span><button class="hedit ibtn" data-idx="${idx}">✏️</button><button class="hdel ibtn" data-idx="${idx}">🗑️</button></div>`}).join('')}
+    else detail='<p style="color:var(--text-dim);font-style:italic;font-size:.85rem">No activity.</p>'}
+
+  return `<div class="vc"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px"><button class="hnav ibtn" data-d="prev">◀</button><h2 style="font-size:1rem;color:var(--accent-dark)">${mn}</h2><button class="hnav ibtn" data-d="next">▶</button></div><div class="calbox"><div class="cgrid">${['S','M','T','W','T','F','S'].map(x=>`<div class="ch">${x}</div>`).join('')}${cells}</div></div>${selDay?`<div class="fcard" style="margin-top:14px"><h3 style="font-size:.9rem;margin-bottom:10px">${new Date(selDay+'T12:00:00').toLocaleDateString('default',{weekday:'long',month:'short',day:'numeric'})}</h3>${detail}</div>`:''}</div>`}
+
+// ===== TOOLS =====
+function rTools(){if(toolsView==='menu')return rToolsMenu();if(toolsView==='sw')return rSW();if(toolsView==='pm')return rPM();if(toolsView==='tech')return rTech();return rToolsMenu()}
+function rToolsMenu(){const a=T.running||T.paused,m=T.mode;return `<div class="vc"><h2 style="font-size:1.1rem;color:var(--accent-dark);margin-bottom:16px">🧰 Tools</h2><button class="tlcard${a&&m!=='sw'?' dis':''}" data-t="sw" ${a&&m!=='sw'?'disabled':''}>⏱️ <b>Stopwatch</b><br><span class="tdesc">Open-ended timer</span>${a&&m==='sw'?'<br><span style="font-size:.75rem;color:var(--success-dark)">Running...</span>':''}${a&&m!=='sw'?'<br><span style="font-size:.75rem;color:var(--danger-dark)">Stop timer first</span>':''}</button><button class="tlcard${a&&m!=='pm'?' dis':''}" data-t="pm" ${a&&m!=='pm'?'disabled':''}>🍅 <b>Pomodoro</b><br><span class="tdesc">Work/break cycles</span>${a&&m==='pm'?'<br><span style="font-size:.75rem;color:var(--success-dark)">Running...</span>':''}${a&&m!=='pm'?'<br><span style="font-size:.75rem;color:var(--danger-dark)">Stop timer first</span>':''}</button><button class="tlcard" data-t="tech">🧠 <b>Techniques</b><br><span class="tdesc">Anti-procrastination tracker</span></button></div>`}
+
+function rSW(){
+  const opts=visibleTasks().map(t=>`<option value="${t.id}">${t.name}</option>`).join('');
+  const e=elapsed(),m=Math.floor(e/60),s=e%60,a=T.running||T.paused;
+  const pts=a?Math.floor(e*T.pts/(T.per*60)):0;
+  const label=T.note||D.tasks.find(t=>t.id===T.taskId)?.name||'';
+  return `<div class="vc" style="text-align:center"><button class="tback">← Back</button><h2 style="color:var(--accent-dark);margin:12px 0">⏱️ Stopwatch</h2><div id="tld" class="tdis">${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}</div>${a?`<div id="tlp" style="font-size:.9rem;color:var(--success-dark);margin-bottom:8px">${pts} point${pts!==1?'s':''} earned so far</div><div style="font-size:.85rem;color:var(--text-dim);margin-bottom:16px">Working on: <b>${label||'—'}</b></div><div style="display:flex;gap:10px;justify-content:center">${T.running?`<button id="swpa" class="btn bwar btn-lg">Pause</button>`:`<button id="swre" class="btn bsuc btn-lg">Resume</button>`}<button id="swst" class="btn bdan btn-lg">Stop</button></div>`:`<select id="swt" class="inf" style="text-align:left"><option value="">-- Select a task --</option>${opts}</select><input id="swn" type="text" placeholder="Or type what you're working on" class="inf" style="text-align:left"><div style="display:flex;gap:6px;align-items:center;justify-content:center;margin-bottom:16px"><input id="swp" type="number" min="1" class="inf" style="width:70px;margin:0;text-align:center"><span class="rl">pts per</span><input id="swr" type="number" min="1" class="inf" style="width:70px;margin:0;text-align:center"><span class="rl">min</span></div><button id="sws" class="btn bsuc btn-lg" disabled style="opacity:.5">Start</button><div id="swe" style="margin-top:8px;font-size:.8rem;color:var(--danger-dark)"></div>`}</div>`}
+
+function rPM(){
+  const opts=visibleTasks().map(t=>`<option value="${t.id}">${t.name}</option>`).join('');
+  const e=elapsed(),a=T.running||T.paused;
+  const tgt=(T.phase==='work'?T.workDur:T.breakDur)*60,rem=a?Math.max(0,tgt-e):(T.workDur||25)*60;
+  const rM=Math.floor(rem/60),rS=rem%60;
+  const pts=a&&T.phase==='work'?Math.floor(e*T.pts/(T.per*60)):0;
+  const label=T.note||D.tasks.find(t=>t.id===T.taskId)?.name||'';
+  const phase=T.phase==='work'?'💪 Work':'☕ Break';
+  return `<div class="vc" style="text-align:center"><button class="tback">← Back</button><h2 style="color:var(--accent-dark);margin:12px 0">🍅 Pomodoro</h2>${a?`<div style="font-size:.9rem;color:var(--text-dim);margin-bottom:4px">${phase}</div>`:''}<div id="tld" class="tdis">${String(rM).padStart(2,'0')}:${String(rS).padStart(2,'0')}</div>${a&&T.phase==='work'?`<div id="tlp" style="font-size:.9rem;color:var(--success-dark);margin-bottom:8px">${pts} point${pts!==1?'s':''} this session</div>`:''} ${a?`<div style="font-size:.85rem;color:var(--text-dim);margin-bottom:16px">Working on: <b>${label||'—'}</b></div><div style="display:flex;gap:10px;justify-content:center">${T.running?`<button id="pmpa" class="btn bwar btn-lg">Pause</button>`:`<button id="pmre" class="btn bsuc btn-lg">Resume</button>`}<button id="pmst" class="btn bdan btn-lg">Stop</button></div>`:`<div style="display:flex;gap:8px;margin-bottom:10px;justify-content:center"><div><label class="rl">Work (min)</label><input id="pmw" type="number" min="1" placeholder="25" class="inf" style="width:70px;margin:4px 0 0;text-align:center"></div><div><label class="rl">Break (min)</label><input id="pmb" type="number" min="1" placeholder="5" class="inf" style="width:70px;margin:4px 0 0;text-align:center"></div></div><select id="pmt" class="inf" style="text-align:left"><option value="">-- Select a task --</option>${opts}</select><input id="pmn" type="text" placeholder="Or type what you're working on" class="inf" style="text-align:left"><div style="display:flex;gap:6px;align-items:center;justify-content:center;margin-bottom:16px"><input id="pmp" type="number" min="1" class="inf" style="width:70px;margin:0;text-align:center"><span class="rl">pts per</span><input id="pmr" type="number" min="1" class="inf" style="width:70px;margin:0;text-align:center"><span class="rl">min</span></div><button id="pms" class="btn bsuc btn-lg" disabled style="opacity:.5">Start</button><div id="pme" style="margin-top:8px;font-size:.8rem;color:var(--danger-dark)"></div>`}</div>`}
+
+// ===== TECHNIQUES =====
+function rTech(){
+  const sorted=[...D.techniques].sort((a,b)=>{const ae=a.entries.length,be=b.entries.length;const ap=ae>0?a.entries.filter(e=>e.thumbsUp).length/ae:-1;const bp=be>0?b.entries.filter(e=>e.thumbsUp).length/be:-1;if(bp!==ap)return bp-ap;return be-ae});
+  const cards=sorted.map(t=>{const tot=t.entries.length,ups=t.entries.filter(e=>e.thumbsUp).length,pct=tot>0?Math.round(ups/tot*100):0;const exp=expandedTech===t.id;
+    return `<div class="fcard" style="margin-bottom:10px"><div style="display:flex;justify-content:space-between;align-items:center;cursor:pointer" class="ttog" data-id="${t.id}"><b>${t.name}</b><div style="display:flex;align-items:center;gap:8px"><span style="font-size:.8rem;color:var(--text-dim)">${tot} uses</span><span style="font-weight:bold;color:${pct>=60?'var(--success-dark)':pct>=40?'var(--warning-dark)':'var(--danger-dark)'}">${tot>0?pct+'%':'—'}</span></div></div>${exp?`<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border)">${t.entries.map(e=>`<div style="display:flex;justify-content:space-between;padding:4px 0;font-size:.8rem"><span>${e.thumbsUp?'👍':'👎'} ${e.note||'(no note)'}</span><span style="color:var(--text-dim)">${new Date(e.date).toLocaleDateString()}</span></div>`).join('')}<div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap"><input class="tni inf" data-id="${t.id}" type="text" placeholder="Note" style="flex:1;min-width:100px;margin:0"><button class="tlog btn bsuc" data-id="${t.id}" data-u="1" style="padding:8px 12px">👍</button><button class="tlog btn bdan" data-id="${t.id}" data-u="0" style="padding:8px 12px">👎</button></div><button class="tdelt" data-id="${t.id}" style="margin-top:8px;background:none;border:none;color:var(--danger-dark);font-size:.8rem;cursor:pointer">Delete technique</button></div>`:''}</div>`}).join('');
+  return `<div class="vc"><button class="tback">← Back</button><h2 style="font-size:1.1rem;color:var(--accent-dark);margin-bottom:12px">🧠 Techniques</h2>${cards||'<p style="color:var(--text-dim);font-style:italic">No techniques yet.</p>'}<div style="display:flex;gap:8px;margin-top:12px"><input id="tnn" type="text" placeholder="New technique" class="inf" style="flex:1;margin:0"><button id="tna" class="btn bpri" style="padding:10px 16px">+</button></div></div>`}
+
+// ===== SETTINGS/DETAIL MODALS =====
+function showSettings(){
+  modal(`<h2 style="color:var(--accent-dark);margin-bottom:16px">⚙️ Settings</h2><p style="font-size:.85rem;color:var(--text-dim);margin-bottom:12px"><b>Gist Sync</b><br><a href="https://gist.github.com/" target="_blank" style="color:var(--accent-dark)">Create secret Gist</a> (file: <code>productivity_data.json</code> with <code>{}</code>)<br><a href="https://github.com/settings/tokens/new?scopes=gist&description=Productivity+Tracker" target="_blank" style="color:var(--accent-dark)">Create token</a> (gist scope)</p><input id="sgi" type="text" value="${D.settings.gistId}" placeholder="Gist ID" class="inf"><input id="sgt" type="password" value="${D.settings.token}" placeholder="Token" class="inf"><button id="ssv" class="btn bsuc" style="width:100%;margin-bottom:8px">Save & Sync</button><button id="spl" class="btn bmut" style="width:100%;margin-bottom:8px">⬇️ Pull</button><button id="spu" class="btn bmut" style="width:100%;margin-bottom:8px">⬆️ Push</button><div id="sst" style="text-align:center;font-size:.85rem;color:var(--text-dim);margin-top:8px"></div><button data-close class="btn bmut" style="margin-top:12px;width:100%">Close</button>`);
+  document.getElementById('ssv')?.addEventListener('click',async()=>{D.settings.gistId=document.getElementById('sgi').value.trim();D.settings.token=document.getElementById('sgt').value.trim();saveL();const s=document.getElementById('sst');s.textContent='Syncing...';const ok=await gistPush();s.textContent=ok?'✅ Synced!':(D.settings.gistId?'❌ Failed':'✅ Saved');render()});
+  document.getElementById('spl')?.addEventListener('click',async()=>{const s=document.getElementById('sst');s.textContent='Pulling...';const ok=await gistPull();s.textContent=ok?'✅ Pulled!':'❌ Failed';if(ok){updateStreak();closeM();render()}});
+  document.getElementById('spu')?.addEventListener('click',async()=>{const s=document.getElementById('sst');s.textContent='Pushing...';const ok=await gistPush();s.textContent=ok?'✅ Pushed!':'❌ Failed'});
 }
-
-function redeemReward(id) {
-  const reward = appData.rewards.find(r => r.id === id);
-  if (!reward || appData.points < reward.cost) return;
-  appData.points -= reward.cost;
-  appData.pointsHistory.push({
-    date: new Date().toISOString(),
-    task: reward.name,
-    points: -reward.cost,
-    type: 'spent'
-  });
-  save().then(render);
-}
-
-// ========== RENDERING ==========
-function render() {
-  const app = document.getElementById('app');
-  app.innerHTML = `
-    ${renderHeader()}
-    ${currentView === 'tasks' ? renderTasks() : ''}
-    ${currentView === 'add' ? renderAddTask() : ''}
-    ${currentView === 'rewards' ? renderRewards() : ''}
-    ${currentView === 'settings' ? renderSettings() : ''}
-    ${renderNav()}
-  `;
-  attachEvents();
-}
-
-function renderHeader() {
-  return `
-    <header style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
-      <h1 style="font-size:1.4rem;">⚡ Tracker</h1>
-      <div style="background:var(--card);padding:8px 16px;border-radius:20px;font-weight:bold;">
-        🪙 ${appData.points} pts
-      </div>
-    </header>
-  `;
-}
-
-function renderTasks() {
-  const visible = getVisibleTasks();
-  const oneTime = visible.filter(t => t.type === 'one-time');
-  const recurring = visible.filter(t => t.type === 'recurring');
-  const evergreen = visible.filter(t => t.type === 'evergreen');
-
-  return `
-    <div class="task-sections">
-      ${renderBucket('🎯 One-Time', oneTime, 'Complete and gone forever')}
-      ${renderBucket('🔄 Recurring', recurring, 'Reappears after cadence')}
-      ${renderBucket('♾️ Evergreen', evergreen, 'Always available')}
-    </div>
-  `;
-}
-
-function renderBucket(title, tasks, subtitle) {
-  if (tasks.length === 0) {
-    return `
-      <div style="margin-bottom:24px;">
-        <h2 style="font-size:1.1rem;margin-bottom:4px;">${title}</h2>
-        <p style="color:var(--text-dim);font-size:0.8rem;margin-bottom:8px;">${subtitle}</p>
-        <p style="color:var(--text-dim);font-style:italic;font-size:0.9rem;">Nothing here right now ✨</p>
-      </div>
-    `;
+function showGoalSettingModal(){
+  const hasGoal = D.settings.dailyGoal > 0;
+  if(hasGoal){
+    modal(`<div style="text-align:center;">
+      <div style="font-size:2rem;margin-bottom:8px;">🎯</div>
+      <h2 style="color:var(--accent-dark);margin-bottom:12px;">Daily Goal</h2>
+      <p style="font-size:1.2rem;font-weight:bold;margin-bottom:8px;">${D.settings.dailyGoal} points/day</p>
+      <p style="color:var(--text-dim);font-size:.85rem;margin-bottom:16px;">Your goal is locked. Unlock to change it.</p>
+      <button id="dg-unlock" class="btn bwar" style="width:100%;margin-bottom:8px;">🔓 Unlock & Edit</button>
+      <button data-close class="btn bmut" style="width:100%;">Close</button>
+    </div>`);
+    document.getElementById('dg-unlock')?.addEventListener('click',()=>{closeM();showGoalEditModal()});
+  } else {
+    showGoalEditModal();
   }
-  const taskCards = tasks.map(t => `
-    <div style="background:var(--card);border-radius:var(--radius);padding:14px;margin-bottom:10px;display:flex;align-items:center;gap:12px;">
-      <button class="complete-btn" data-id="${t.id}" style="
-        width:36px;height:36px;border-radius:50%;border:2px solid var(--success);
-        background:transparent;color:var(--success);font-size:1.2rem;cursor:pointer;
-        display:flex;align-items:center;justify-content:center;flex-shrink:0;
-      ">✓</button>
-      <div style="flex:1;min-width:0;">
-        <div style="font-weight:600;font-size:0.95rem;">${t.name}</div>
-        ${t.type === 'recurring' ? `<div style="color:var(--text-dim);font-size:0.75rem;">Every ${t.cadenceDays} day${t.cadenceDays > 1 ? 's' : ''}</div>` : ''}
-      </div>
-      <div style="color:var(--warning);font-weight:bold;font-size:0.9rem;flex-shrink:0;">+${t.points}</div>
-      <button class="delete-btn" data-id="${t.id}" style="
-        background:transparent;border:none;color:var(--text-dim);font-size:1.1rem;cursor:pointer;padding:4px;
-      ">🗑️</button>
-    </div>
-  `).join('');
-
-  return `
-    <div style="margin-bottom:24px;">
-      <h2 style="font-size:1.1rem;margin-bottom:4px;">${title}</h2>
-      <p style="color:var(--text-dim);font-size:0.8rem;margin-bottom:10px;">${subtitle}</p>
-      ${taskCards}
-    </div>
-  `;
 }
 
-function renderAddTask() {
-  return `
-    <div style="background:var(--surface);border-radius:var(--radius);padding:20px;">
-      <h2 style="margin-bottom:16px;">Add Task</h2>
-      <label style="display:block;margin-bottom:12px;">
-        <span style="font-size:0.85rem;color:var(--text-dim);">Name</span>
-        <input id="task-name" type="text" placeholder="e.g. Organize desk" style="
-          width:100%;padding:10px;margin-top:4px;border-radius:8px;border:1px solid var(--card);
-          background:var(--bg);color:var(--text);font-size:1rem;
-        ">
-      </label>
-      <label style="display:block;margin-bottom:12px;">
-        <span style="font-size:0.85rem;color:var(--text-dim);">Type</span>
-        <select id="task-type" style="
-          width:100%;padding:10px;margin-top:4px;border-radius:8px;border:1px solid var(--card);
-          background:var(--bg);color:var(--text);font-size:1rem;
-        ">
-          <option value="one-time">🎯 One-Time</option>
-          <option value="recurring">🔄 Recurring</option>
-          <option value="evergreen">♾️ Evergreen</option>
-        </select>
-      </label>
-      <div id="cadence-field" style="display:none;margin-bottom:12px;">
-        <label>
-          <span style="font-size:0.85rem;color:var(--text-dim);">Cadence (days)</span>
-          <input id="task-cadence" type="number" value="7" min="1" style="
-            width:100%;padding:10px;margin-top:4px;border-radius:8px;border:1px solid var(--card);
-            background:var(--bg);color:var(--text);font-size:1rem;
-          ">
-        </label>
-      </div>
-      <label style="display:block;margin-bottom:16px;">
-        <span style="font-size:0.85rem;color:var(--text-dim);">Points</span>
-        <input id="task-points" type="number" value="5" min="1" style="
-          width:100%;padding:10px;margin-top:4px;border-radius:8px;border:1px solid var(--card);
-          background:var(--bg);color:var(--text);font-size:1rem;
-        ">
-      </label>
-      <button id="save-task-btn" style="
-        width:100%;padding:14px;border-radius:var(--radius);border:none;
-        background:var(--accent);color:white;font-size:1rem;font-weight:bold;cursor:pointer;
-      ">Add Task</button>
-    </div>
-  `;
+function showGoalEditModal(){
+  modal(`<div style="text-align:center;">
+    <div style="font-size:2rem;margin-bottom:8px;">🎯</div>
+    <h2 style="color:var(--accent-dark);margin-bottom:12px;">Set Daily Goal</h2>
+    <p style="color:var(--text-dim);font-size:.85rem;margin-bottom:12px;">Set your daily point target. Hit it to earn a 25% bonus!</p>
+    <input id="dg-val" type="number" min="1" value="${D.settings.dailyGoal||''}" placeholder="e.g. 30" class="inf" style="text-align:center">
+    <button id="dg-save" class="btn bpri" style="width:100%;margin-bottom:8px;">Lock it in 🔒</button>
+    <button id="dg-clear" class="btn bmut" style="width:100%;margin-bottom:8px;">Clear goal</button>
+    <button data-close class="btn bmut" style="width:100%;">Cancel</button>
+  </div>`);
+  document.getElementById('dg-save')?.addEventListener('click',()=>{const v=parseInt(document.getElementById('dg-val').value);D.settings.dailyGoal=Number.isInteger(v)&&v>=1?v:0;saveL();gistPush();closeM();render()});
+  document.getElementById('dg-clear')?.addEventListener('click',()=>{D.settings.dailyGoal=0;saveL();gistPush();closeM();render()});
+}
+function showRewardEdit(rid){
+  const r=D.rewards.find(x=>x.id===rid);if(!r)return;
+  modal(`<h2 style="color:var(--accent-dark);margin-bottom:12px">Edit Reward</h2><input id="ren" type="text" value="${r.name}" class="inf"><input id="rec" type="number" value="${r.cost}" min="1" class="inf"><div id="ree" class="err"></div><div style="display:flex;gap:8px;margin-top:8px"><button id="res" class="btn bpri" style="flex:1">Save</button><button id="red" class="btn bdan" style="padding:10px 16px">🗑️</button></div><button data-close class="btn bmut" style="margin-top:10px;width:100%">Close</button>`);
+  document.getElementById('res')?.addEventListener('click',()=>{const n=document.getElementById('ren').value.trim(),c=parseInt(document.getElementById('rec').value);if(!n||!Number.isInteger(c)||c<1){document.getElementById('ree').textContent='Valid name/cost needed';document.getElementById('ree').style.display='block';return}r.name=n;r.cost=c;save();closeM();render()});
+  document.getElementById('red')?.addEventListener('click',()=>confirmAction('Delete this reward?',()=>{D.rewards=D.rewards.filter(x=>x.id!==rid);save();render()}));
+}
+function showTaskDetail(tid){
+  const task=D.tasks.find(t=>t.id===tid);if(!task)return;
+  const hist=D.pointsHistory.filter(h=>h.taskId===tid),tc=hist.length,tm=hist.reduce((s,h)=>s+(h.minutes||0),0);
+  const tw=hist.filter(h=>(new Date()-new Date(h.date))/864e5<7).length,tmo=hist.filter(h=>h.date.slice(0,7)===today().slice(0,7)).length;
+  const ld=hist.length?new Date(hist[hist.length-1].date).toLocaleDateString():'Never';
+  modal(`<h2 style="color:var(--accent-dark);margin-bottom:4px">${task.name}</h2><p style="font-size:.8rem;color:var(--text-dim);margin-bottom:14px">${task.type}${task.type==='recurring'?' · every '+task.cadenceDays+'d':''}</p><div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:14px"><div class="sbox"><div class="sn">${tc}</div><div class="sl">Total</div></div><div class="sbox"><div class="sn">${tw}</div><div class="sl">This week</div></div><div class="sbox"><div class="sn">${tmo}</div><div class="sl">This month</div></div><div class="sbox"><div class="sn">${tm>0?tm+'m':'—'}</div><div class="sl">Total min</div></div></div><p style="font-size:.8rem;color:var(--text-dim);margin-bottom:14px">Last: ${ld}</p><h3 style="font-size:.9rem;margin-bottom:8px">Edit</h3><input id="en" type="text" value="${task.name}" class="inf"><select id="ety" class="inf"><option value="one-time" ${task.type==='one-time'?'selected':''}>🎯 One-Time</option><option value="recurring" ${task.type==='recurring'?'selected':''}>🔄 Recurring</option><option value="evergreen" ${task.type==='evergreen'?'selected':''}>♾️ Evergreen</option></select><div id="ecw" style="${task.type==='recurring'?'':'display:none'}"><input id="ecd" type="number" value="${task.cadenceDays||''}" min="1" placeholder="Cadence (days)" class="inf"></div><label class="chlbl"><input id="etb" type="checkbox" ${task.timeBased?'checked':''}> Time-based</label><div id="efw" style="${task.timeBased?'display:none':''}"><input id="ept" type="number" value="${task.points||''}" min="1" placeholder="Points" class="inf"></div><div id="etw" style="${task.timeBased?'':'display:none'}"><div style="display:flex;gap:6px;align-items:center;margin-bottom:8px"><input id="epa" type="number" value="${task.ptsAmount||''}" min="1" class="inf" style="width:70px;margin:0;text-align:center"><span class="rl">pts per</span><input id="epp" type="number" value="${task.ptsPerMinutes||''}" min="1" class="inf" style="width:70px;margin:0;text-align:center"><span class="rl">min</span></div></div><div id="ee" class="err"></div><div style="display:flex;gap:8px;margin-top:8px"><button id="esv" data-id="${task.id}" class="btn bpri" style="flex:1">Save</button><button id="edl" data-id="${task.id}" class="btn bdan" style="padding:10px 16px">🗑️</button></div><button data-close class="btn bmut" style="margin-top:10px;width:100%">Close</button>`);
+  document.getElementById('ety')?.addEventListener('change',e=>{document.getElementById('ecw').style.display=e.target.value==='recurring'?'':'none'});
+  document.getElementById('etb')?.addEventListener('change',e=>{document.getElementById('efw').style.display=e.target.checked?'none':'';document.getElementById('etw').style.display=e.target.checked?'':'none'});
+  document.getElementById('esv')?.addEventListener('click',()=>{const n=document.getElementById('en').value.trim(),ty=document.getElementById('ety').value,tb=document.getElementById('etb').checked,err=document.getElementById('ee');if(!n){err.textContent='Name required';err.style.display='block';return}if(tb){const a=parseInt(document.getElementById('epa').value),b=parseInt(document.getElementById('epp').value);if(!Number.isInteger(a)||a<1||!Number.isInteger(b)||b<1){err.textContent='Valid pts/min required';err.style.display='block';return}task.timeBased=true;task.ptsAmount=a;task.ptsPerMinutes=b;task.points=a}else{const p=parseInt(document.getElementById('ept').value);if(!Number.isInteger(p)||p<1){err.textContent='Valid points required';err.style.display='block';return}task.timeBased=false;task.points=p}task.name=n;task.type=ty;if(ty==='recurring'){const c=parseInt(document.getElementById('ecd').value);if(!Number.isInteger(c)||c<1){err.textContent='Valid cadence required';err.style.display='block';return}task.cadenceDays=c}save();closeM();render()});
+  document.getElementById('edl')?.addEventListener('click',()=>confirmAction('Delete this task?',()=>{deleteTask(tid);closeM()}));
 }
 
-function renderRewards() {
-  const rewardCards = appData.rewards.map(r => `
-    <div style="background:var(--card);border-radius:var(--radius);padding:14px;margin-bottom:10px;display:flex;align-items:center;gap:12px;">
-      <div style="flex:1;">
-        <div style="font-weight:600;">${r.name}</div>
-      </div>
-      <div style="color:var(--warning);font-weight:bold;font-size:0.9rem;">${r.cost} pts</div>
-      <button class="redeem-btn" data-id="${r.id}" style="
-        padding:8px 12px;border-radius:8px;border:none;font-size:0.85rem;cursor:pointer;
-        background:${appData.points >= r.cost ? 'var(--success)' : 'var(--text-dim)'};
-        color:${appData.points >= r.cost ? '#000' : '#555'};font-weight:bold;
-      " ${appData.points < r.cost ? 'disabled' : ''}>Redeem</button>
-      <button class="delete-reward-btn" data-id="${r.id}" style="
-        background:transparent;border:none;color:var(--text-dim);font-size:1.1rem;cursor:pointer;
-      ">🗑️</button>
-    </div>
-  `).join('');
-
-  return `
-    <div>
-      <h2 style="margin-bottom:4px;">🎁 Rewards Shop</h2>
-      <p style="color:var(--text-dim);font-size:0.85rem;margin-bottom:16px;">You have <strong>${appData.points}</strong> points to spend</p>
-      ${rewardCards || '<p style="color:var(--text-dim);font-style:italic;">No rewards yet. Add one below!</p>'}
-      <div style="background:var(--surface);border-radius:var(--radius);padding:16px;margin-top:16px;">
-        <h3 style="font-size:1rem;margin-bottom:12px;">Add Reward</h3>
-        <input id="reward-name" type="text" placeholder="e.g. Coffee treat" style="
-          width:100%;padding:10px;margin-bottom:8px;border-radius:8px;border:1px solid var(--card);
-          background:var(--bg);color:var(--text);font-size:1rem;
-        ">
-        <input id="reward-cost" type="number" value="50" min="1" placeholder="Cost in points" style="
-          width:100%;padding:10px;margin-bottom:12px;border-radius:8px;border:1px solid var(--card);
-          background:var(--bg);color:var(--text);font-size:1rem;
-        ">
-        <button id="save-reward-btn" style="
-          width:100%;padding:12px;border-radius:8px;border:none;
-          background:var(--accent2);color:white;font-size:0.95rem;font-weight:bold;cursor:pointer;
-        ">Add Reward</button>
-      </div>
-    </div>
-  `;
-}
-
-function renderSettings() {
-  return `
-    <div style="background:var(--surface);border-radius:var(--radius);padding:20px;">
-      <h2 style="margin-bottom:16px;">⚙️ Settings</h2>
-      <p style="font-size:0.85rem;color:var(--text-dim);margin-bottom:16px;">
-        Connect a private GitHub Gist to sync data across devices.<br>
-        <a href="https://gist.github.com/" target="_blank" style="color:var(--accent);">Create a Gist</a> with a file named <code>productivity_data.json</code>, then paste the Gist ID below.
-        <br><br>
-        <a href="https://github.com/settings/tokens/new?scopes=gist&description=Productivity+Tracker" target="_blank" style="color:var(--accent);">Create a token</a> with "gist" scope only.
-      </p>
-      <label style="display:block;margin-bottom:12px;">
-        <span style="font-size:0.85rem;color:var(--text-dim);">Gist ID</span>
-        <input id="gist-id" type="text" value="${appData.settings.gistId}" placeholder="abc123def456..." style="
-          width:100%;padding:10px;margin-top:4px;border-radius:8px;border:1px solid var(--card);
-          background:var(--bg);color:var(--text);font-size:0.9rem;
-        ">
-      </label>
-      <label style="display:block;margin-bottom:16px;">
-        <span style="font-size:0.85rem;color:var(--text-dim);">Personal Access Token</span>
-        <input id="gist-token" type="password" value="${appData.settings.token}" placeholder="ghp_xxxx..." style="
-          width:100%;padding:10px;margin-top:4px;border-radius:8px;border:1px solid var(--card);
-          background:var(--bg);color:var(--text);font-size:0.9rem;
-        ">
-      </label>
-      <button id="save-settings-btn" style="
-        width:100%;padding:12px;border-radius:8px;border:none;
-        background:var(--success);color:#000;font-size:1rem;font-weight:bold;cursor:pointer;
-        margin-bottom:10px;
-      ">Save & Sync</button>
-      <button id="pull-btn" style="
-        width:100%;padding:12px;border-radius:8px;border:none;
-        background:var(--card);color:var(--text);font-size:0.95rem;cursor:pointer;
-        margin-bottom:10px;
-      ">⬇️ Pull from Gist</button>
-      <button id="push-btn" style="
-        width:100%;padding:12px;border-radius:8px;border:none;
-        background:var(--card);color:var(--text);font-size:0.95rem;cursor:pointer;
-      ">⬆️ Push to Gist</button>
-      <div id="sync-status" style="margin-top:12px;text-align:center;font-size:0.85rem;color:var(--text-dim);"></div>
-    </div>
-  `;
-}
-
-function renderNav() {
-  const tabs = [
-    { id: 'tasks', icon: '📋', label: 'Tasks' },
-    { id: 'add', icon: '➕', label: 'Add' },
-    { id: 'rewards', icon: '🎁', label: 'Rewards' },
-    { id: 'settings', icon: '⚙️', label: 'Sync' },
-  ];
-  const tabHTML = tabs.map(t => `
-    <button class="nav-btn" data-view="${t.id}" style="
-      flex:1;padding:10px 4px;border:none;background:transparent;
-      color:${currentView === t.id ? 'var(--accent)' : 'var(--text-dim)'};
-      font-size:0.7rem;cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:2px;
-    ">
-      <span style="font-size:1.3rem;">${t.icon}</span>
-      <span>${t.label}</span>
-    </button>
-  `).join('');
-
-  return `
-    <nav style="
-      position:fixed;bottom:0;left:0;right:0;
-      background:var(--surface);border-top:1px solid var(--card);
-      display:flex;padding:8px 0;padding-bottom:max(8px, env(safe-area-inset-bottom));
-    ">${tabHTML}</nav>
-  `;
-}
-
-// ========== EVENT HANDLING ==========
-function attachEvents() {
-  // Navigation
-  document.querySelectorAll('.nav-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-      currentView = btn.dataset.view;
-      render();
-    });
-  });
-
-  // Complete task
-  document.querySelectorAll('.complete-btn').forEach(btn => {
-    btn.addEventListener('click', () => completeTask(btn.dataset.id));
-  });
-
-  // Delete task
-  document.querySelectorAll('.delete-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-      if (confirm('Delete this task?')) deleteTask(btn.dataset.id);
-    });
-  });
-
-  // Add task form
-  const typeSelect = document.getElementById('task-type');
-  if (typeSelect) {
-    typeSelect.addEventListener('change', () => {
-      const cadenceField = document.getElementById('cadence-field');
-      cadenceField.style.display = typeSelect.value === 'recurring' ? 'block' : 'none';
-    });
-  }
-
-  const saveTaskBtn = document.getElementById('save-task-btn');
-  if (saveTaskBtn) {
-    saveTaskBtn.addEventListener('click', () => {
-      const name = document.getElementById('task-name').value.trim();
-      const type = document.getElementById('task-type').value;
-      const points = parseInt(document.getElementById('task-points').value) || 5;
-      const cadence = parseInt(document.getElementById('task-cadence')?.value) || 7;
-      if (!name) return alert('Enter a task name');
-
-      const task = { id: generateId(), name, type, points };
-      if (type === 'recurring') task.cadenceDays = cadence;
-      if (type === 'one-time') task.completed = false;
-
-      appData.tasks.push(task);
-      save().then(() => { currentView = 'tasks'; render(); });
-    });
-  }
-
+// ===== EVENTS =====
+function bindAll(){
+  document.querySelectorAll('.nbtn').forEach(b=>b.addEventListener('click',()=>{view=b.dataset.v;if(view==='tools')toolsView='menu';if(view==='history'){selDay=today();hM=new Date().getMonth();hY=new Date().getFullYear()}render()}));
+  document.getElementById('info-btn')?.addEventListener('click',showInfoModal);
+  document.getElementById('set-btn')?.addEventListener('click',showSettings);
+  document.getElementById('goal-btn')?.addEventListener('click',showGoalSettingModal);
+  // Tasks
+  document.querySelectorAll('.cbtn').forEach(b=>b.addEventListener('click',e=>{e.stopPropagation();const t=D.tasks.find(x=>x.id===b.dataset.id);if(t&&t.timeBased){inlineMinId=t.id;render()}else completeTask(b.dataset.id)}));
+  document.getElementById('ims')?.addEventListener('click',()=>{const m=parseInt(document.getElementById('imi')?.value);if(!m||m<1)return;completeTask(document.getElementById('ims').dataset.id,m)});
+  document.getElementById('imc')?.addEventListener('click',()=>{inlineMinId=null;render()});
+  document.querySelectorAll('.tdet').forEach(b=>b.addEventListener('click',()=>showTaskDetail(b.dataset.id)));
+  document.querySelectorAll('.sldet').forEach(b=>b.addEventListener('click',()=>showTaskDetail(b.dataset.id)));
+  document.querySelectorAll('.mbtn').forEach(b=>b.addEventListener('click',e=>{e.stopPropagation();moveTask(b.dataset.id,b.dataset.d)}));
+  document.getElementById('show-af')?.addEventListener('click',()=>{const c=document.getElementById('afc');if(c.innerHTML){c.innerHTML='';return}c.innerHTML=rAddForm();bindAddForm()});
+  document.getElementById('surprise-btn')?.addEventListener('click',showSurpriseModal);
   // Rewards
-  const saveRewardBtn = document.getElementById('save-reward-btn');
-  if (saveRewardBtn) {
-    saveRewardBtn.addEventListener('click', () => {
-      const name = document.getElementById('reward-name').value.trim();
-      const cost = parseInt(document.getElementById('reward-cost').value) || 50;
-      if (!name) return alert('Enter a reward name');
-      appData.rewards.push({ id: generateId(), name, cost });
-      save().then(render);
-    });
-  }
-
-  document.querySelectorAll('.redeem-btn').forEach(btn => {
-    btn.addEventListener('click', () => redeemReward(btn.dataset.id));
-  });
-
-  document.querySelectorAll('.delete-reward-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-      if (confirm('Delete this reward?')) {
-        appData.rewards = appData.rewards.filter(r => r.id !== btn.dataset.id);
-        save().then(render);
-      }
-    });
-  });
-
-  // Settings
-  const saveSettingsBtn = document.getElementById('save-settings-btn');
-  if (saveSettingsBtn) {
-    saveSettingsBtn.addEventListener('click', async () => {
-      const statusEl = document.getElementById('sync-status');
-      appData.settings.gistId = document.getElementById('gist-id').value.trim();
-      appData.settings.token = document.getElementById('gist-token').value.trim();
-      saveLocal();
-      statusEl.textContent = 'Saving & syncing...';
-      const ok = await syncToGist();
-      statusEl.textContent = ok ? '✅ Synced successfully!' : '❌ Sync failed. Check your credentials.';
-    });
-  }
-
-  const pullBtn = document.getElementById('pull-btn');
-  if (pullBtn) {
-    pullBtn.addEventListener('click', async () => {
-      const statusEl = document.getElementById('sync-status');
-      statusEl.textContent = 'Pulling...';
-      const ok = await syncFromGist();
-      statusEl.textContent = ok ? '✅ Pulled successfully!' : '❌ Pull failed.';
-      if (ok) render();
-    });
-  }
-
-  const pushBtn = document.getElementById('push-btn');
-  if (pushBtn) {
-    pushBtn.addEventListener('click', async () => {
-      const statusEl = document.getElementById('sync-status');
-      statusEl.textContent = 'Pushing...';
-      const ok = await syncToGist();
-      statusEl.textContent = ok ? '✅ Pushed successfully!' : '❌ Push failed.';
-    });
-  }
+  document.querySelectorAll('.rbtn').forEach(b=>b.addEventListener('click',()=>redeemReward(b.dataset.id)));
+  document.querySelectorAll('.rdet').forEach(b=>b.addEventListener('click',()=>showRewardEdit(b.dataset.id)));
+  document.querySelectorAll('.mrbtn').forEach(b=>b.addEventListener('click',e=>{e.stopPropagation();moveReward(b.dataset.id,b.dataset.d)}));
+  document.getElementById('show-arf')?.addEventListener('click',()=>{const c=document.getElementById('arfc');if(c.innerHTML){c.innerHTML='';return}c.innerHTML=rAddReward();document.getElementById('rfn')?.addEventListener('input',valRF);document.getElementById('rfc')?.addEventListener('input',valRF);document.getElementById('rfs')?.addEventListener('click',()=>{const n=document.getElementById('rfn').value.trim(),c=parseInt(document.getElementById('rfc').value);if(!n||!Number.isInteger(c)||c<1)return;D.rewards.push({id:id(),name:n,cost:c});save();render()})});
+  // History
+  document.querySelectorAll('.cc').forEach(d=>d.addEventListener('click',()=>{selDay=d.dataset.d;render()}));
+  document.querySelectorAll('.hnav').forEach(b=>b.addEventListener('click',()=>{if(b.dataset.d==='prev'){hM--;if(hM<0){hM=11;hY--}}else{hM++;if(hM>11){hM=0;hY++}}selDay=null;render()}));
+  document.querySelectorAll('.hdel').forEach(b=>b.addEventListener('click',()=>confirmAction('Delete this entry and adjust points?',()=>deleteHistEntry(parseInt(b.dataset.idx)))));
+  document.querySelectorAll('.hedit').forEach(b=>b.addEventListener('click',()=>{
+    const idx=parseInt(b.dataset.idx),e=D.pointsHistory[idx];if(!e)return;
+    modal(`<h2 style="color:var(--accent-dark);margin-bottom:12px">Edit Points</h2><p style="margin-bottom:8px;font-size:.9rem">${e.task}</p><input id="hep" type="number" value="${e.points}" class="inf"><button id="hes" class="btn bpri" style="width:100%;margin-top:8px">Save</button><button data-close class="btn bmut" style="width:100%;margin-top:8px">Cancel</button>`);
+    document.getElementById('hes')?.addEventListener('click',()=>{const v=parseInt(document.getElementById('hep').value);if(!Number.isInteger(v))return;editHistEntry(idx,v);closeM()});
+  }));
+  // Tools
+  document.querySelectorAll('.tlcard:not([disabled])').forEach(b=>b.addEventListener('click',()=>{toolsView=b.dataset.t;render()}));
+  document.querySelectorAll('.tback').forEach(b=>b.addEventListener('click',()=>{toolsView='menu';render()}));
+  // Stopwatch
+  document.getElementById('sws')?.addEventListener('click',startSW);
+  document.getElementById('swpa')?.addEventListener('click',pause);
+  document.getElementById('swre')?.addEventListener('click',resume);
+  document.getElementById('swst')?.addEventListener('click',stopSW);
+  ['swt','swn','swp','swr'].forEach(x=>{document.getElementById(x)?.addEventListener('input',valSW);document.getElementById(x)?.addEventListener('change',valSW)});
+  // Make task select and note mutually exclusive
+  document.getElementById('swt')?.addEventListener('change',e=>{if(e.target.value){document.getElementById('swn').value='';document.getElementById('swn').style.display='none'}else{document.getElementById('swn').style.display=''}valSW()});
+  document.getElementById('swn')?.addEventListener('input',e=>{if(e.target.value.trim()){document.getElementById('swt').value='';document.getElementById('swt').style.display='none'}else{document.getElementById('swt').style.display=''}valSW()});
+  // Pomodoro
+  document.getElementById('pms')?.addEventListener('click',startPM);
+  document.getElementById('pmpa')?.addEventListener('click',pause);
+  document.getElementById('pmre')?.addEventListener('click',resume);
+  document.getElementById('pmst')?.addEventListener('click',stopPM);
+  ['pmt','pmn','pmp','pmr'].forEach(x=>{document.getElementById(x)?.addEventListener('input',valPM);document.getElementById(x)?.addEventListener('change',valPM)});
+  document.getElementById('pmt')?.addEventListener('change',e=>{if(e.target.value){document.getElementById('pmn').value='';document.getElementById('pmn').style.display='none'}else{document.getElementById('pmn').style.display=''}valPM()});
+  document.getElementById('pmn')?.addEventListener('input',e=>{if(e.target.value.trim()){document.getElementById('pmt').value='';document.getElementById('pmt').style.display='none'}else{document.getElementById('pmt').style.display=''}valPM()});
+  // Techniques
+  document.querySelectorAll('.ttog').forEach(b=>b.addEventListener('click',()=>{expandedTech=expandedTech===b.dataset.id?null:b.dataset.id;render()}));
+  document.querySelectorAll('.tlog').forEach(b=>b.addEventListener('click',()=>{const t=D.techniques.find(x=>x.id===b.dataset.id);if(!t)return;const n=document.querySelector(`.tni[data-id="${b.dataset.id}"]`);t.entries.push({date:new Date().toISOString(),note:n?.value||'',thumbsUp:b.dataset.u==='1'});save();render()}));
+  document.querySelectorAll('.tdelt').forEach(b=>b.addEventListener('click',()=>confirmAction('Delete this technique?',()=>{D.techniques=D.techniques.filter(t=>t.id!==b.dataset.id);expandedTech=null;save();render()})));
+  document.getElementById('tna')?.addEventListener('click',()=>{const n=document.getElementById('tnn')?.value.trim();if(!n)return;D.techniques.push({id:id(),name:n,entries:[]});save();render()});
 }
 
-// ========== INIT ==========
-loadLocal();
-// Auto-pull from gist on load if configured
-if (appData.settings.gistId && appData.settings.token) {
-  syncFromGist().then(render);
-} else {
-  render();
+// ===== FORM HELPERS =====
+function bindAddForm(){
+  document.getElementById('tft')?.addEventListener('change',e=>{document.getElementById('tfc').style.display=e.target.value==='recurring'?'block':'none';valTF()});
+  document.getElementById('tftb')?.addEventListener('change',e=>{document.getElementById('tffw').style.display=e.target.checked?'none':'';document.getElementById('tftw').style.display=e.target.checked?'':'none';valTF()});
+  ['tfn','tfp','tfpa','tfpp','tfcd'].forEach(x=>document.getElementById(x)?.addEventListener('input',valTF));
+  document.getElementById('tfs')?.addEventListener('click',()=>{
+    const n=document.getElementById('tfn').value.trim(),ty=document.getElementById('tft').value,tb=document.getElementById('tftb').checked;
+    const task={id:id(),name:n,type:ty,timeBased:tb};
+    if(tb){task.ptsAmount=parseInt(document.getElementById('tfpa').value);task.ptsPerMinutes=parseInt(document.getElementById('tfpp').value);task.points=task.ptsAmount}
+    else task.points=parseInt(document.getElementById('tfp').value);
+    if(ty==='recurring')task.cadenceDays=parseInt(document.getElementById('tfcd').value);
+    if(ty==='one-time')task.completed=false;
+    D.tasks.push(task);save();render()});
 }
+function valTF(){
+  const n=document.getElementById('tfn')?.value.trim(),tb=document.getElementById('tftb')?.checked,ty=document.getElementById('tft')?.value;
+  const btn=document.getElementById('tfs'),err=document.getElementById('tfe');if(!btn||!err)return;
+  let ok=true,msg='';
+  if(!n){ok=false;msg='Name required'}
+  else if(tb){const a=parseInt(document.getElementById('tfpa')?.value),b=parseInt(document.getElementById('tfpp')?.value);if(!Number.isInteger(a)||a<1||!Number.isInteger(b)||b<1){ok=false;msg='Valid pts/min required'}}
+  else{const p=parseInt(document.getElementById('tfp')?.value);if(!Number.isInteger(p)||p<1){ok=false;msg='Valid points required'}}
+  if(ok&&ty==='recurring'){const c=parseInt(document.getElementById('tfcd')?.value);if(!Number.isInteger(c)||c<1){ok=false;msg='Valid cadence required'}}
+  err.textContent=msg;err.style.display=ok?'none':'block';btn.disabled=!ok;btn.style.opacity=ok?'1':'.5';
+}
+function valRF(){
+  const n=document.getElementById('rfn')?.value.trim(),c=parseInt(document.getElementById('rfc')?.value);
+  const btn=document.getElementById('rfs'),err=document.getElementById('rfe');if(!btn||!err)return;
+  let ok=true,msg='';if(!n){ok=false;msg='Name required'}else if(!Number.isInteger(c)||c<1){ok=false;msg='Valid cost required'}
+  err.textContent=msg;err.style.display=ok?'none':'block';btn.disabled=!ok;btn.style.opacity=ok?'1':'.5';
+}
+function valSW(){
+  const t=document.getElementById('swt')?.value,n=document.getElementById('swn')?.value.trim();
+  const p=parseInt(document.getElementById('swp')?.value),r=parseInt(document.getElementById('swr')?.value);
+  const btn=document.getElementById('sws'),err=document.getElementById('swe');if(!btn)return;
+  const ctx=t||n,rate=Number.isInteger(p)&&p>=1&&Number.isInteger(r)&&r>=1;
+  btn.disabled=!(ctx&&rate);btn.style.opacity=ctx&&rate?'1':'.5';
+  if(err)err.textContent=!ctx?'Select a task or describe activity':!rate?'Set valid point rate':'';
+}
+function valPM(){
+  const t=document.getElementById('pmt')?.value,n=document.getElementById('pmn')?.value.trim();
+  const p=parseInt(document.getElementById('pmp')?.value),r=parseInt(document.getElementById('pmr')?.value);
+  const btn=document.getElementById('pms'),err=document.getElementById('pme');if(!btn)return;
+  const ctx=t||n,rate=Number.isInteger(p)&&p>=1&&Number.isInteger(r)&&r>=1;
+  btn.disabled=!(ctx&&rate);btn.style.opacity=ctx&&rate?'1':'.5';
+  if(err)err.textContent=!ctx?'Select a task or describe activity':!rate?'Set valid point rate':'';
+}
+
+// ===== TIMER =====
+function startSW(){
+  const p=parseInt(document.getElementById('swp').value),r=parseInt(document.getElementById('swr').value);
+  T={running:true,paused:false,mode:'sw',start:Date.now(),elapsed:0,workDur:25,breakDur:5,phase:'work',
+    note:document.getElementById('swn')?.value||'',taskId:document.getElementById('swt')?.value||'',pts:p,per:r};
+  startTick()}
+function startPM(){
+  const p=parseInt(document.getElementById('pmp').value),r=parseInt(document.getElementById('pmr').value);
+  const w=parseInt(document.getElementById('pmw')?.value)||25,b=parseInt(document.getElementById('pmb')?.value)||5;
+  T={running:true,paused:false,mode:'pm',start:Date.now(),elapsed:0,workDur:w,breakDur:b,phase:'work',
+    note:document.getElementById('pmn')?.value||'',taskId:document.getElementById('pmt')?.value||'',pts:p,per:r};
+  startTick()}
+function pause(){T.elapsed=elapsed();T.running=false;T.paused=true;clearInterval(tickInterval);render()}
+function resume(){T.running=true;T.paused=false;T.start=Date.now();startTick()}
+
+function startTick(){
+  if(tickInterval)clearInterval(tickInterval);render();
+  tickInterval=setInterval(()=>{
+    if(!T.running){clearInterval(tickInterval);return}
+    if(T.mode==='pm'){
+      const e=elapsed(),tgt=(T.phase==='work'?T.workDur:T.breakDur)*60;
+      if(e>=tgt){
+        if(T.phase==='work'){
+          const exactPts=T.workDur*60*T.pts/(T.per*60),pts=awardTimerPts(exactPts);
+          if(pts>0){const lbl=T.note||D.tasks.find(t=>t.id===T.taskId)?.name||'🍅 Pomodoro';D.points+=pts;D.pointsHistory.push({date:new Date().toISOString(),task:'🍅 '+lbl,taskId:T.taskId||null,points:pts,type:'earned',minutes:T.workDur});saveL();gistPush();confetti();toast(`🍅 +${pts} pts! Break time!`);checkGoal()}
+          T.phase='break'}else{T.phase='work';toast('💪 Break over!')}
+        T.elapsed=0;T.start=Date.now()}}
+    // Only update timer display
+    if(view==='tools'&&(toolsView==='sw'||toolsView==='pm'))tickRender();
+  },1000)}
+
+function stopSW(){
+  const e=elapsed();
+  const label=T.note||D.tasks.find(t=>t.id===T.taskId)?.name||'Stopwatch';
+  T.running=false;T.paused=false;clearInterval(tickInterval);
+  const mins=Math.floor(e/60),exactPts=e*T.pts/(T.per*60),pts=awardTimerPts(exactPts);
+  if(pts>0){D.points+=pts;D.pointsHistory.push({date:new Date().toISOString(),task:'⏱️ '+label,taskId:T.taskId||null,points:pts,type:'earned',minutes:mins});saveL();gistPush();confetti();checkGoal();
+    T={running:false,paused:false,mode:null,start:null,elapsed:0,workDur:T.workDur,breakDur:T.breakDur,phase:'work',note:'',taskId:'',pts:1,per:15};render();showCongratsModal(label,e,pts)}
+  else{if(mins>0)toast(`⏱️ ${mins}min (fractional points saved for next time)`);
+    saveL();T={running:false,paused:false,mode:null,start:null,elapsed:0,workDur:T.workDur,breakDur:T.breakDur,phase:'work',note:'',taskId:'',pts:1,per:15};render()}}
+
+function stopPM(){
+  const e=elapsed();
+  const label=T.note||D.tasks.find(t=>t.id===T.taskId)?.name||'Pomodoro';
+  T.running=false;T.paused=false;clearInterval(tickInterval);
+  if(T.phase==='work'){
+    const mins=Math.floor(e/60),exactPts=e*T.pts/(T.per*60),pts=awardTimerPts(exactPts);
+    if(pts>0){D.points+=pts;D.pointsHistory.push({date:new Date().toISOString(),task:'🍅 '+label,taskId:T.taskId||null,points:pts,type:'earned',minutes:mins});saveL();gistPush();checkGoal();
+      T={running:false,paused:false,mode:null,start:null,elapsed:0,workDur:T.workDur,breakDur:T.breakDur,phase:'work',note:'',taskId:'',pts:1,per:15};render();showCongratsModal(label,e,pts);return}
+    else{saveL()}
+  }
+  T={running:false,paused:false,mode:null,start:null,elapsed:0,workDur:T.workDur,breakDur:T.breakDur,phase:'work',note:'',taskId:'',pts:1,per:15};render()}
+
+// ===== INIT =====
+loadL();updateStreak();
+if(D.settings.gistId&&D.settings.token)gistPull().then(()=>{updateStreak();render()});
+else render();
 </script>
-</body>
-</html>
+<style>
+.hdr{background:var(--surface);border-radius:var(--radius);padding:14px 16px;margin-bottom:12px;box-shadow:var(--shadow);border:1px solid var(--border)}
+.fcard{background:var(--surface);border-radius:var(--radius);padding:16px;box-shadow:var(--shadow);border:1px solid var(--border)}
+.tcard{background:var(--card-task);border-radius:var(--radius);padding:12px;margin-bottom:8px;box-shadow:var(--shadow)}
+.rcard{background:var(--card-reward);border-radius:var(--radius);padding:12px;margin-bottom:8px;box-shadow:var(--shadow)}
+.slcard{background:var(--card-sleep);border-radius:10px;padding:8px 12px;margin-bottom:6px;display:flex;justify-content:space-between;align-items:center;font-size:.85rem}
+.vc{padding-bottom:16px}
+.sbox{background:var(--card-task);padding:10px;border-radius:8px;text-align:center}
+.sn{font-size:1.2rem;font-weight:bold;color:var(--accent-dark)}
+.sl{font-size:.7rem;color:var(--text-dim)}
+.inf{width:100%;padding:10px;margin-bottom:8px;border-radius:8px;border:1px solid var(--border);font-size:1rem;background:var(--surface);color:var(--text)}
+.inf:focus{outline:2px solid var(--accent);border-color:var(--accent)}
+.err{color:var(--danger-dark);font-size:.8rem;margin-bottom:8px;display:none}
+.chlbl{font-size:.85rem;color:var(--text-dim);display:flex;align-items:center;gap:8px;margin-bottom:10px}
+.rl{font-size:.8rem;color:var(--text-dim)}
+.btn{padding:10px 16px;border-radius:10px;border:none;font-size:.9rem;font-weight:600;cursor:pointer}
+.btn:active{transform:scale(.96)}
+.bpri{background:var(--accent);color:#fff}
+.bsuc{background:var(--success);color:#166534}
+.bwar{background:var(--warning);color:#92400e}
+.bdan{background:var(--danger);color:#991b1b}
+.bac2{background:var(--accent2);color:#0c4a6e}
+.bmut{background:var(--card-neutral);color:var(--text-dim)}
+.btn-lg{padding:14px 36px;font-size:1.1rem;border-radius:25px}
+.ibtn{background:none;border:none;font-size:1.1rem;cursor:pointer;padding:4px}
+.cbtn{width:32px;height:32px;border-radius:50%;border:2px solid var(--success-dark);background:transparent;color:var(--success-dark);font-size:1rem;cursor:pointer;flex-shrink:0;display:flex;align-items:center;justify-content:center}
+.cbtn:active{background:var(--success);color:#fff}
+.mbtn,.mrbtn{background:none;border:none;font-size:.7rem;cursor:pointer;padding:2px 4px;color:var(--text-dim)}
+.abtn{width:100%;padding:14px;border-radius:var(--radius);border:2px dashed var(--accent);background:transparent;color:var(--accent-dark);font-size:1rem;font-weight:600;cursor:pointer}
+.pbar{flex:1;height:8px;background:var(--card-neutral);border-radius:4px;overflow:hidden}
+.pfill{height:100%;border-radius:4px;transition:width .3s}
+</style>
+<style>
+.calbox{background:var(--surface);border-radius:var(--radius);padding:12px 8px;box-shadow:var(--shadow);border:1px solid var(--border)}
+.cgrid{display:grid;grid-template-columns:repeat(7,1fr);gap:2px}
+.ch{text-align:center;font-size:.7rem;color:var(--text-dim);font-weight:600;padding:4px 0}
+.cc{text-align:center;padding:6px 2px;border-radius:8px;cursor:pointer;height:40px;display:flex;flex-direction:column;align-items:center;justify-content:center}
+.cc:hover{background:var(--card-neutral)}
+.cn{font-size:.8rem;display:block}
+.cdot{display:block;font-size:.55rem;color:var(--accent-dark);margin-top:1px;line-height:1}
+.cdotw{color:rgba(255,255,255,.9)}
+.cact{background:var(--card-task)}
+.cact .cn{font-weight:600}
+.csel{background:var(--accent)!important;color:#fff!important}
+.ctd{border:2px solid var(--accent-dark)}
+.hent{display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--border)}
+.hent:last-child{border-bottom:none}
+.hpts{font-weight:bold;font-size:.85rem}
+.hpe{color:var(--success-dark)}
+.hps{color:var(--danger-dark)}
+.bnav{position:fixed;bottom:0;left:0;right:0;background:var(--surface);border-top:1px solid var(--border);display:flex;padding:6px 0;padding-bottom:max(6px,env(safe-area-inset-bottom));box-shadow:0 -1px 4px rgba(0,0,0,.03);height:60px}
+.nbtn{flex:1;padding:6px 4px;border:none;background:transparent;color:var(--text-dim);font-size:.7rem;cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:2px;justify-content:center}
+.nact{color:var(--accent-dark)}
+.tlcard{width:100%;padding:16px;margin-bottom:10px;border-radius:var(--radius);border:1px solid var(--border);background:var(--surface);text-align:left;cursor:pointer;font-size:1rem;box-shadow:var(--shadow)}
+.tlcard:active{transform:scale(.98)}
+.tdesc{font-size:.8rem;color:var(--text-dim)}
+.dis{opacity:.4;cursor:not-allowed}
+.tback{display:block;margin-bottom:12px;background:none;border:none;color:var(--accent-dark);cursor:pointer;font-size:.9rem;text-align:left}
+.tdis{font-size:3.5rem;font-weight:bold;font-family:'SF Mono',SFMono-Regular,ui-monospace,monospace;margin:16px 0;color:var(--text)}
+.toast{position:fixed;bottom:80px;left:50%;transform:translateX(-50%);background:var(--text);color:var(--bg);padding:12px 20px;border-radius:25px;font-size:.85rem;font-weight:500;z-index:9998;box-shadow:0 4px 12px rgba(0,0,0,.12);display:flex;align-items:center;gap:10px;white-space:nowrap;max-width:90vw}
+.undo-btn{background:var(--warning);color:#000;border:none;padding:6px 12px;border-radius:12px;font-weight:bold;font-size:.8rem;cursor:pointer}
+.modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.25);z-index:9990;display:flex;align-items:center;justify-content:center;padding:16px}
+.modal-box{background:var(--surface);border-radius:var(--radius);padding:24px;max-width:380px;width:100%;max-height:80vh;overflow-y:auto;box-shadow:0 8px 24px rgba(0,0,0,.08)}
+code{background:var(--card-neutral);padding:2px 6px;border-radius:4px;font-size:.8rem}
+a{color:var(--accent-dark)}
+</style>
+</body></html>
