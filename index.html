@@ -1,0 +1,523 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>Productivity Tracker</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  --bg: #1a1a2e;
+  --surface: #16213e;
+  --card: #0f3460;
+  --accent: #e94560;
+  --accent2: #533483;
+  --text: #eaeaea;
+  --text-dim: #a0a0b0;
+  --success: #4ecdc4;
+  --warning: #f39c12;
+  --radius: 12px;
+}
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+  padding: 16px;
+  padding-bottom: 100px;
+}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<script>
+// ========== DATA MODEL ==========
+const DEFAULT_DATA = {
+  tasks: [],
+  points: 0,
+  pointsHistory: [],
+  rewards: [],
+  settings: { gistId: '', token: '' }
+};
+
+let appData = JSON.parse(JSON.stringify(DEFAULT_DATA));
+let currentView = 'tasks';
+
+// ========== PERSISTENCE (localStorage + Gist sync) ==========
+const STORAGE_KEY = 'productivity_tracker_data';
+
+function saveLocal() {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(appData));
+}
+
+function loadLocal() {
+  const stored = localStorage.getItem(STORAGE_KEY);
+  if (stored) {
+    appData = { ...DEFAULT_DATA, ...JSON.parse(stored) };
+  }
+}
+
+async function syncToGist() {
+  const { gistId, token } = appData.settings;
+  if (!gistId || !token) return false;
+  try {
+    const resp = await fetch(`https://api.github.com/gists/${gistId}`, {
+      method: 'PATCH',
+      headers: {
+        'Authorization': `token ${token}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        files: { 'productivity_data.json': { content: JSON.stringify(appData) } }
+      })
+    });
+    return resp.ok;
+  } catch (e) { console.error('Sync failed:', e); return false; }
+}
+
+async function syncFromGist() {
+  const { gistId, token } = appData.settings;
+  if (!gistId || !token) return false;
+  try {
+    const resp = await fetch(`https://api.github.com/gists/${gistId}`, {
+      headers: { 'Authorization': `token ${token}` }
+    });
+    if (!resp.ok) return false;
+    const gist = await resp.json();
+    const content = gist.files['productivity_data.json']?.content;
+    if (content) {
+      const remote = JSON.parse(content);
+      // Keep local settings (token) but merge everything else from remote
+      const localSettings = appData.settings;
+      appData = { ...DEFAULT_DATA, ...remote, settings: localSettings };
+      saveLocal();
+      return true;
+    }
+  } catch (e) { console.error('Pull failed:', e); }
+  return false;
+}
+
+async function save() {
+  saveLocal();
+  await syncToGist();
+}
+
+// ========== TASK LOGIC ==========
+function generateId() {
+  return Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+}
+
+function getVisibleTasks() {
+  const now = new Date();
+  return appData.tasks.filter(t => {
+    if (t.type === 'one-time') return !t.completed;
+    if (t.type === 'recurring') {
+      if (!t.lastCompleted) return true;
+      const last = new Date(t.lastCompleted);
+      const diffDays = (now - last) / (1000 * 60 * 60 * 24);
+      return diffDays >= t.cadenceDays;
+    }
+    if (t.type === 'evergreen') return true;
+    return true;
+  });
+}
+
+function completeTask(id) {
+  const task = appData.tasks.find(t => t.id === id);
+  if (!task) return;
+  const now = new Date().toISOString();
+
+  if (task.type === 'one-time') {
+    task.completed = true;
+    task.completedAt = now;
+  } else if (task.type === 'recurring') {
+    task.lastCompleted = now;
+  }
+  // Evergreen tasks: no state change, just award points
+
+  appData.points += task.points;
+  appData.pointsHistory.push({
+    date: now,
+    task: task.name,
+    points: task.points,
+    type: 'earned'
+  });
+  save().then(render);
+}
+
+function deleteTask(id) {
+  appData.tasks = appData.tasks.filter(t => t.id !== id);
+  save().then(render);
+}
+
+function redeemReward(id) {
+  const reward = appData.rewards.find(r => r.id === id);
+  if (!reward || appData.points < reward.cost) return;
+  appData.points -= reward.cost;
+  appData.pointsHistory.push({
+    date: new Date().toISOString(),
+    task: reward.name,
+    points: -reward.cost,
+    type: 'spent'
+  });
+  save().then(render);
+}
+
+// ========== RENDERING ==========
+function render() {
+  const app = document.getElementById('app');
+  app.innerHTML = `
+    ${renderHeader()}
+    ${currentView === 'tasks' ? renderTasks() : ''}
+    ${currentView === 'add' ? renderAddTask() : ''}
+    ${currentView === 'rewards' ? renderRewards() : ''}
+    ${currentView === 'settings' ? renderSettings() : ''}
+    ${renderNav()}
+  `;
+  attachEvents();
+}
+
+function renderHeader() {
+  return `
+    <header style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
+      <h1 style="font-size:1.4rem;">⚡ Tracker</h1>
+      <div style="background:var(--card);padding:8px 16px;border-radius:20px;font-weight:bold;">
+        🪙 ${appData.points} pts
+      </div>
+    </header>
+  `;
+}
+
+function renderTasks() {
+  const visible = getVisibleTasks();
+  const oneTime = visible.filter(t => t.type === 'one-time');
+  const recurring = visible.filter(t => t.type === 'recurring');
+  const evergreen = visible.filter(t => t.type === 'evergreen');
+
+  return `
+    <div class="task-sections">
+      ${renderBucket('🎯 One-Time', oneTime, 'Complete and gone forever')}
+      ${renderBucket('🔄 Recurring', recurring, 'Reappears after cadence')}
+      ${renderBucket('♾️ Evergreen', evergreen, 'Always available')}
+    </div>
+  `;
+}
+
+function renderBucket(title, tasks, subtitle) {
+  if (tasks.length === 0) {
+    return `
+      <div style="margin-bottom:24px;">
+        <h2 style="font-size:1.1rem;margin-bottom:4px;">${title}</h2>
+        <p style="color:var(--text-dim);font-size:0.8rem;margin-bottom:8px;">${subtitle}</p>
+        <p style="color:var(--text-dim);font-style:italic;font-size:0.9rem;">Nothing here right now ✨</p>
+      </div>
+    `;
+  }
+  const taskCards = tasks.map(t => `
+    <div style="background:var(--card);border-radius:var(--radius);padding:14px;margin-bottom:10px;display:flex;align-items:center;gap:12px;">
+      <button class="complete-btn" data-id="${t.id}" style="
+        width:36px;height:36px;border-radius:50%;border:2px solid var(--success);
+        background:transparent;color:var(--success);font-size:1.2rem;cursor:pointer;
+        display:flex;align-items:center;justify-content:center;flex-shrink:0;
+      ">✓</button>
+      <div style="flex:1;min-width:0;">
+        <div style="font-weight:600;font-size:0.95rem;">${t.name}</div>
+        ${t.type === 'recurring' ? `<div style="color:var(--text-dim);font-size:0.75rem;">Every ${t.cadenceDays} day${t.cadenceDays > 1 ? 's' : ''}</div>` : ''}
+      </div>
+      <div style="color:var(--warning);font-weight:bold;font-size:0.9rem;flex-shrink:0;">+${t.points}</div>
+      <button class="delete-btn" data-id="${t.id}" style="
+        background:transparent;border:none;color:var(--text-dim);font-size:1.1rem;cursor:pointer;padding:4px;
+      ">🗑️</button>
+    </div>
+  `).join('');
+
+  return `
+    <div style="margin-bottom:24px;">
+      <h2 style="font-size:1.1rem;margin-bottom:4px;">${title}</h2>
+      <p style="color:var(--text-dim);font-size:0.8rem;margin-bottom:10px;">${subtitle}</p>
+      ${taskCards}
+    </div>
+  `;
+}
+
+function renderAddTask() {
+  return `
+    <div style="background:var(--surface);border-radius:var(--radius);padding:20px;">
+      <h2 style="margin-bottom:16px;">Add Task</h2>
+      <label style="display:block;margin-bottom:12px;">
+        <span style="font-size:0.85rem;color:var(--text-dim);">Name</span>
+        <input id="task-name" type="text" placeholder="e.g. Organize desk" style="
+          width:100%;padding:10px;margin-top:4px;border-radius:8px;border:1px solid var(--card);
+          background:var(--bg);color:var(--text);font-size:1rem;
+        ">
+      </label>
+      <label style="display:block;margin-bottom:12px;">
+        <span style="font-size:0.85rem;color:var(--text-dim);">Type</span>
+        <select id="task-type" style="
+          width:100%;padding:10px;margin-top:4px;border-radius:8px;border:1px solid var(--card);
+          background:var(--bg);color:var(--text);font-size:1rem;
+        ">
+          <option value="one-time">🎯 One-Time</option>
+          <option value="recurring">🔄 Recurring</option>
+          <option value="evergreen">♾️ Evergreen</option>
+        </select>
+      </label>
+      <div id="cadence-field" style="display:none;margin-bottom:12px;">
+        <label>
+          <span style="font-size:0.85rem;color:var(--text-dim);">Cadence (days)</span>
+          <input id="task-cadence" type="number" value="7" min="1" style="
+            width:100%;padding:10px;margin-top:4px;border-radius:8px;border:1px solid var(--card);
+            background:var(--bg);color:var(--text);font-size:1rem;
+          ">
+        </label>
+      </div>
+      <label style="display:block;margin-bottom:16px;">
+        <span style="font-size:0.85rem;color:var(--text-dim);">Points</span>
+        <input id="task-points" type="number" value="5" min="1" style="
+          width:100%;padding:10px;margin-top:4px;border-radius:8px;border:1px solid var(--card);
+          background:var(--bg);color:var(--text);font-size:1rem;
+        ">
+      </label>
+      <button id="save-task-btn" style="
+        width:100%;padding:14px;border-radius:var(--radius);border:none;
+        background:var(--accent);color:white;font-size:1rem;font-weight:bold;cursor:pointer;
+      ">Add Task</button>
+    </div>
+  `;
+}
+
+function renderRewards() {
+  const rewardCards = appData.rewards.map(r => `
+    <div style="background:var(--card);border-radius:var(--radius);padding:14px;margin-bottom:10px;display:flex;align-items:center;gap:12px;">
+      <div style="flex:1;">
+        <div style="font-weight:600;">${r.name}</div>
+      </div>
+      <div style="color:var(--warning);font-weight:bold;font-size:0.9rem;">${r.cost} pts</div>
+      <button class="redeem-btn" data-id="${r.id}" style="
+        padding:8px 12px;border-radius:8px;border:none;font-size:0.85rem;cursor:pointer;
+        background:${appData.points >= r.cost ? 'var(--success)' : 'var(--text-dim)'};
+        color:${appData.points >= r.cost ? '#000' : '#555'};font-weight:bold;
+      " ${appData.points < r.cost ? 'disabled' : ''}>Redeem</button>
+      <button class="delete-reward-btn" data-id="${r.id}" style="
+        background:transparent;border:none;color:var(--text-dim);font-size:1.1rem;cursor:pointer;
+      ">🗑️</button>
+    </div>
+  `).join('');
+
+  return `
+    <div>
+      <h2 style="margin-bottom:4px;">🎁 Rewards Shop</h2>
+      <p style="color:var(--text-dim);font-size:0.85rem;margin-bottom:16px;">You have <strong>${appData.points}</strong> points to spend</p>
+      ${rewardCards || '<p style="color:var(--text-dim);font-style:italic;">No rewards yet. Add one below!</p>'}
+      <div style="background:var(--surface);border-radius:var(--radius);padding:16px;margin-top:16px;">
+        <h3 style="font-size:1rem;margin-bottom:12px;">Add Reward</h3>
+        <input id="reward-name" type="text" placeholder="e.g. Coffee treat" style="
+          width:100%;padding:10px;margin-bottom:8px;border-radius:8px;border:1px solid var(--card);
+          background:var(--bg);color:var(--text);font-size:1rem;
+        ">
+        <input id="reward-cost" type="number" value="50" min="1" placeholder="Cost in points" style="
+          width:100%;padding:10px;margin-bottom:12px;border-radius:8px;border:1px solid var(--card);
+          background:var(--bg);color:var(--text);font-size:1rem;
+        ">
+        <button id="save-reward-btn" style="
+          width:100%;padding:12px;border-radius:8px;border:none;
+          background:var(--accent2);color:white;font-size:0.95rem;font-weight:bold;cursor:pointer;
+        ">Add Reward</button>
+      </div>
+    </div>
+  `;
+}
+
+function renderSettings() {
+  return `
+    <div style="background:var(--surface);border-radius:var(--radius);padding:20px;">
+      <h2 style="margin-bottom:16px;">⚙️ Settings</h2>
+      <p style="font-size:0.85rem;color:var(--text-dim);margin-bottom:16px;">
+        Connect a private GitHub Gist to sync data across devices.<br>
+        <a href="https://gist.github.com/" target="_blank" style="color:var(--accent);">Create a Gist</a> with a file named <code>productivity_data.json</code>, then paste the Gist ID below.
+        <br><br>
+        <a href="https://github.com/settings/tokens/new?scopes=gist&description=Productivity+Tracker" target="_blank" style="color:var(--accent);">Create a token</a> with "gist" scope only.
+      </p>
+      <label style="display:block;margin-bottom:12px;">
+        <span style="font-size:0.85rem;color:var(--text-dim);">Gist ID</span>
+        <input id="gist-id" type="text" value="${appData.settings.gistId}" placeholder="abc123def456..." style="
+          width:100%;padding:10px;margin-top:4px;border-radius:8px;border:1px solid var(--card);
+          background:var(--bg);color:var(--text);font-size:0.9rem;
+        ">
+      </label>
+      <label style="display:block;margin-bottom:16px;">
+        <span style="font-size:0.85rem;color:var(--text-dim);">Personal Access Token</span>
+        <input id="gist-token" type="password" value="${appData.settings.token}" placeholder="ghp_xxxx..." style="
+          width:100%;padding:10px;margin-top:4px;border-radius:8px;border:1px solid var(--card);
+          background:var(--bg);color:var(--text);font-size:0.9rem;
+        ">
+      </label>
+      <button id="save-settings-btn" style="
+        width:100%;padding:12px;border-radius:8px;border:none;
+        background:var(--success);color:#000;font-size:1rem;font-weight:bold;cursor:pointer;
+        margin-bottom:10px;
+      ">Save & Sync</button>
+      <button id="pull-btn" style="
+        width:100%;padding:12px;border-radius:8px;border:none;
+        background:var(--card);color:var(--text);font-size:0.95rem;cursor:pointer;
+        margin-bottom:10px;
+      ">⬇️ Pull from Gist</button>
+      <button id="push-btn" style="
+        width:100%;padding:12px;border-radius:8px;border:none;
+        background:var(--card);color:var(--text);font-size:0.95rem;cursor:pointer;
+      ">⬆️ Push to Gist</button>
+      <div id="sync-status" style="margin-top:12px;text-align:center;font-size:0.85rem;color:var(--text-dim);"></div>
+    </div>
+  `;
+}
+
+function renderNav() {
+  const tabs = [
+    { id: 'tasks', icon: '📋', label: 'Tasks' },
+    { id: 'add', icon: '➕', label: 'Add' },
+    { id: 'rewards', icon: '🎁', label: 'Rewards' },
+    { id: 'settings', icon: '⚙️', label: 'Sync' },
+  ];
+  const tabHTML = tabs.map(t => `
+    <button class="nav-btn" data-view="${t.id}" style="
+      flex:1;padding:10px 4px;border:none;background:transparent;
+      color:${currentView === t.id ? 'var(--accent)' : 'var(--text-dim)'};
+      font-size:0.7rem;cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:2px;
+    ">
+      <span style="font-size:1.3rem;">${t.icon}</span>
+      <span>${t.label}</span>
+    </button>
+  `).join('');
+
+  return `
+    <nav style="
+      position:fixed;bottom:0;left:0;right:0;
+      background:var(--surface);border-top:1px solid var(--card);
+      display:flex;padding:8px 0;padding-bottom:max(8px, env(safe-area-inset-bottom));
+    ">${tabHTML}</nav>
+  `;
+}
+
+// ========== EVENT HANDLING ==========
+function attachEvents() {
+  // Navigation
+  document.querySelectorAll('.nav-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      currentView = btn.dataset.view;
+      render();
+    });
+  });
+
+  // Complete task
+  document.querySelectorAll('.complete-btn').forEach(btn => {
+    btn.addEventListener('click', () => completeTask(btn.dataset.id));
+  });
+
+  // Delete task
+  document.querySelectorAll('.delete-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      if (confirm('Delete this task?')) deleteTask(btn.dataset.id);
+    });
+  });
+
+  // Add task form
+  const typeSelect = document.getElementById('task-type');
+  if (typeSelect) {
+    typeSelect.addEventListener('change', () => {
+      const cadenceField = document.getElementById('cadence-field');
+      cadenceField.style.display = typeSelect.value === 'recurring' ? 'block' : 'none';
+    });
+  }
+
+  const saveTaskBtn = document.getElementById('save-task-btn');
+  if (saveTaskBtn) {
+    saveTaskBtn.addEventListener('click', () => {
+      const name = document.getElementById('task-name').value.trim();
+      const type = document.getElementById('task-type').value;
+      const points = parseInt(document.getElementById('task-points').value) || 5;
+      const cadence = parseInt(document.getElementById('task-cadence')?.value) || 7;
+      if (!name) return alert('Enter a task name');
+
+      const task = { id: generateId(), name, type, points };
+      if (type === 'recurring') task.cadenceDays = cadence;
+      if (type === 'one-time') task.completed = false;
+
+      appData.tasks.push(task);
+      save().then(() => { currentView = 'tasks'; render(); });
+    });
+  }
+
+  // Rewards
+  const saveRewardBtn = document.getElementById('save-reward-btn');
+  if (saveRewardBtn) {
+    saveRewardBtn.addEventListener('click', () => {
+      const name = document.getElementById('reward-name').value.trim();
+      const cost = parseInt(document.getElementById('reward-cost').value) || 50;
+      if (!name) return alert('Enter a reward name');
+      appData.rewards.push({ id: generateId(), name, cost });
+      save().then(render);
+    });
+  }
+
+  document.querySelectorAll('.redeem-btn').forEach(btn => {
+    btn.addEventListener('click', () => redeemReward(btn.dataset.id));
+  });
+
+  document.querySelectorAll('.delete-reward-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      if (confirm('Delete this reward?')) {
+        appData.rewards = appData.rewards.filter(r => r.id !== btn.dataset.id);
+        save().then(render);
+      }
+    });
+  });
+
+  // Settings
+  const saveSettingsBtn = document.getElementById('save-settings-btn');
+  if (saveSettingsBtn) {
+    saveSettingsBtn.addEventListener('click', async () => {
+      const statusEl = document.getElementById('sync-status');
+      appData.settings.gistId = document.getElementById('gist-id').value.trim();
+      appData.settings.token = document.getElementById('gist-token').value.trim();
+      saveLocal();
+      statusEl.textContent = 'Saving & syncing...';
+      const ok = await syncToGist();
+      statusEl.textContent = ok ? '✅ Synced successfully!' : '❌ Sync failed. Check your credentials.';
+    });
+  }
+
+  const pullBtn = document.getElementById('pull-btn');
+  if (pullBtn) {
+    pullBtn.addEventListener('click', async () => {
+      const statusEl = document.getElementById('sync-status');
+      statusEl.textContent = 'Pulling...';
+      const ok = await syncFromGist();
+      statusEl.textContent = ok ? '✅ Pulled successfully!' : '❌ Pull failed.';
+      if (ok) render();
+    });
+  }
+
+  const pushBtn = document.getElementById('push-btn');
+  if (pushBtn) {
+    pushBtn.addEventListener('click', async () => {
+      const statusEl = document.getElementById('sync-status');
+      statusEl.textContent = 'Pushing...';
+      const ok = await syncToGist();
+      statusEl.textContent = ok ? '✅ Pushed successfully!' : '❌ Push failed.';
+    });
+  }
+}
+
+// ========== INIT ==========
+loadLocal();
+// Auto-pull from gist on load if configured
+if (appData.settings.gistId && appData.settings.token) {
+  syncFromGist().then(render);
+} else {
+  render();
+}
+</script>
+</body>
+</html>
