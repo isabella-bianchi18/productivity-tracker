@@ -19,7 +19,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-seri
 <div id="modal-container"></div>
 <script>
 // ===== DATA =====
-const APP_VERSION='1.4.0';
+const APP_VERSION='1.5.0';
 const DEFAULT_DATA={tasks:[],points:0,pointsHistory:[],rewards:[],techniques:[],settings:{gistId:'',token:'',dailyGoal:0},dailyGoalLog:{},streak:0,fractional:0};
 let D=JSON.parse(JSON.stringify(DEFAULT_DATA));
 let view='tasks',toolsView='menu',expandedTech=null,inlineMinId=null;
@@ -513,6 +513,9 @@ function stopPM(){
 loadL();updateStreak();
 if(D.settings.gistId&&D.settings.token)gistPull().then(()=>{updateStreak();render()});
 else render();
+// Push when app is backgrounded/closed
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='hidden'){saveL();gistPush()}});
+window.addEventListener('pagehide',()=>{saveL();gistPush()});
 </script>
 <style>
 .hdr{background:var(--surface);border-radius:var(--radius);padding:14px 16px;margin-bottom:12px;box-shadow:var(--shadow);border:1px solid var(--border)}
