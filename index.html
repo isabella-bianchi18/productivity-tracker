@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -21,10 +21,10 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-seri
 <div id="modal-container"></div>
 <script>
 // ===== DATA =====
-const APP_VERSION='1.7.5';
+const APP_VERSION='1.8.0';
 const DEFAULT_DATA={tasks:[],points:0,pointsHistory:[],rewards:[],techniques:[],metrics:[],settings:{gistId:'',token:'',dailyGoal:0},dailyGoalLog:{},streak:0,fractional:0};
 let D=JSON.parse(JSON.stringify(DEFAULT_DATA));
-let view='tasks',toolsView='menu',expandedTech=null,inlineMinId=null;
+let view='tasks',toolsView='menu',expandedTech=null,inlineMinId=null,categoryFilter='all';
 let T={running:false,paused:false,mode:null,start:null,elapsed:0,workDur:25,breakDur:5,phase:'work',note:'',taskId:'',pts:1,per:15};
 let toastTimer=null,tickInterval=null;
 
@@ -45,6 +45,10 @@ function id(){return Date.now().toString(36)+Math.random().toString(36).slice(2,
 function today(){return new Date().toISOString().slice(0,10)}
 function ptsToday(){return D.pointsHistory.filter(h=>h.date.slice(0,10)===today()&&h.type==='earned').reduce((s,h)=>s+h.points,0)}
 function elapsed(){if(T.paused)return T.elapsed;if(T.running)return T.elapsed+Math.floor((Date.now()-T.start)/1000);return 0}
+
+const CAT_COLORS={work:'#dbeafe',home:'#d1fae5',growth:'#fef3c7'};
+const CAT_LABELS={work:'💼 Work',home:'🏠 Home',growth:'🌱 Growth'};
+function catBg(cat){return CAT_COLORS[cat]||'var(--card-task)'}
 
 // Award points from timer, accumulating fractional remainders
 function awardTimerPts(exactPts){
@@ -207,7 +211,7 @@ function showSurpriseModal(){
     const max=parseInt(document.getElementById('surp-max')?.value);
     if(!Number.isInteger(max)||max<1)return;
     // Include time-based tasks (you can earn any amount by adjusting time) and flat tasks at or below max
-    const candidates=visibleTasks().filter(t=>t.timeBased||t.points<=max);
+    const candidates=visibleTasks().filter(t=>categoryFilter==='all'||t.category===categoryFilter).filter(t=>t.timeBased||t.points<=max);
     const res=document.getElementById('surp-result');
     if(candidates.length===0){res.innerHTML='<p style="color:var(--text-dim);font-style:italic;">No tasks available. Try a higher number!</p>';return}
     const pick=candidates[Math.floor(Math.random()*candidates.length)];
@@ -228,22 +232,23 @@ function tickRender(){const el=document.getElementById('tld'),pl=document.getEle
 
 function rHeader(){
   const g=D.settings.dailyGoal||0,e=ptsToday(),p=g>0?Math.min(100,Math.round(e/g*100)):0,sk=D.streak>1?`<div style="font-size:.75rem;color:var(--warning-dark);margin-top:4px;text-align:center">🔥 ${D.streak} day streak</div>`:'';
-  return `<header class="hdr"><div style="display:flex;justify-content:space-between;align-items:center"><h1 style="font-size:1.3rem;color:var(--accent-dark)">⚡ Tracker</h1><div style="display:flex;align-items:center;gap:8px"><span style="font-weight:bold">🪙 ${D.points}</span><button id="goal-btn" class="ibtn">🎯</button><button id="info-btn" class="ibtn">ℹ️</button><button id="set-btn" class="ibtn">⚙️</button></div></div>${g>0?`<div style="margin-top:8px;display:flex;align-items:center;gap:8px"><div class="pbar"><div class="pfill" style="width:${p}%;background:${p>=100?'var(--success)':'var(--accent)'}"></div></div><span style="font-size:.75rem;color:var(--text-dim)">${e}/${g}</span></div>${sk}`:''}</header>`}
+  return `<header class="hdr"><div style="display:flex;justify-content:space-between;align-items:center"><h1 style="font-size:1.3rem;color:var(--accent-dark)">⚡ Tracker</h1><div style="display:flex;align-items:center;gap:8px"><span style="font-weight:bold">✨ ${D.points}</span><button id="goal-btn" class="ibtn">🎯</button><button id="info-btn" class="ibtn">ℹ️</button><button id="set-btn" class="ibtn">⚙️</button></div></div>${g>0?`<div style="margin-top:8px;display:flex;align-items:center;gap:8px"><div class="pbar"><div class="pfill" style="width:${p}%;background:${p>=100?'var(--success)':'var(--accent)'}"></div></div><span style="font-size:.75rem;color:var(--text-dim)">${e}/${g}</span></div>${sk}`:''}</header>`}
 
 function rNav(){
-  const tabs=[{v:'tasks',i:'📋',l:'Tasks'},{v:'rewards',i:'🎁',l:'Rewards'},{v:'history',i:'📅',l:'History'},{v:'tools',i:'🧰',l:'Tools'}];
+  const tabs=[{v:'tasks',i:'🚀',l:'Tasks'},{v:'rewards',i:'🍭',l:'Rewards'},{v:'history',i:'🗓️',l:'History'},{v:'tools',i:'🧰',l:'Tools'}];
   return `<nav class="bnav">${tabs.map(t=>`<button class="nbtn ${view===t.v?'nact':''}" data-v="${t.v}"><span style="font-size:1.3rem">${t.i}</span><span>${t.l}</span></button>`).join('')}</nav>`}
 
 // ===== TASKS =====
 function rTasks(){
-  const vis=visibleTasks(),ot=vis.filter(t=>t.type==='one-time'),rc=vis.filter(t=>t.type==='recurring'),ev=vis.filter(t=>t.type==='evergreen'),sl=sleepingTasks();
-  return `<div class="vc">${rBucket('🎯 One-Time',ot)}${rBucket('🔄 Recurring',rc)}${sl.length?rSleep(sl):''}${rBucket('♾️ Evergreen',ev)}<div style="display:flex;gap:8px;margin-bottom:8px"><button id="show-af" class="abtn" style="flex:1">+ Add Task</button><button id="surprise-btn" class="btn bwar" style="flex-shrink:0;padding:14px 16px;border-radius:var(--radius);font-size:1rem">🎲 Surprise me</button></div><div id="afc"></div></div>`}
+  const vis=visibleTasks().filter(t=>categoryFilter==='all'||t.category===categoryFilter),ot=vis.filter(t=>t.type==='one-time'),rc=vis.filter(t=>t.type==='recurring'),ev=vis.filter(t=>t.type==='evergreen'),sl=sleepingTasks().filter(t=>categoryFilter==='all'||t.category===categoryFilter);
+  const fb=`<div style="display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap;"><button class="cat-btn ${categoryFilter==='all'?'cat-active':''}" data-cat="all" style="background:var(--card-neutral)">All</button><button class="cat-btn ${categoryFilter==='work'?'cat-active':''}" data-cat="work" style="background:#dbeafe">💼 Work</button><button class="cat-btn ${categoryFilter==='home'?'cat-active':''}" data-cat="home" style="background:#d1fae5">🏠 Home</button><button class="cat-btn ${categoryFilter==='growth'?'cat-active':''}" data-cat="growth" style="background:#fef3c7">🌱 Growth</button></div>`;
+  return `<div class="vc">${fb}${rBucket('🎯 One-Time',ot)}${rBucket('🔄 Recurring',rc)}${sl.length?rSleep(sl):''}${rBucket('♾️ Evergreen',ev)}<div style="display:flex;gap:8px;margin-bottom:8px"><button id="show-af" class="abtn" style="flex:1">+ Add Task</button><button id="surprise-btn" class="btn bwar" style="flex-shrink:0;padding:14px 16px;border-radius:var(--radius);font-size:1rem">🎲 Surprise me</button></div><div id="afc"></div></div>`}
 function rBucket(title,tasks){return `<div style="margin-bottom:18px"><h2 style="font-size:1rem;color:var(--accent-dark);margin-bottom:8px">${title}</h2>${tasks.length?tasks.map((t,i)=>rCard(t,i,tasks.length)).join(''):'<p style="color:var(--text-dim);font-size:.85rem;font-style:italic">Nothing here ✨</p>'}</div>`}
 function rCard(t,i,n){
   const isM=inlineMinId===t.id,pl=t.timeBased?`${t.ptsAmount}/${t.ptsPerMinutes}m`:`+${t.points}`;
-  return `<div class="tcard"><div style="display:flex;align-items:center;gap:10px"><button class="cbtn" data-id="${t.id}">✓</button><div style="flex:1;min-width:0;cursor:pointer" class="tdet" data-id="${t.id}"><div style="font-weight:600;font-size:.9rem">${t.name}</div>${t.type==='recurring'?`<div style="font-size:.7rem;color:var(--text-dim)">Every ${t.cadenceDays}d</div>`:''}${t.timeBased?'<div style="font-size:.7rem;color:var(--accent-dark)">⏱ time-based</div>':''}</div><span style="color:var(--warning-dark);font-weight:bold;font-size:.8rem">${pl}</span><div style="display:flex;flex-direction:column;gap:1px">${i>0?`<button class="mbtn" data-id="${t.id}" data-d="up">▲</button>`:'<div style="height:16px"></div>'}${i<n-1?`<button class="mbtn" data-id="${t.id}" data-d="down">▼</button>`:'<div style="height:16px"></div>'}</div></div>${isM?`<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);display:flex;gap:8px;align-items:center"><input id="imi" type="number" min="1" placeholder="Minutes" class="inf" style="flex:1;margin:0"><button id="ims" data-id="${t.id}" class="btn bsuc" style="padding:8px 14px">Submit</button><button id="imc" class="btn bmut" style="padding:8px 10px">✕</button></div>`:''}</div>`}
+  return `<div class="tcard" style="background:${catBg(t.category)}"><div style="display:flex;align-items:center;gap:10px"><button class="cbtn" data-id="${t.id}">✓</button><div style="flex:1;min-width:0;cursor:pointer" class="tdet" data-id="${t.id}"><div style="font-weight:600;font-size:.9rem">${t.name}</div>${t.type==='recurring'?`<div style="font-size:.7rem;color:var(--text-dim)">Every ${t.cadenceDays}d</div>`:''}${t.timeBased?'<div style="font-size:.7rem;color:var(--accent-dark)">⏱ time-based</div>':''}</div><span style="color:var(--warning-dark);font-weight:bold;font-size:.8rem">${pl}</span><div style="display:flex;flex-direction:column;gap:1px">${i>0?`<button class="mbtn" data-id="${t.id}" data-d="up">▲</button>`:'<div style="height:16px"></div>'}${i<n-1?`<button class="mbtn" data-id="${t.id}" data-d="down">▼</button>`:'<div style="height:16px"></div>'}</div></div>${isM?`<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);display:flex;gap:8px;align-items:center"><input id="imi" type="number" min="1" placeholder="Minutes" class="inf" style="flex:1;margin:0"><button id="ims" data-id="${t.id}" class="btn bsuc" style="padding:8px 14px">Submit</button><button id="imc" class="btn bmut" style="padding:8px 10px">✕</button></div>`:''}</div>`}
 function rSleep(tasks){return `<div style="margin-bottom:18px"><h3 style="font-size:.85rem;color:var(--text-dim);margin-bottom:6px">💤 Upcoming</h3>${tasks.map(t=>`<div class="slcard sldet" data-id="${t.id}" style="cursor:pointer"><span>${t.name}</span><span style="color:var(--accent-dark);font-weight:600">↻ ${t.left}d</span></div>`).join('')}</div>`}
-function rAddForm(){return `<div class="fcard" style="margin-top:12px"><h3 style="margin-bottom:12px;color:var(--accent-dark)">New Task</h3><input id="tfn" type="text" placeholder="Task name" class="inf"><select id="tft" class="inf"><option value="one-time">🎯 One-Time</option><option value="recurring">🔄 Recurring</option><option value="evergreen">♾️ Evergreen</option></select><div id="tfc" style="display:none"><input id="tfcd" type="number" min="1" placeholder="Cadence (days)" class="inf"></div><label class="chlbl"><input id="tftb" type="checkbox"> Time-based</label><div id="tffw"><input id="tfp" type="number" min="1" placeholder="Points" class="inf"></div><div id="tftw" style="display:none"><div style="display:flex;gap:6px;align-items:center;margin-bottom:8px"><input id="tfpa" type="number" min="1" class="inf" style="width:70px;margin:0;text-align:center"><span class="rl">pts per</span><input id="tfpp" type="number" min="1" class="inf" style="width:70px;margin:0;text-align:center"><span class="rl">min</span></div></div><div id="tfe" class="err"></div><button id="tfs" class="btn bpri" style="width:100%;opacity:.5" disabled>Add Task</button></div>`}
+function rAddForm(){return `<div class="fcard" style="margin-top:12px"><h3 style="margin-bottom:12px;color:var(--accent-dark)">New Task</h3><input id="tfn" type="text" placeholder="Task name" class="inf"><select id="tft" class="inf"><option value="one-time">🎯 One-Time</option><option value="recurring">🔄 Recurring</option><option value="evergreen">♾️ Evergreen</option></select><select id="tfcat" class="inf"><option value="work">💼 Work</option><option value="home">🏠 Home</option><option value="growth">🌱 Growth</option></select><div id="tfc" style="display:none"><input id="tfcd" type="number" min="1" placeholder="Cadence (days)" class="inf"></div><label class="chlbl"><input id="tftb" type="checkbox"> Time-based</label><div id="tffw"><input id="tfp" type="number" min="1" placeholder="Points" class="inf"></div><div id="tftw" style="display:none"><div style="display:flex;gap:6px;align-items:center;margin-bottom:8px"><input id="tfpa" type="number" min="1" class="inf" style="width:70px;margin:0;text-align:center"><span class="rl">pts per</span><input id="tfpp" type="number" min="1" class="inf" style="width:70px;margin:0;text-align:center"><span class="rl">min</span></div></div><div id="tfe" class="err"></div><button id="tfs" class="btn bpri" style="width:100%;opacity:.5" disabled>Add Task</button></div>`}
 
 // ===== REWARDS =====
 function rRewards(){
@@ -427,6 +432,7 @@ function bindAll(){
   document.getElementById('info-btn')?.addEventListener('click',showInfoModal);
   document.getElementById('set-btn')?.addEventListener('click',showSettings);
   document.getElementById('goal-btn')?.addEventListener('click',showGoalSettingModal);
+  document.querySelectorAll('.cat-btn').forEach(b=>b.addEventListener('click',()=>{categoryFilter=b.dataset.cat;render()}));
   // Tasks
   document.querySelectorAll('.cbtn').forEach(b=>b.addEventListener('click',e=>{e.stopPropagation();const t=D.tasks.find(x=>x.id===b.dataset.id);if(t&&t.timeBased){inlineMinId=t.id;render()}else completeTask(b.dataset.id)}));
   document.getElementById('ims')?.addEventListener('click',()=>{const m=parseInt(document.getElementById('imi')?.value);if(!m||m<1)return;completeTask(document.getElementById('ims').dataset.id,m)});
@@ -495,8 +501,8 @@ function bindAddForm(){
   document.getElementById('tftb')?.addEventListener('change',e=>{document.getElementById('tffw').style.display=e.target.checked?'none':'';document.getElementById('tftw').style.display=e.target.checked?'':'none';valTF()});
   ['tfn','tfp','tfpa','tfpp','tfcd'].forEach(x=>document.getElementById(x)?.addEventListener('input',valTF));
   document.getElementById('tfs')?.addEventListener('click',()=>{
-    const n=document.getElementById('tfn').value.trim(),ty=document.getElementById('tft').value,tb=document.getElementById('tftb').checked;
-    const task={id:id(),name:n,type:ty,timeBased:tb};
+    const n=document.getElementById('tfn').value.trim(),ty=document.getElementById('tft').value,tb=document.getElementById('tftb').checked,cat=document.getElementById('tfcat').value;
+    const task={id:id(),name:n,type:ty,timeBased:tb,category:cat};
     if(tb){task.ptsAmount=parseInt(document.getElementById('tfpa').value);task.ptsPerMinutes=parseInt(document.getElementById('tfpp').value);task.points=task.ptsAmount}
     else task.points=parseInt(document.getElementById('tfp').value);
     if(ty==='recurring')task.cadenceDays=parseInt(document.getElementById('tfcd').value);
@@ -626,6 +632,8 @@ window.addEventListener('pagehide',()=>{saveL();gistPush()});
 .cbtn:active{background:var(--success);color:#fff}
 .mbtn,.mrbtn{background:none;border:none;font-size:.7rem;cursor:pointer;padding:2px 4px;color:var(--text-dim)}
 .abtn{width:100%;padding:14px;border-radius:var(--radius);border:2px dashed var(--accent);background:transparent;color:var(--accent-dark);font-size:1rem;font-weight:600;cursor:pointer}
+.cat-btn{padding:6px 12px;border-radius:20px;border:2px solid transparent;font-size:.8rem;font-weight:500;cursor:pointer}
+.cat-active{border-color:var(--accent-dark)!important;font-weight:700}
 .pbar{flex:1;height:8px;background:var(--card-neutral);border-radius:4px;overflow:hidden}
 .pfill{height:100%;border-radius:4px;transition:width .3s}
 </style>
