@@ -6,12 +6,13 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <link rel="apple-touch-icon" sizes="180x180" href="appicon.png">
+<link rel="icon" type="image/png" href="appicon.png">
 <link rel="manifest" href="manifest.json">
 <title>Productivity Tracker</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 :root{--bg:#f9fafb;--surface:#fff;--card-task:#ede9fe;--card-reward:#dbeafe;--card-sleep:#f3e8ff;--card-neutral:#f3f4f6;--border:#e5e7eb;--accent:#a78bfa;--accent-dark:#7c3aed;--accent2:#7dd3fc;--success:#86efac;--success-dark:#22c55e;--warning:#fcd34d;--warning-dark:#f59e0b;--danger:#fca5a5;--danger-dark:#ef4444;--text:#1f2937;--text-dim:#6b7280;--radius:14px;--shadow:0 1px 4px rgba(0,0,0,0.05)}
-body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(--text);min-height:100vh;padding:16px;padding-top:max(16px,env(safe-area-inset-top));padding-bottom:100px;-webkit-tap-highlight-color:transparent}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(--text);min-height:100vh;padding:16px;padding-top:max(16px,env(safe-area-inset-top));padding-bottom:100px;-webkit-tap-highlight-color:transparent;overflow-y:scroll}
 </style>
 </head>
 <body>
@@ -21,10 +22,10 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-seri
 <div id="modal-container"></div>
 <script>
 // ===== DATA =====
-const APP_VERSION='1.8.1';
+const APP_VERSION='2.0.0';
 const DEFAULT_DATA={tasks:[],points:0,pointsHistory:[],rewards:[],techniques:[],metrics:[],settings:{gistId:'',token:'',dailyGoal:0},dailyGoalLog:{},streak:0,fractional:0};
 let D=JSON.parse(JSON.stringify(DEFAULT_DATA));
-let view='tasks',toolsView='menu',expandedTech=null,inlineMinId=null,categoryFilter='all';
+let view='tasks',toolsView='menu',expandedTech=null,inlineMinId=null,categoryFilter='all',recurSort='custom';
 let T={running:false,paused:false,mode:null,start:null,elapsed:0,workDur:25,breakDur:5,phase:'work',note:'',taskId:'',pts:1,per:15};
 let toastTimer=null,tickInterval=null;
 
@@ -42,7 +43,8 @@ function save(){saveL();debouncedPush()}
 
 // ===== UTILS =====
 function id(){return Date.now().toString(36)+Math.random().toString(36).slice(2,7)}
-function today(){return new Date().toISOString().slice(0,10)}
+function today(){return localISO().slice(0,10)}
+function localISO(){const d=new Date();return new Date(d.getTime()-d.getTimezoneOffset()*60000).toISOString()}
 function ptsToday(){return D.pointsHistory.filter(h=>h.date.slice(0,10)===today()&&h.type==='earned').reduce((s,h)=>s+h.points,0)}
 function elapsed(){if(T.paused)return T.elapsed;if(T.running)return T.elapsed+Math.floor((Date.now()-T.start)/1000);return 0}
 
@@ -57,30 +59,75 @@ function awardTimerPts(exactPts){
   D.fractional-=whole;
   return whole;
 }
-function visibleTasks(){const n=new Date();return D.tasks.filter(t=>{if(t.type==='one-time')return!t.completed;if(t.type==='recurring'){if(!t.lastCompleted)return true;return(n-new Date(t.lastCompleted))/864e5>=t.cadenceDays}return true})}
+function visibleTasks(){const n=new Date();return D.tasks.filter(t=>{if(t.archived)return false;if(t.type==='one-time')return!t.completed;if(t.type==='recurring'){if(!t.lastCompleted)return true;return(n-new Date(t.lastCompleted))/864e5>=t.cadenceDays}return true})}
 function sleepingTasks(){const n=new Date();return D.tasks.filter(t=>t.type==='recurring'&&t.lastCompleted&&(n-new Date(t.lastCompleted))/864e5<t.cadenceDays).map(t=>({...t,left:Math.ceil(t.cadenceDays-(new Date()-new Date(t.lastCompleted))/864e5)})).sort((a,b)=>a.left-b.left)}
 function checkGoal(){const t=today(),g=D.settings.dailyGoal;if(!g||g<=0)return;
-  // Check if bonus already earned today by looking at actual history
+  // Store what goal was set for today
+  if(!D.dailyGoalLog[t]||D.dailyGoalLog[t]===true)D.dailyGoalLog[t]=g;
   const alreadyEarned=D.pointsHistory.some(h=>h.date.slice(0,10)===t&&h.task==='🎯 Daily goal bonus');
   if(alreadyEarned)return;
-  if(ptsToday()>=g){const b=Math.floor(g*0.25);D.points+=b;D.pointsHistory.push({date:new Date().toISOString(),task:'🎯 Daily goal bonus',points:b,type:'earned'});D.dailyGoalLog[t]=true;updateStreak();saveL();debouncedPush();confetti();showGoalModal(g,b)}}
-function updateStreak(){let s=0,d=new Date();while(D.dailyGoalLog[d.toISOString().slice(0,10)]){s++;d.setDate(d.getDate()-1)}D.streak=s}
+  if(ptsForDay(t)>=g){const b=Math.floor(g*0.25);D.points+=b;D.pointsHistory.push({date:localISO(),task:'🎯 Daily goal bonus',points:b,type:'earned'});updateStreak();saveL();debouncedPush();confetti();showGoalModal(g,b)}}
+
+function checkGoalForDay(day){
+  const g=D.dailyGoalLog[day];if(!g||g===true)return;
+  const nonBonus=D.pointsHistory.filter(h=>h.date.slice(0,10)===day&&h.type==='earned'&&h.task!=='🎯 Daily goal bonus').reduce((s,h)=>s+h.points,0);
+  const bonusIdx=D.pointsHistory.findIndex(h=>h.date.slice(0,10)===day&&h.task==='🎯 Daily goal bonus');
+  if(nonBonus>=g&&bonusIdx<0){
+    const b=Math.floor(g*0.25);D.points+=b;D.pointsHistory.push({date:day+'T12:00:00.000Z',task:'🎯 Daily goal bonus',points:b,type:'earned'});updateStreak();saveL();debouncedPush();render();
+  } else if(nonBonus<g&&bonusIdx>=0){
+    D.points-=D.pointsHistory[bonusIdx].points;D.pointsHistory.splice(bonusIdx,1);updateStreak();saveL();debouncedPush();render();
+  }
+}
+
+function ptsForDay(day){return D.pointsHistory.filter(h=>h.date.slice(0,10)===day&&h.type==='earned'&&h.task!=='🎯 Daily goal bonus').reduce((s,h)=>s+h.points,0)}
+
+function updateStreak(){
+  // Calculate current and longest streak; days without a goal don't break or count
+  let current=0,longest=0,s=0,d=new Date();
+  // Go back up to 365 days
+  for(let i=0;i<365;i++){
+    const ds=d.toISOString().slice(0,10);
+    const g=D.dailyGoalLog[ds];
+    if(g&&g!==true){
+      // Had a goal this day
+      const earned=ptsForDay(ds);
+      if(earned>=g){s++;if(s>longest)longest=s}
+      else{if(current===0)current=s;s=0}
+    }
+    // No goal: skip (don't break streak)
+    d.setDate(d.getDate()-1);
+  }
+  if(current===0)current=s;
+  D.streak=current;D.longestStreak=Math.max(longest,current);
+}
 
 // ===== ACTIONS =====
-function completeTask(tid,mins){
+function completeTask(tid,mins,finished){
   const task=D.tasks.find(t=>t.id===tid);if(!task)return;
-  const now=new Date().toISOString(),prev=JSON.parse(JSON.stringify(task)),prevP=D.points;
-  if(task.type==='one-time'){task.completed=true;task.completedAt=now}
-  else if(task.type==='recurring'){task.lastCompleted=now}
+  const now=localISO(),prev=JSON.parse(JSON.stringify(task)),prevP=D.points;
+  // Only mark complete if not time-based, or if finished=true for time-based
+  const shouldComplete=!task.timeBased||(task.timeBased&&finished!==false);
+  if(shouldComplete){
+    if(task.type==='one-time'){task.completed=true;task.completedAt=now}
+    else if(task.type==='recurring'){task.lastCompleted=now}
+  }
   let pts=task.points||0;
   if(task.timeBased&&mins)pts=Math.floor(mins*task.ptsAmount/task.ptsPerMinutes);
   if(pts<0)pts=0;
-  D.points+=pts;
-  const h={date:now,task:task.name,taskId:task.id,points:pts,type:'earned'};
+  // Completion bonus: 10% of ALL points earned for this task since last completion
+  let bonus=0;
+  if(task.timeBased&&finished===true){
+    const prevEarned=D.pointsHistory.filter(h=>h.taskId===tid&&h.type==='earned'&&!h.task.includes('✅')).reduce((s,h)=>s+h.points,0);
+    bonus=Math.floor((prevEarned+pts)*0.1);
+  }
+  D.points+=pts+bonus;
+  const h={date:now,task:task.name+(bonus>0?' ✅':''),taskId:task.id,points:pts+bonus,type:'earned',bonus:bonus,category:task.category||'',taskType:task.type};
   if(mins)h.minutes=mins;
+  if(task.timeBased){h.rate=`${task.ptsAmount} points per ${task.ptsPerMinutes} minute${task.ptsPerMinutes>1?'s':''}`}
   const prevHistLen=D.pointsHistory.length;
   D.pointsHistory.push(h);
   inlineMinId=null;saveL();debouncedPush();confetti();checkGoal();render();
+  const bonusMsg=bonus>0?` (includes +${bonus} completion bonus!)`:'';
   showUndo(()=>{Object.assign(task,prev);D.points=prevP;D.pointsHistory.length=prevHistLen;saveL();debouncedPush();render()});
 }
 function deleteTask(tid){D.tasks=D.tasks.filter(t=>t.id!==tid);save();render()}
@@ -93,7 +140,7 @@ function moveTask(tid,dir){
 }
 function redeemReward(rid){
   const r=D.rewards.find(x=>x.id===rid);if(!r||D.points<r.cost)return;
-  D.points-=r.cost;D.pointsHistory.push({date:new Date().toISOString(),task:'🎁 '+r.name,points:-r.cost,type:'spent'});save();render();
+  D.points-=r.cost;D.pointsHistory.push({date:localISO(),task:'🎁 '+r.name,points:-r.cost,type:'spent'});save();render();
 }
 function moveReward(rid,dir){
   const i=D.rewards.findIndex(r=>r.id===rid),si=dir==='up'?i-1:i+1;
@@ -102,15 +149,10 @@ function moveReward(rid,dir){
 }
 function deleteHistEntry(idx){
   const e=D.pointsHistory[idx];if(!e)return;
+  const day=e.date.slice(0,10);
   if(e.type==='earned')D.points-=e.points;else D.points+=Math.abs(e.points);
-  // If deleting a daily goal bonus, allow re-earning it
-  if(e.task==='🎯 Daily goal bonus'){
-    const day=e.date.slice(0,10);
-    delete D.dailyGoalLog[day];
-    updateStreak();
-  }
   D.pointsHistory.splice(idx,1);
-  // If this was a recurring task completion, check if we need to reset lastCompleted
+  // If this was a recurring or one-time task completion, reset state
   if(e.taskId){
     const task=D.tasks.find(t=>t.id===e.taskId);
     if(task&&task.type==='recurring'){
@@ -118,25 +160,19 @@ function deleteHistEntry(idx){
       if(remaining.length>0){task.lastCompleted=remaining[remaining.length-1].date}
       else{task.lastCompleted=null}
     }
-  }
-  saveL();debouncedPush();render();
-  // Check if daily bonus should be revoked (non-bonus points now below goal)
-  const day=e.date.slice(0,10);
-  const g=D.settings.dailyGoal;
-  if(g>0){
-    const nonBonusPts=D.pointsHistory.filter(h=>h.date.slice(0,10)===day&&h.type==='earned'&&h.task!=='🎯 Daily goal bonus').reduce((s,h)=>s+h.points,0);
-    const bonusIdx=D.pointsHistory.findIndex(h=>h.date.slice(0,10)===day&&h.task==='🎯 Daily goal bonus');
-    if(nonBonusPts<g&&bonusIdx>=0){
-      const bonus=D.pointsHistory[bonusIdx];
-      D.points-=bonus.points;
-      D.pointsHistory.splice(bonusIdx,1);
-      delete D.dailyGoalLog[day];
-      updateStreak();
-      saveL();debouncedPush();render();
+    if(task&&task.type==='one-time'&&task.completed){
+      // If a time-based task, only reset if no ✅ entry remains; otherwise reset if no entries remain
+      if(task.timeBased){
+        const hasCompletion=D.pointsHistory.some(h=>h.taskId===e.taskId&&h.type==='earned'&&h.task.includes('✅'));
+        if(!hasCompletion){task.completed=false;task.completedAt=null}
+      } else {
+        const remaining=D.pointsHistory.filter(h=>h.taskId===e.taskId&&h.type==='earned');
+        if(remaining.length===0){task.completed=false;task.completedAt=null}
+      }
     }
   }
-  // Re-check if goal should be re-awarded (with slight delay so render completes)
-  setTimeout(()=>checkGoal(),100);
+  saveL();debouncedPush();render();
+  setTimeout(()=>checkGoalForDay(day),100);
 }
 function editHistEntry(idx,newPts){
   const e=D.pointsHistory[idx];if(!e)return;
@@ -164,15 +200,36 @@ function confirmAction(msg,onYes){
 }
 
 function showInfoModal(){
-  modal(`<h2 style="margin-bottom:12px;color:var(--accent-dark);">📖 Points Guide</h2>
-    <h3 style="font-size:.9rem;margin:10px 0 4px;">Task Points</h3>
-    <table style="width:100%;font-size:.85rem;"><tr><td><b>1–3</b></td><td>Quick (water, make bed)</td></tr><tr><td><b>5–10</b></td><td>Medium (organize, workout)</td></tr><tr><td><b>15–25</b></td><td>Significant (deep clean, study)</td></tr><tr><td><b>50+</b></td><td>Major (finish project)</td></tr><tr><td><b>Timer</b></td><td>~1pt per 10–15 min</td></tr></table>
-    <h3 style="font-size:.9rem;margin:14px 0 4px;">Reward Costs</h3>
-    <table style="width:100%;font-size:.85rem;"><tr><td><b>25–50</b></td><td>Small (coffee)</td></tr><tr><td><b>100–200</b></td><td>Medium (takeout, book)</td></tr><tr><td><b>300–500</b></td><td>Big (gadget)</td></tr><tr><td><b>1000+</b></td><td>Major (trip)</td></tr></table>
-    <button data-close class="btn btn-primary" style="margin-top:16px;width:100%;">Got it</button>`);
+  modal(`<h2 style="color:var(--accent-dark);margin-bottom:12px">🧮 Points Calculator</h2>
+    <div style="margin-bottom:16px;">
+      <h3 style="font-size:.9rem;margin-bottom:8px;">Task Points</h3>
+      <p style="font-size:.8rem;color:var(--text-dim);margin-bottom:8px">Formula: (minutes ÷ 15) × annoyance + importance</p>
+      <label class="rl">Minutes</label><input id="calc-min" type="number" min="1" placeholder="How long?" class="inf">
+      <label class="rl">Annoyance</label><select id="calc-ann" class="inf"><option value="1">1 – Breeze</option><option value="2">2 – Mild</option><option value="3" selected>3 – Moderate</option><option value="4">4 – Draining</option><option value="5">5 – Agonizing</option></select>
+      <label class="rl">Importance</label><select id="calc-imp" class="inf"><option value="1">1 – Nice-to-have</option><option value="2">2 – Helpful</option><option value="3" selected>3 – Important</option><option value="4">4 – Urgent</option><option value="5">5 – Critical</option></select>
+      <div id="calc-result" style="text-align:center;font-size:1.2rem;font-weight:bold;color:var(--accent-dark);margin:8px 0;"></div>
+    </div>
+    <hr style="border:none;border-top:1px solid var(--border);margin:16px 0;">
+    <div>
+      <h3 style="font-size:.9rem;margin-bottom:8px;">Reward Cost</h3>
+      <p style="font-size:.8rem;color:var(--text-dim);margin-bottom:8px">1 day = 4 hours of focused work on a moderately annoying task (48 pts)</p>
+      <div style="display:flex;gap:6px;align-items:center;margin-bottom:8px;">
+        <input id="rcalc-num" type="number" min="1" placeholder="#" class="inf" style="width:70px;margin:0;text-align:center">
+        <select id="rcalc-unit" class="inf" style="margin:0;flex:1"><option value="1">days</option><option value="7">weeks</option><option value="30">months</option></select>
+      </div>
+      <div id="rcalc-result" style="text-align:center;font-size:1.2rem;font-weight:bold;color:var(--accent-dark);margin:8px 0;"></div>
+    </div>
+    <button data-close class="btn bmut" style="margin-top:16px;width:100%;">Close</button>`);
+  function calcTask(){const m=parseInt(document.getElementById('calc-min')?.value),a=parseInt(document.getElementById('calc-ann')?.value),i=parseInt(document.getElementById('calc-imp')?.value);if(!m||!a||!i)return;const pts=Math.round((m/15)*a+i);document.getElementById('calc-result').textContent=pts+' points'}
+  function calcReward(){const n=parseInt(document.getElementById('rcalc-num')?.value),u=parseInt(document.getElementById('rcalc-unit')?.value);if(!n||!u)return;const cost=n*u*48;document.getElementById('rcalc-result').textContent=cost+' points'}
+  ['calc-min','calc-ann','calc-imp'].forEach(x=>document.getElementById(x)?.addEventListener('input',calcTask));
+  ['calc-min','calc-ann','calc-imp'].forEach(x=>document.getElementById(x)?.addEventListener('change',calcTask));
+  ['rcalc-num','rcalc-unit'].forEach(x=>document.getElementById(x)?.addEventListener('input',calcReward));
+  ['rcalc-num','rcalc-unit'].forEach(x=>document.getElementById(x)?.addEventListener('change',calcReward));
 }
 
 function showCongratsModal(note,totalSecs,pts){
+  confetti();
   const mins=Math.floor(totalSecs/60),secs=totalSecs%60;
   const timeStr=mins>0?`${mins} minute${mins!==1?'s':''}${secs>0?' '+secs+' second'+(secs!==1?'s':''):''}`:`${secs} second${secs!==1?'s':''}`;
   modal(`<div style="text-align:center;">
@@ -232,7 +289,7 @@ function tickRender(){const el=document.getElementById('tld'),pl=document.getEle
 
 function rHeader(){
   const g=D.settings.dailyGoal||0,e=ptsToday(),p=g>0?Math.min(100,Math.round(e/g*100)):0,sk=D.streak>1?`<div style="font-size:.75rem;color:var(--warning-dark);margin-top:4px;text-align:center">🔥 ${D.streak} day streak</div>`:'';
-  return `<header class="hdr"><div style="display:flex;justify-content:space-between;align-items:center"><h1 style="font-size:1.3rem;color:var(--accent-dark)">⚡ Tracker</h1><div style="display:flex;align-items:center;gap:8px"><span style="font-weight:bold">✨ ${D.points}</span><button id="goal-btn" class="ibtn">🎯</button><button id="info-btn" class="ibtn">ℹ️</button><button id="set-btn" class="ibtn">⚙️</button></div></div>${g>0?`<div style="margin-top:8px;display:flex;align-items:center;gap:8px"><div class="pbar"><div class="pfill" style="width:${p}%;background:${p>=100?'var(--success)':'var(--accent)'}"></div></div><span style="font-size:.75rem;color:var(--text-dim)">${e}/${g}</span></div>${sk}`:''}</header>`}
+  return `<header class="hdr"><div style="display:flex;justify-content:space-between;align-items:center"><h1 style="font-size:1.3rem;color:var(--accent-dark)">⚡ Tracker</h1><div style="display:flex;align-items:center;gap:8px"><span style="font-weight:bold">✨ ${D.points}</span><button id="goal-btn" class="ibtn">🎯</button><button id="info-btn" class="ibtn">🧮</button><button id="set-btn" class="ibtn">⚙️</button></div></div>${g>0?`<div style="margin-top:8px;display:flex;align-items:center;gap:8px"><div class="pbar"><div class="pfill" style="width:${p}%;background:${p>=100?'var(--success)':'var(--accent)'}"></div></div><span style="font-size:.75rem;color:var(--text-dim)">${e}/${g}</span></div>${sk}`:''}</header>`}
 
 function rNav(){
   const tabs=[{v:'tasks',i:'🚀',l:'Tasks'},{v:'rewards',i:'🍭',l:'Rewards'},{v:'history',i:'🗓️',l:'History'},{v:'tools',i:'🧰',l:'Tools'}];
@@ -240,13 +297,35 @@ function rNav(){
 
 // ===== TASKS =====
 function rTasks(){
-  const vis=visibleTasks().filter(t=>categoryFilter==='all'||t.category===categoryFilter),ot=vis.filter(t=>t.type==='one-time'),rc=vis.filter(t=>t.type==='recurring'),ev=vis.filter(t=>t.type==='evergreen'),sl=sleepingTasks().filter(t=>categoryFilter==='all'||t.category===categoryFilter);
-  const fb=`<div style="display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap;"><button class="cat-btn ${categoryFilter==='all'?'cat-active':''}" data-cat="all" style="background:var(--card-neutral)">All</button><button class="cat-btn ${categoryFilter==='work'?'cat-active':''}" data-cat="work" style="background:#dbeafe">💼 Work</button><button class="cat-btn ${categoryFilter==='home'?'cat-active':''}" data-cat="home" style="background:#d1fae5">🏠 Home</button><button class="cat-btn ${categoryFilter==='growth'?'cat-active':''}" data-cat="growth" style="background:#fef3c7">🌱 Growth</button></div>`;
-  return `<div class="vc">${fb}<div style="display:flex;gap:8px;margin-bottom:14px"><button id="show-af" class="abtn" style="flex:1">+ Add Task</button><button id="surprise-btn" class="btn bwar" style="flex-shrink:0;padding:14px 16px;border-radius:var(--radius);font-size:1rem">🎲 Surprise me</button></div><div id="afc"></div>${rBucket('🎯 One-Time',ot)}${rBucket('🔄 Recurring',rc)}${sl.length?rSleep(sl):''}${rBucket('♾️ Evergreen',ev)}</div>`}
-function rBucket(title,tasks){return `<div style="margin-bottom:18px"><h2 style="font-size:1rem;color:var(--accent-dark);margin-bottom:8px">${title}</h2>${tasks.length?tasks.map((t,i)=>rCard(t,i,tasks.length)).join(''):'<p style="color:var(--text-dim);font-size:.85rem;font-style:italic">Nothing here ✨</p>'}</div>`}
+  let content='';
+  if(categoryFilter==='archived'){
+    // Show archived tasks only
+    const arch=D.tasks.filter(t=>t.archived);
+    const archCards=arch.length?arch.map((t,i)=>rCard(t,i,arch.length)).join(''):'<p style="color:var(--text-dim);font-size:.85rem;font-style:italic">No archived tasks.</p>';
+    content=`<div style="margin-bottom:18px"><h2 style="font-size:1rem;color:var(--text-dim);margin-bottom:8px">📦 Archived</h2>${archCards}</div>`;
+  } else {
+    const vis=visibleTasks().filter(t=>!t.archived&&(categoryFilter==='all'||t.category===categoryFilter)),ot=vis.filter(t=>t.type==='one-time'&&!t.pinned);
+    let rc=vis.filter(t=>t.type==='recurring'&&!t.pinned);
+    if(recurSort==='due'){rc.sort((a,b)=>{const aOver=(a.lastCompleted?(new Date()-new Date(a.lastCompleted))/864e5-a.cadenceDays:999);const bOver=(b.lastCompleted?(new Date()-new Date(b.lastCompleted))/864e5-b.cadenceDays:999);return bOver-aOver})}
+    const ev=vis.filter(t=>t.type==='evergreen'&&!t.pinned),sl=sleepingTasks().filter(t=>!t.archived&&!t.pinned&&(categoryFilter==='all'||t.category===categoryFilter));
+    const pinned=vis.filter(t=>t.pinned);
+    const pinnedSection=pinned.length?`<div style="margin-bottom:18px"><h2 style="font-size:1rem;color:var(--accent-dark);margin-bottom:8px">📌 Pinned</h2>${pinned.map((t,i)=>rCard(t,i,pinned.length)).join('')}</div>`:'';
+    content=`<div style="display:flex;gap:8px;margin-bottom:14px"><button id="show-af" class="abtn" style="flex:1">+ Add Task</button><button id="quick-log-btn" class="btn bmut" style="padding:14px 12px;border-radius:var(--radius);font-size:.85rem">⚡ Quick Log</button><button id="surprise-btn" class="btn bwar" style="flex-shrink:0;padding:14px 16px;border-radius:var(--radius);font-size:1rem">🎲</button></div><div id="afc"></div><div id="qlfc"></div>${pinnedSection}${rBucket('🎯 One-Time',ot)}${rBucket('🔄 Recurring',rc,true)}${sl.length?rSleep(sl):''}${rBucket('♾️ Evergreen',ev)}`;
+  }
+  const fb=`<div style="display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap;"><button class="cat-btn ${categoryFilter==='all'?'cat-active':''}" data-cat="all" style="background:var(--card-neutral)">All</button><button class="cat-btn ${categoryFilter==='work'?'cat-active':''}" data-cat="work" style="background:#dbeafe">💼 Work</button><button class="cat-btn ${categoryFilter==='home'?'cat-active':''}" data-cat="home" style="background:#d1fae5">🏠 Home</button><button class="cat-btn ${categoryFilter==='growth'?'cat-active':''}" data-cat="growth" style="background:#fef3c7">🌱 Growth</button><button class="cat-btn ${categoryFilter==='archived'?'cat-active':''}" data-cat="archived" style="background:#e5e7eb">📦 Archived</button></div>`;
+  return `<div class="vc">${fb}${content}</div>`}
+function rBucket(title,tasks,sortable){
+  const sortBtn=sortable?`<button id="rsort" class="ibtn" style="font-size:.75rem;margin-left:6px">${recurSort==='custom'?'↕️ by due':'↕️ custom'}</button>`:'';
+  return `<div style="margin-bottom:18px"><h2 style="font-size:1rem;color:var(--accent-dark);margin-bottom:8px;display:inline">${title}</h2>${sortBtn}${tasks.length?'<div style="margin-top:8px">'+tasks.map((t,i)=>rCard(t,i,tasks.length)).join('')+'</div>':'<p style="color:var(--text-dim);font-size:.85rem;font-style:italic;margin-top:8px">Nothing here ✨</p>'}</div>`}
 function rCard(t,i,n){
   const isM=inlineMinId===t.id,pl=t.timeBased?`${t.ptsAmount}/${t.ptsPerMinutes}m`:`+${t.points}`;
-  return `<div class="tcard" style="background:${catBg(t.category)}"><div style="display:flex;align-items:center;gap:10px"><button class="cbtn" data-id="${t.id}">✓</button><div style="flex:1;min-width:0;cursor:pointer" class="tdet" data-id="${t.id}"><div style="font-weight:600;font-size:.9rem">${t.name}</div>${t.type==='recurring'?`<div style="font-size:.7rem;color:var(--text-dim)">Every ${t.cadenceDays}d</div>`:''}${t.timeBased?'<div style="font-size:.7rem;color:var(--accent-dark)">⏱ time-based</div>':''}</div><span style="color:var(--warning-dark);font-weight:bold;font-size:.8rem">${pl}</span><div style="display:flex;flex-direction:column;gap:1px">${i>0?`<button class="mbtn" data-id="${t.id}" data-d="up">▲</button>`:'<div style="height:16px"></div>'}${i<n-1?`<button class="mbtn" data-id="${t.id}" data-d="down">▼</button>`:'<div style="height:16px"></div>'}</div></div>${isM?`<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);display:flex;gap:8px;align-items:center"><input id="imi" type="number" min="1" placeholder="Minutes" class="inf" style="flex:1;margin:0"><button id="ims" data-id="${t.id}" class="btn bsuc" style="padding:8px 14px">Submit</button><button id="imc" class="btn bmut" style="padding:8px 10px">✕</button></div>`:''}</div>`}
+  // Task aging for one-time tasks
+  let ageBadge='';
+  if(t.type==='one-time'&&t.createdAt){const days=Math.floor((new Date()-new Date(t.createdAt))/864e5);if(days>=7)ageBadge=`<span style="font-size:.65rem;color:var(--warning-dark);margin-left:4px">⏰ ${days}d</span>`}
+  // Time invested for time-based incomplete tasks
+  let investedBadge='';
+  if(t.timeBased&&!(t.type==='one-time'&&t.completed)){const totalMins=D.pointsHistory.filter(h=>h.taskId===t.id&&h.type==='earned'&&!h.task.includes('✅')).reduce((s,h)=>s+(h.minutes||0),0);if(totalMins>0){const ih=Math.floor(totalMins/60),im=totalMins%60;investedBadge=` · ${ih?ih+'h ':''}${im}m invested`}}
+  return `<div class="tcard" style="background:${catBg(t.category)}"><div style="display:flex;align-items:center;gap:10px"><button class="cbtn" data-id="${t.id}">✓</button><div style="flex:1;min-width:0;cursor:pointer" class="tdet" data-id="${t.id}"><div style="font-weight:600;font-size:.9rem">${t.name}${ageBadge}</div>${t.type==='recurring'?`<div style="font-size:.7rem;color:var(--text-dim)">Every ${t.cadenceDays}d</div>`:''}${t.timeBased?`<div style="font-size:.7rem;color:var(--accent-dark)">⏱ time-based${investedBadge}</div>`:''}</div><span style="color:var(--warning-dark);font-weight:bold;font-size:.8rem">${pl}</span><div style="display:flex;flex-direction:column;gap:1px">${i>0?`<button class="mbtn" data-id="${t.id}" data-d="up">▲</button>`:'<div style="height:16px"></div>'}${i<n-1?`<button class="mbtn" data-id="${t.id}" data-d="down">▼</button>`:'<div style="height:16px"></div>'}</div></div>${isM?`<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);"><div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><input id="imi-h" type="number" min="0" placeholder="" class="inf" style="width:60px;margin:0;text-align:center"><span class="rl">hours</span><input id="imi-m" type="number" min="0" max="59" placeholder="" class="inf" style="width:60px;margin:0;text-align:center"><span class="rl">minutes</span></div><div id="imi-preview" style="font-size:.8rem;color:var(--accent-dark);margin:6px 0;"></div><div style="display:flex;gap:6px;flex-wrap:wrap">${t.type==='evergreen'?`<button id="ims" data-id="${t.id}" class="btn bsuc" style="padding:8px 12px;font-size:.8rem">Submit</button>`:`<button id="ims-work" data-id="${t.id}" class="btn bmut" style="padding:8px 10px;font-size:.8rem">Worked on it</button><button id="ims-done" data-id="${t.id}" class="btn bsuc" style="padding:8px 10px;font-size:.8rem">Finished! 🎉</button>`}<button id="imc" class="btn bmut" style="padding:8px 10px">✕</button></div></div>`:''}</div>`}
 function rSleep(tasks){return `<div style="margin-bottom:18px"><h3 style="font-size:.85rem;color:var(--text-dim);margin-bottom:6px">💤 Upcoming</h3>${tasks.map(t=>`<div class="slcard sldet" data-id="${t.id}" style="cursor:pointer"><span>${t.name}</span><span style="color:var(--accent-dark);font-weight:600">↻ ${t.left}d</span></div>`).join('')}</div>`}
 function rAddForm(){return `<div class="fcard" style="margin-top:12px"><h3 style="margin-bottom:12px;color:var(--accent-dark)">New Task</h3><input id="tfn" type="text" placeholder="Task name" class="inf"><select id="tft" class="inf"><option value="one-time">🎯 One-Time</option><option value="recurring">🔄 Recurring</option><option value="evergreen">♾️ Evergreen</option></select><select id="tfcat" class="inf"><option value="work">💼 Work</option><option value="home">🏠 Home</option><option value="growth">🌱 Growth</option></select><div id="tfc" style="display:none"><input id="tfcd" type="number" min="1" placeholder="Cadence (days)" class="inf"></div><label class="chlbl"><input id="tftb" type="checkbox"> Time-based</label><div id="tffw"><input id="tfp" type="number" min="1" placeholder="Points" class="inf"></div><div id="tftw" style="display:none"><div style="display:flex;gap:6px;align-items:center;margin-bottom:8px"><input id="tfpa" type="number" min="1" class="inf" style="width:70px;margin:0;text-align:center"><span class="rl">pts per</span><input id="tfpp" type="number" min="1" class="inf" style="width:70px;margin:0;text-align:center"><span class="rl">min</span></div></div><div id="tfe" class="err"></div><button id="tfs" class="btn bpri" style="width:100%;opacity:.5" disabled>Add Task</button></div>`}
 
@@ -264,18 +343,32 @@ function rHistory(){
   for(let d=1;d<=dim;d++){
     const ds=`${hY}-${String(hM+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
     const ents=D.pointsHistory.filter(h=>h.date.slice(0,10)===ds);
-    const earned=ents.filter(h=>h.type==='earned').reduce((s,h)=>s+h.points,0);
+    const earned=ptsForDay(ds);
+    const dayGoal=D.dailyGoalLog[ds];
+    const hasGoal=dayGoal&&dayGoal!==true;
+    const metGoal=hasGoal&&earned>=dayGoal;
     const sel=selDay===ds,td=ds===today(),has=ents.length>0;
-    let cls='cc';if(sel)cls+=' csel';else if(has)cls+=' cact';if(td)cls+=' ctd';
-    cells+=`<div class="${cls}" data-d="${ds}"><span class="cn">${d}</span>${has?`<span class="cdot${sel?' cdotw':''}">${earned||''}</span>`:''}</div>`}
+    let cls='cc';if(sel)cls+=' csel';else if(metGoal)cls+=' cgoal';else if(has)cls+=' cact';if(td)cls+=' ctd';
+    const dotText=hasGoal?`${earned}/${dayGoal}`:(has?`${earned}`:'');
+    cells+=`<div class="${cls}" data-d="${ds}"><span class="cn">${d}</span>${dotText?`<span class="cdot${sel?' cdotw':''}">${dotText}</span>`:''}</div>`}
 
   let detail='';
   if(selDay){
     const ents=D.pointsHistory.filter(h=>h.date.slice(0,10)===selDay);
-    if(ents.length){detail=ents.map(e=>{const time=new Date(e.date).toLocaleTimeString('default',{hour:'numeric',minute:'2-digit'});const idx=D.pointsHistory.indexOf(e);return `<div class="hent"><div style="flex:1"><div style="font-size:.85rem;font-weight:500">${e.task}</div><div style="font-size:.7rem;color:var(--text-dim)">${time}${e.minutes?' · '+e.minutes+'m':''}</div></div><span class="hpts ${e.type==='earned'?'hpe':'hps'}">${e.type==='earned'?'+':''}${e.points}</span><button class="hedit ibtn" data-idx="${idx}">✏️</button><button class="hdel ibtn" data-idx="${idx}">🗑️</button></div>`}).join('')}
+    if(ents.length){detail=ents.map(e=>{
+        const timeParts=e.date.slice(11,16);const hr=parseInt(timeParts.split(':')[0]),min=timeParts.split(':')[1];
+        const ampm=hr>=12?'PM':'AM';const hr12=hr%12||12;
+        const time=`${hr12}:${min} ${ampm}`;
+        const idx=D.pointsHistory.indexOf(e);
+        let durInfo='';
+        if(e.seconds!=null){const h=Math.floor(e.seconds/3600),m=Math.floor((e.seconds%3600)/60),s=e.seconds%60;let dur='';if(h>0)dur+=h+' hour'+(h>1?'s':'');if(m>0)dur+=(dur?' and ':'')+m+' minute'+(m>1?'s':'');if(!dur)dur=s+' second'+(s!==1?'s':'');durInfo=` · ${dur}`}
+        else if(e.minutes!=null){const h=Math.floor(e.minutes/60),m=e.minutes%60;let dur='';if(h>0)dur+=h+' hour'+(h>1?'s':'');if(m>0)dur+=(dur?' and ':'')+m+' minute'+(m>1?'s':'');if(!dur)dur='0 minutes';durInfo=` · ${dur}`}
+        return `<div class="hent hent-click" data-idx="${idx}"><div style="flex:1"><div style="font-size:.85rem;font-weight:500">${e.task}</div><div style="font-size:.7rem;color:var(--text-dim)">${time}${durInfo}</div></div><span class="hpts ${e.type==='earned'?'hpe':'hps'}">${e.type==='earned'?'+':''}${e.points}</span><button class="hedit ibtn" data-idx="${idx}">✏️</button><button class="hdel ibtn" data-idx="${idx}">🗑️</button></div>`}).join('')}
     else detail='<p style="color:var(--text-dim);font-style:italic;font-size:.85rem">No activity.</p>'}
 
-  return `<div class="vc"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px"><button class="hnav ibtn" data-d="prev">◀</button><h2 style="font-size:1rem;color:var(--accent-dark)">${mn}</h2><button class="hnav ibtn" data-d="next">▶</button></div><div class="calbox"><div class="cgrid">${['S','M','T','W','T','F','S'].map(x=>`<div class="ch">${x}</div>`).join('')}${cells}</div></div>${selDay?`<div class="fcard" style="margin-top:14px"><h3 style="font-size:.9rem;margin-bottom:10px">${new Date(selDay+'T12:00:00').toLocaleDateString('default',{weekday:'long',month:'short',day:'numeric'})}</h3>${detail}</div>`:''}</div>`}
+  const streakInfo=`<div style="display:flex;justify-content:center;gap:16px;margin-bottom:8px;font-size:.85rem;"><span>🔥 Current: <b>${D.streak||0}</b></span><span>🏆 Longest: <b>${D.longestStreak||0}</b></span></div><div style="text-align:center;margin-bottom:12px"><button id="show-recap" class="btn bmut" style="font-size:.8rem;padding:6px 12px">📊 Weekly Recap</button></div>`;
+
+  return `<div class="vc">${streakInfo}<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px"><button class="hnav ibtn" data-d="prev">◀</button><h2 style="font-size:1rem;color:var(--accent-dark)">${mn}</h2><button class="hnav ibtn" data-d="next">▶</button></div><div class="calbox"><div class="cgrid">${['S','M','T','W','T','F','S'].map(x=>`<div class="ch">${x}</div>`).join('')}${cells}</div></div>${selDay?`<div class="fcard" style="margin-top:14px"><h3 style="font-size:.9rem;margin-bottom:10px">${new Date(selDay+'T12:00:00').toLocaleDateString('default',{weekday:'long',month:'short',day:'numeric'})}</h3>${detail}</div>`:''}</div>`}
 
 // ===== TOOLS =====
 function rTools(){if(toolsView==='menu')return rToolsMenu();if(toolsView==='sw')return rSW();if(toolsView==='pm')return rPM();if(toolsView==='tech')return rTech();if(toolsView==='metrics')return rMetrics();return rToolsMenu()}
@@ -302,15 +395,18 @@ function rPM(){
 function rTech(){
   const sorted=[...D.techniques].sort((a,b)=>{const ae=a.entries.length,be=b.entries.length;const ap=ae>0?a.entries.filter(e=>e.thumbsUp).length/ae:-1;const bp=be>0?b.entries.filter(e=>e.thumbsUp).length/be:-1;if(bp!==ap)return bp-ap;return be-ae});
   const cards=sorted.map(t=>{const tot=t.entries.length,ups=t.entries.filter(e=>e.thumbsUp).length,pct=tot>0?Math.round(ups/tot*100):0;const exp=expandedTech===t.id;
-    return `<div class="fcard" style="margin-bottom:10px"><div style="display:flex;justify-content:space-between;align-items:center;cursor:pointer" class="ttog" data-id="${t.id}"><b>${t.name}</b><div style="display:flex;align-items:center;gap:8px"><span style="font-size:.8rem;color:var(--text-dim)">${tot} uses</span><span style="font-weight:bold;color:${pct>=60?'var(--success-dark)':pct>=40?'var(--warning-dark)':'var(--danger-dark)'}">${tot>0?pct+'%':'—'}</span></div></div>${exp?`<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border)">${t.entries.map(e=>`<div style="display:flex;justify-content:space-between;padding:4px 0;font-size:.8rem"><span>${e.thumbsUp?'👍':'👎'} ${e.note||'(no note)'}</span><span style="color:var(--text-dim)">${new Date(e.date).toLocaleDateString()}</span></div>`).join('')}<div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap"><input class="tni inf" data-id="${t.id}" type="text" placeholder="Note" style="flex:1;min-width:100px;margin:0"><button class="tlog btn bsuc" data-id="${t.id}" data-u="1" style="padding:8px 12px">👍</button><button class="tlog btn bdan" data-id="${t.id}" data-u="0" style="padding:8px 12px">👎</button></div><button class="tdelt" data-id="${t.id}" style="margin-top:8px;background:none;border:none;color:var(--danger-dark);font-size:.8rem;cursor:pointer">Delete technique</button></div>`:''}</div>`}).join('');
+    return `<div class="fcard" style="margin-bottom:10px"><div style="display:flex;justify-content:space-between;align-items:center;cursor:pointer" class="ttog" data-id="${t.id}"><b>${t.name}</b><div style="display:flex;align-items:center;gap:8px"><span style="font-size:.8rem;color:var(--text-dim)">${tot} uses</span><span style="font-weight:bold;color:${pct>=60?'var(--success-dark)':pct>=40?'var(--warning-dark)':'var(--danger-dark)'}">${tot>0?pct+'%':'—'}</span></div></div>${exp?`<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border)">${t.entries.map((e,ei)=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;font-size:.8rem"><span>${e.thumbsUp?'👍':'👎'} ${e.note||'(no note)'}</span><span style="display:flex;align-items:center;gap:4px"><span style="color:var(--text-dim)">${new Date(e.date).toLocaleDateString()}</span><button class="tdel-entry ibtn" data-tid="${t.id}" data-ei="${ei}" style="font-size:.7rem">✕</button></span></div>`).join('')}<div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap"><input class="tni inf" data-id="${t.id}" type="text" placeholder="Note" style="flex:1;min-width:100px;margin:0"><button class="tlog btn bsuc" data-id="${t.id}" data-u="1" style="padding:8px 12px">👍</button><button class="tlog btn bdan" data-id="${t.id}" data-u="0" style="padding:8px 12px">👎</button></div><button class="tdelt" data-id="${t.id}" style="margin-top:8px;background:none;border:none;color:var(--danger-dark);font-size:.8rem;cursor:pointer">Delete technique</button></div>`:''}</div>`}).join('');
   return `<div class="vc"><button class="tback">← Back</button><h2 style="font-size:1.1rem;color:var(--accent-dark);margin-bottom:12px">🧠 Techniques</h2>${cards||'<p style="color:var(--text-dim);font-style:italic">No techniques yet.</p>'}<div style="display:flex;gap:8px;margin-top:12px"><input id="tnn" type="text" placeholder="New technique" class="inf" style="flex:1;margin:0"><button id="tna" class="btn bpri" style="padding:10px 16px">+</button></div></div>`}
 
 // ===== SETTINGS/DETAIL MODALS =====
 function showSettings(){
-  modal(`<h2 style="color:var(--accent-dark);margin-bottom:16px">⚙️ Settings</h2><p style="font-size:.85rem;color:var(--text-dim);margin-bottom:12px"><b>Gist Sync</b><br><a href="https://gist.github.com/" target="_blank" style="color:var(--accent-dark)">Create secret Gist</a> (file: <code>productivity_data.json</code> with <code>{}</code>)<br><a href="https://github.com/settings/tokens/new?scopes=gist&description=Productivity+Tracker" target="_blank" style="color:var(--accent-dark)">Generate token</a> (classic, gist scope only)</p><input id="sgi" type="text" value="${D.settings.gistId}" placeholder="Gist ID" class="inf"><input id="sgt" type="password" value="${D.settings.token}" placeholder="Token" class="inf"><button id="ssv" class="btn bsuc" style="width:100%;margin-bottom:8px">Save & Sync</button><button id="spl" class="btn bmut" style="width:100%;margin-bottom:8px">⬇️ Pull</button><button id="spu" class="btn bmut" style="width:100%;margin-bottom:8px">⬆️ Push</button><div id="sst" style="text-align:center;font-size:.85rem;color:var(--text-dim);margin-top:8px"></div><button data-close class="btn bmut" style="margin-top:12px;width:100%">Close</button><p style="text-align:center;font-size:.75rem;color:var(--text-dim);margin-top:12px">App version: ${APP_VERSION}</p>`);
+  modal(`<h2 style="color:var(--accent-dark);margin-bottom:16px">⚙️ Settings</h2><p style="font-size:.85rem;color:var(--text-dim);margin-bottom:12px"><b>Gist Sync</b><br><a href="https://gist.github.com/" target="_blank" style="color:var(--accent-dark)">Create secret Gist</a> (file: <code>productivity_data.json</code> with <code>{}</code>)<br><a href="https://github.com/settings/tokens/new?scopes=gist&description=Productivity+Tracker" target="_blank" style="color:var(--accent-dark)">Generate token</a> (classic, gist scope only)</p><input id="sgi" type="text" value="${D.settings.gistId}" placeholder="Gist ID" class="inf"><input id="sgt" type="password" value="${D.settings.token}" placeholder="Token" class="inf"><button id="ssv" class="btn bsuc" style="width:100%;margin-bottom:8px">Save & Sync</button><button id="spl" class="btn bmut" style="width:100%;margin-bottom:8px">⬇️ Pull</button><button id="spu" class="btn bmut" style="width:100%;margin-bottom:8px">⬆️ Push</button><button id="sexp" class="btn bmut" style="width:100%;margin-bottom:8px">📦 Export Backup</button><button id="simp" class="btn bmut" style="width:100%;margin-bottom:8px">📥 Import Backup</button><input id="simp-file" type="file" accept=".json" style="display:none"><div id="sst" style="text-align:center;font-size:.85rem;color:var(--text-dim);margin-top:8px"></div><button data-close class="btn bmut" style="margin-top:12px;width:100%">Close</button><p style="text-align:center;font-size:.75rem;color:var(--text-dim);margin-top:12px">App version: ${APP_VERSION}</p>`);
   document.getElementById('ssv')?.addEventListener('click',async()=>{D.settings.gistId=document.getElementById('sgi').value.trim();D.settings.token=document.getElementById('sgt').value.trim();saveL();const s=document.getElementById('sst');s.textContent='Syncing...';const ok=await gistPush();s.textContent=ok?'✅ Synced!':(D.settings.gistId?'❌ Failed':'✅ Saved');render()});
   document.getElementById('spl')?.addEventListener('click',async()=>{const s=document.getElementById('sst');s.textContent='Pulling...';const ok=await gistPull();s.textContent=ok?'✅ Pulled!':'❌ Failed';if(ok){updateStreak();closeM();render()}});
   document.getElementById('spu')?.addEventListener('click',async()=>{const s=document.getElementById('sst');s.textContent='Pushing...';const ok=await gistPush();s.textContent=ok?'✅ Pushed!':'❌ Failed'});
+  document.getElementById('sexp')?.addEventListener('click',exportData);
+  document.getElementById('simp')?.addEventListener('click',()=>document.getElementById('simp-file')?.click());
+  document.getElementById('simp-file')?.addEventListener('change',e=>{const f=e.target.files[0];if(!f)return;const r=new FileReader();r.onload=ev=>{try{const imported=JSON.parse(ev.target.result);const ls=D.settings;D={...JSON.parse(JSON.stringify(DEFAULT_DATA)),...imported,settings:ls};saveL();debouncedPush();updateStreak();closeM();render();toast('📥 Backup restored!')}catch(err){toast('❌ Invalid file')}};r.readAsText(f)});
 }
 function showGoalSettingModal(){
   const hasGoal = D.settings.dailyGoal > 0;
@@ -333,61 +429,141 @@ function showGoalEditModal(){
   modal(`<div style="text-align:center;">
     <div style="font-size:2rem;margin-bottom:8px;">🎯</div>
     <h2 style="color:var(--accent-dark);margin-bottom:12px;">Set Daily Goal</h2>
-    <p style="color:var(--text-dim);font-size:.85rem;margin-bottom:12px;">Set your daily point target. Hit it to earn a 25% bonus!</p>
-    <input id="dg-val" type="number" min="1" value="${D.settings.dailyGoal||''}" placeholder="e.g. 30" class="inf" style="text-align:center">
+    <p style="color:var(--text-dim);font-size:.85rem;margin-bottom:12px;">Enter points directly, or calculate from work hours.</p>
+    <input id="dg-val" type="number" min="1" value="" placeholder="Points Goal" class="inf" style="text-align:center">
+    <div style="margin:8px 0;font-size:.8rem;color:var(--text-dim);">— or calculate —</div>
+    <div style="display:flex;gap:6px;align-items:center;justify-content:center;margin-bottom:8px;">
+      <input id="dg-hrs" type="number" min="0.5" step="0.5" placeholder="" class="inf" style="width:60px;margin:0;text-align:center">
+      <span class="rl">hours at</span>
+      <select id="dg-ann" class="inf" style="width:auto;margin:0"><option value="1">Breeze</option><option value="2">Mild</option><option value="3" selected>Moderate</option><option value="4">Draining</option><option value="5">Agonizing</option></select>
+    </div>
+    <div id="dg-calc" style="font-size:.9rem;color:var(--accent-dark);font-weight:bold;margin:8px 0"></div>
     <button id="dg-save" class="btn bpri" style="width:100%;margin-bottom:8px;">Lock it in 🔒</button>
-    <button id="dg-clear" class="btn bmut" style="width:100%;margin-bottom:8px;">Clear goal</button>
     <button data-close class="btn bmut" style="width:100%;">Cancel</button>
   </div>`);
-  document.getElementById('dg-save')?.addEventListener('click',()=>{const v=parseInt(document.getElementById('dg-val').value);D.settings.dailyGoal=Number.isInteger(v)&&v>=1?v:0;saveL();debouncedPush();closeM();render()});
-  document.getElementById('dg-clear')?.addEventListener('click',()=>{D.settings.dailyGoal=0;saveL();debouncedPush();closeM();render()});
+  function calc(){const h=parseFloat(document.getElementById('dg-hrs')?.value),a=parseInt(document.getElementById('dg-ann')?.value);if(h>0&&a){const pts=Math.round((h*60/15)*a);document.getElementById('dg-calc').textContent='= '+pts+' points';document.getElementById('dg-val').value=pts}else{document.getElementById('dg-calc').textContent=''}}
+  document.getElementById('dg-hrs')?.addEventListener('input',calc);
+  document.getElementById('dg-ann')?.addEventListener('change',calc);
+  document.getElementById('dg-save')?.addEventListener('click',()=>{const v=parseInt(document.getElementById('dg-val').value);if(!Number.isInteger(v)||v<1)return;D.settings.dailyGoal=v;D.dailyGoalLog[today()]=v;saveL();debouncedPush();closeM();render()});
 }
 // ===== METRICS =====
-let expandedMetric=null;
+function rCorrelation(){
+  const opts=D.metrics.map(m=>`<option value="${m.id}" ${corrA===m.id?'selected':''}>${m.name}</option>`).join('');
+  const opts2=D.metrics.map(m=>`<option value="${m.id}" ${corrB===m.id?'selected':''}>${m.name}</option>`).join('');
+  let result='';
+  if(corrA&&corrB&&corrA!==corrB){
+    const mA=D.metrics.find(x=>x.id===corrA),mB=D.metrics.find(x=>x.id===corrB);
+    if(mA&&mB){
+      // Build day-aligned data
+      const allDays=new Set([...mA.entries.map(e=>e.date),...mB.entries.map(e=>e.date)]);
+      const sorted=[...allDays].sort();
+      const pairs=[];
+      for(const day of sorted){
+        const aVal=mA.entries.find(e=>e.date===day);
+        if(corrLag==='same'){const bVal=mB.entries.find(e=>e.date===day);if(aVal&&bVal)pairs.push({d:day,a:aVal.val,b:bVal.val})}
+        else{const nextDay=new Date(day+'T12:00:00');nextDay.setDate(nextDay.getDate()+1);const nd=nextDay.toISOString().slice(0,10);const bVal=mB.entries.find(e=>e.date===nd);if(aVal&&bVal)pairs.push({d:day,a:aVal.val,b:bVal.val})}
+      }
+      if(pairs.length>=2){
+        // Pearson correlation
+        const n=pairs.length,am=pairs.reduce((s,p)=>s+p.a,0)/n,bm=pairs.reduce((s,p)=>s+p.b,0)/n;
+        const num=pairs.reduce((s,p)=>s+(p.a-am)*(p.b-bm),0);
+        const denA=Math.sqrt(pairs.reduce((s,p)=>s+(p.a-am)*(p.a-am),0));
+        const denB=Math.sqrt(pairs.reduce((s,p)=>s+(p.b-bm)*(p.b-bm),0));
+        const r=(denA&&denB)?num/(denA*denB):0;
+        const label=r>0.6?'Strong positive 📈':r>0.3?'Weak positive':r>-0.3?'No correlation':r>-0.6?'Weak negative':'Strong negative 📉';
+        // Overlay graph
+        const w=260,h=80;
+        const px=pairs.length>1?w/(pairs.length-1):0;
+        const lineA=pairs.map((p,i)=>`${Math.round(i*px)},${Math.round(h-p.a*h/3)}`).join(' ');
+        const lineB=pairs.map((p,i)=>`${Math.round(i*px)},${Math.round(h-p.b*h/3)}`).join(' ');
+        result=`<div style="margin-top:8px;text-align:center"><div style="font-size:.9rem;font-weight:bold;color:var(--accent-dark)">${label} (r=${r.toFixed(2)})</div><div style="font-size:.7rem;color:var(--text-dim);margin:4px 0">${pairs.length} data points${corrLag==='next'?' (B shifted +1 day)':''}</div><svg viewBox="-5 -5 ${w+10} ${h+20}" style="width:100%;height:90px;margin-top:4px"><line x1="0" y1="${h}" x2="${w}" y2="${h}" stroke="var(--border)" stroke-width="0.5"/><polyline points="${lineA}" fill="none" stroke="var(--accent-dark)" stroke-width="2" stroke-linecap="round"/><polyline points="${lineB}" fill="none" stroke="var(--success-dark)" stroke-width="2" stroke-linecap="round" stroke-dasharray="4"/><text x="${w}" y="${h+12}" font-size="7" fill="var(--text-dim)" text-anchor="end">${mA.name} ━ / ${mB.name} ┄</text></svg></div>`;
+      } else {result=`<p style="font-size:.8rem;color:var(--text-dim);margin-top:8px;text-align:center">Need at least 2 overlapping days of data.</p>`}
+    }
+  }
+  return `<div class="fcard" style="margin-bottom:14px">
+    <div style="font-size:.85rem;font-weight:600;margin-bottom:8px">🔗 Correlation</div>
+    <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:6px">
+      <select id="corr-a" class="inf" style="flex:1;margin:0;font-size:.85rem""><option value="">Select A</option>${opts}</select>
+      <span class="rl">vs</span>
+      <select id="corr-b" class="inf" style="flex:1;margin:0;font-size:.85rem"><option value="">Select B</option>${opts2}</select>
+    </div>
+    <div style="display:flex;gap:8px;margin-bottom:4px">
+      <button id="corr-same" class="cat-btn ${corrLag==='same'?'cat-active':''}" style="background:var(--card-neutral)">Same day</button>
+      <button id="corr-next" class="cat-btn ${corrLag==='next'?'cat-active':''}" style="background:var(--card-neutral)">Next day</button>
+    </div>
+    ${result}
+  </div>`;
+}
+let expandedMetric=null,metMonth=new Date().getMonth(),metYear=new Date().getFullYear(),corrA='',corrB='',corrLag='same';
 function rMetrics(){
   if(!D.metrics)D.metrics=[];
   const t=today();
   const icons=['😩','😕','🙂','😄'];
   const cards=D.metrics.map(m=>{
     const todayEntry=m.entries.find(e=>e.date===t);
-    const last7=m.entries.filter(e=>{const diff=(new Date()-new Date(e.date))/864e5;return diff<7});
-    const avg=last7.length>0?Math.round(last7.reduce((s,e)=>s+e.val,0)/last7.length):-1;
-    const avgIcon=avg>=0?icons[Math.min(avg,3)]:'—';
     const isExp=expandedMetric===m.id;
     let graphView='';
     if(isExp){
-      const sorted=[...m.entries].sort((a,b)=>a.date.localeCompare(b.date));
-      const last30=sorted.slice(-30);
-      if(last30.length>1){
-        const w=280,h=100,px=w/(last30.length-1);
-        let path=`M 0 ${h-last30[0].val*h/3}`;
-        for(let i=1;i<last30.length;i++) path+=` L ${Math.round(i*px)} ${Math.round(h-last30[i].val*h/3)}`;
-        graphView=`<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);">
-          <div style="font-size:.8rem;color:var(--text-dim);margin-bottom:6px;">Last ${last30.length} days</div>
-          <div style="position:relative;width:100%;overflow-x:auto;">
-            <svg viewBox="0 0 ${w} ${h+20}" style="width:100%;height:120px;">
-              <line x1="0" y1="${h}" x2="${w}" y2="${h}" stroke="var(--border)" stroke-width="1"/>
-              <line x1="0" y1="${h*2/3}" x2="${w}" y2="${h*2/3}" stroke="var(--border)" stroke-width="0.5" stroke-dasharray="4"/>
-              <line x1="0" y1="${h/3}" x2="${w}" y2="${h/3}" stroke="var(--border)" stroke-width="0.5" stroke-dasharray="4"/>
-              <line x1="0" y1="0" x2="${w}" y2="0" stroke="var(--border)" stroke-width="0.5" stroke-dasharray="4"/>
-              <polyline points="${last30.map((e,i)=>`${Math.round(i*px)},${Math.round(h-e.val*h/3)}`).join(' ')}" fill="none" stroke="var(--accent-dark)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
-              ${last30.map((e,i)=>`<circle cx="${Math.round(i*px)}" cy="${Math.round(h-e.val*h/3)}" r="3" fill="var(--accent-dark)"/>`).join('')}
-              <text x="0" y="${h+14}" font-size="8" fill="var(--text-dim)">${new Date(last30[0].date).toLocaleDateString('default',{month:'short',day:'numeric'})}</text>
-              <text x="${w}" y="${h+14}" font-size="8" fill="var(--text-dim)" text-anchor="end">${new Date(last30[last30.length-1].date).toLocaleDateString('default',{month:'short',day:'numeric'})}</text>
-            </svg>
-            <div style="display:flex;justify-content:space-between;font-size:.7rem;color:var(--text-dim);margin-top:2px;"><span>😩</span><span>😕</span><span>🙂</span><span>😄</span></div>
-          </div>
-        </div>`;
-      } else if(last30.length===1){
-        graphView=`<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);font-size:.8rem;color:var(--text-dim);">Only 1 entry so far. Graph appears after 2+ days.</div>`;
-      } else {
-        graphView=`<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);font-size:.8rem;color:var(--text-dim);font-style:italic;">No entries yet.</div>`;
+      // Build Option C graph for selected month
+      const dim=new Date(metYear,metMonth+1,0).getDate();
+      const mnName=new Date(metYear,metMonth).toLocaleString('default',{month:'long',year:'numeric'});
+      const w=280,h=100;
+      const dayData=[];for(let d=1;d<=dim;d++){const ds=`${metYear}-${String(metMonth+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;const entry=m.entries.find(e=>e.date===ds);dayData.push(entry?entry.val:null)}
+      // Build broken polyline segments (connect only adjacent logged days)
+      let segments='';let seg=[];
+      for(let d=0;d<dim;d++){
+        if(dayData[d]!==null){seg.push({x:Math.round(d*w/(dim-1)),y:Math.round(h-dayData[d]*h/3)})}
+        else{if(seg.length>1){segments+=`<polyline points="${seg.map(p=>p.x+','+p.y).join(' ')}" fill="none" stroke="var(--accent-dark)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>`}seg=[]}
       }
+      if(seg.length>1){segments+=`<polyline points="${seg.map(p=>p.x+','+p.y).join(' ')}" fill="none" stroke="var(--accent-dark)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>`}
+      // Dots for all logged days
+      const dots=dayData.map((v,d)=>v!==null?`<circle cx="${Math.round(d*w/(dim-1))}" cy="${Math.round(h-v*h/3)}" r="3.5" fill="var(--accent-dark)"/>`:'').join('');
+      // Stats
+      const all=m.entries.filter(e=>e.val!=null);
+      const lifeAvg=all.length?icons[Math.min(3,Math.round(all.reduce((s,e)=>s+e.val,0)/all.length))]:'—';
+      const mEntries=m.entries.filter(e=>e.date.slice(0,7)===`${metYear}-${String(metMonth+1).padStart(2,'0')}`);
+      const moAvg=mEntries.length?icons[Math.min(3,Math.round(mEntries.reduce((s,e)=>s+e.val,0)/mEntries.length))]:'—';
+      const w7=m.entries.filter(e=>(new Date()-new Date(e.date))/864e5<7);
+      const wkAvg=w7.length?icons[Math.min(3,Math.round(w7.reduce((s,e)=>s+e.val,0)/w7.length))]:'—';
+      // Trend: linear regression slope on last 14 entries
+      const recent=all.slice(-14);
+      let trend='—';
+      if(recent.length>=3){
+        const n=recent.length;const xs=[...Array(n).keys()];
+        const xm=xs.reduce((s,x)=>s+x,0)/n,ym=recent.reduce((s,e)=>s+e.val,0)/n;
+        const num=xs.reduce((s,x,i)=>s+(x-xm)*(recent[i].val-ym),0);
+        const den=xs.reduce((s,x)=>s+(x-xm)*(x-xm),0);
+        const slope=den?num/den:0;
+        trend=slope>0.05?'📈 Improving':slope<-0.05?'📉 Declining':'➡️ Steady';
+      }
+
+      graphView=`<div id="met-graph-${m.id}" style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px"><button class="met-prev ibtn" data-id="${m.id}">◀</button><span style="font-size:.8rem;color:var(--text-dim)">${mnName}</span><button class="met-next ibtn" data-id="${m.id}">▶</button></div>
+        <svg viewBox="-20 -5 ${w+25} ${h+25}" style="width:100%;height:110px;">
+          <text x="-5" y="8" font-size="10" text-anchor="end">😄</text>
+          <text x="-5" y="${h/3+4}" font-size="10" text-anchor="end">🙂</text>
+          <text x="-5" y="${h*2/3+4}" font-size="10" text-anchor="end">😕</text>
+          <text x="-5" y="${h+4}" font-size="10" text-anchor="end">😩</text>
+          <line x1="0" y1="${h}" x2="${w}" y2="${h}" stroke="var(--border)" stroke-width="1"/>
+          <line x1="0" y1="${h*2/3}" x2="${w}" y2="${h*2/3}" stroke="var(--border)" stroke-width="0.5" stroke-dasharray="4"/>
+          <line x1="0" y1="${h/3}" x2="${w}" y2="${h/3}" stroke="var(--border)" stroke-width="0.5" stroke-dasharray="4"/>
+          <line x1="0" y1="0" x2="${w}" y2="0" stroke="var(--border)" stroke-width="0.5" stroke-dasharray="4"/>
+          ${segments}${dots}
+          <text x="0" y="${h+14}" font-size="7" fill="var(--text-dim)">1</text>
+          <text x="${w/2}" y="${h+14}" font-size="7" fill="var(--text-dim)" text-anchor="middle">${Math.ceil(dim/2)}</text>
+          <text x="${w}" y="${h+14}" font-size="7" fill="var(--text-dim)" text-anchor="end">${dim}</text>
+        </svg>
+        <div style="display:flex;justify-content:space-around;font-size:.75rem;color:var(--text-dim);margin-top:8px;text-align:center">
+          <div><div style="font-weight:bold">${wkAvg}</div>7 day</div>
+          <div><div style="font-weight:bold">${moAvg}</div>Month</div>
+          <div><div style="font-weight:bold">${lifeAvg}</div>Lifetime</div>
+          <div><div style="font-weight:bold;font-size:.7rem">${trend}</div>Trend</div>
+        </div>
+      </div>`;
     }
     return `<div class="fcard" style="margin-bottom:10px;">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
         <b class="mname" data-id="${m.id}" style="cursor:pointer;">${m.name}</b>
-        <span style="font-size:.85rem;">7d: ${avgIcon}</span>
         <button class="mdel ibtn" data-id="${m.id}" style="font-size:.9rem;">🗑️</button>
       </div>
       <div style="display:flex;justify-content:space-around;">
@@ -400,6 +576,7 @@ function rMetrics(){
     <button class="tback">← Back</button>
     <h2 style="font-size:1.1rem;color:var(--accent-dark);margin-bottom:12px;">📊 Metrics</h2>
     <p style="font-size:.8rem;color:var(--text-dim);margin-bottom:12px;">Tap an icon to log today. Tap the name to see your graph.</p>
+    ${D.metrics.length>=2?rCorrelation():''}
     ${cards||'<p style="color:var(--text-dim);font-style:italic;">No metrics yet. Add one below!</p>'}
     <div style="display:flex;gap:8px;margin-top:12px;">
       <input id="met-new" type="text" placeholder="New metric (e.g. Productive)" class="inf" style="flex:1;margin:0;">
@@ -408,21 +585,92 @@ function rMetrics(){
   </div>`;
 }
 
+function showHistDetail(idx){
+  const e=D.pointsHistory[idx];if(!e)return;
+  const timeParts=e.date.slice(11,16);const hr=parseInt(timeParts.split(':')[0]),min=timeParts.split(':')[1];
+  const ampm=hr>=12?'PM':'AM';const hr12=hr%12||12;
+  const time=`${hr12}:${min} ${ampm}`;
+  const dateStr=new Date(e.date.slice(0,10)+'T12:00:00').toLocaleDateString('default',{weekday:'long',month:'short',day:'numeric',year:'numeric'});
+  let details=[];
+  details.push(`<div><b>Time:</b> ${time}</div>`);
+  details.push(`<div><b>Date:</b> ${dateStr}</div>`);
+  details.push(`<div><b>Points:</b> ${e.type==='earned'?'+':''}${e.points}</div>`);
+  if(e.bonus)details.push(`<div><b>Completion bonus:</b> +${e.bonus}</div>`);
+  if(e.rate)details.push(`<div><b>Rate:</b> ${e.rate}</div>`);
+  if(e.pomo)details.push(`<div><b>Pomodoro:</b> ${e.pomo} (work/break)</div>`);
+  if(e.seconds!=null){const h=Math.floor(e.seconds/3600),m=Math.floor((e.seconds%3600)/60),s=e.seconds%60;let dur='';if(h>0)dur+=h+'h ';if(m>0)dur+=m+'m ';dur+=s+'s';details.push(`<div><b>Duration:</b> ${dur.trim()}</div>`)}
+  else if(e.minutes!=null){const h=Math.floor(e.minutes/60),m=e.minutes%60;let dur='';if(h>0)dur+=h+'h ';if(m>0)dur+=m+'m';details.push(`<div><b>Duration:</b> ${dur.trim()||'0m'}</div>`)}
+  if(e.category)details.push(`<div><b>Category:</b> ${e.category==='work'?'💼 Work':e.category==='home'?'🏠 Home':e.category==='growth'?'🌱 Growth':e.category}</div>`);
+  if(e.taskType)details.push(`<div><b>Type:</b> ${e.taskType==='one-time'?'🎯 One-Time':e.taskType==='recurring'?'🔄 Recurring':e.taskType==='evergreen'?'♾️ Evergreen':e.taskType}</div>`);
+  if(e.taskId){const allForTask=D.pointsHistory.filter(h=>h.taskId===e.taskId&&h.type==='earned');const totalMins=allForTask.reduce((s,h)=>s+(h.minutes||0),0);if(totalMins>0){const th=Math.floor(totalMins/60),tm=totalMins%60;let dur='';if(th>0)dur+=th+' hour'+(th>1?'s':'');if(tm>0)dur+=(dur?' and ':'')+tm+' minute'+(tm>1?'s':'');details.push(`<div><b>Total invested:</b> ${dur}</div>`)}}
+  modal(`<h2 style="color:var(--accent-dark);margin-bottom:8px">${e.task}</h2><div style="font-size:.85rem;line-height:1.8;margin-bottom:16px">${details.join('')}</div><button data-close class="btn bmut" style="width:100%">Close</button>`);
+}
+
 function showRewardEdit(rid){
   const r=D.rewards.find(x=>x.id===rid);if(!r)return;
   modal(`<h2 style="color:var(--accent-dark);margin-bottom:12px">Edit Reward</h2><input id="ren" type="text" value="${r.name}" class="inf"><input id="rec" type="number" value="${r.cost}" min="1" class="inf"><div id="ree" class="err"></div><div style="display:flex;gap:8px;margin-top:8px"><button id="res" class="btn bpri" style="flex:1">Save</button><button id="red" class="btn bdan" style="padding:10px 16px">🗑️</button></div><button data-close class="btn bmut" style="margin-top:10px;width:100%">Close</button>`);
   document.getElementById('res')?.addEventListener('click',()=>{const n=document.getElementById('ren').value.trim(),c=parseInt(document.getElementById('rec').value);if(!n||!Number.isInteger(c)||c<1){document.getElementById('ree').textContent='Valid name/cost needed';document.getElementById('ree').style.display='block';return}r.name=n;r.cost=c;save();closeM();render()});
   document.getElementById('red')?.addEventListener('click',()=>confirmAction('Delete this reward?',()=>{D.rewards=D.rewards.filter(x=>x.id!==rid);save();render()}));
 }
+let vizMonth=new Date().getMonth(),vizYear=new Date().getFullYear();
+function taskViz(task,hist){
+  if(!hist.length)return '<p style="font-size:.8rem;color:var(--text-dim);margin-bottom:14px;font-style:italic">No history yet.</p>';
+  const mnName=new Date(vizYear,vizMonth).toLocaleString('default',{month:'long',year:'numeric'});
+  const nav=`<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px"><button id="viz-prev" class="ibtn">◀</button><span style="font-size:.8rem;color:var(--text-dim)">${mnName}</span><button id="viz-next" class="ibtn">▶</button></div>`;
+  if(task.timeBased){
+    // Bar graph: minutes per day for the selected month
+    const dim=new Date(vizYear,vizMonth+1,0).getDate();
+    const bars=[];for(let d=1;d<=dim;d++){const ds=`${vizYear}-${String(vizMonth+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;bars.push(hist.filter(h=>h.date.slice(0,10)===ds).reduce((s,h)=>s+(h.minutes||0),0))}
+    const maxVal=Math.max(...bars,1);
+    const w=280,h=80,bw=w/dim;
+    const barSvg=bars.map((v,i)=>{const bh=v>0?Math.max(2,v/maxVal*h):0;return `<rect x="${i*bw+0.5}" y="${h-bh}" width="${bw-1}" height="${bh}" fill="var(--accent)" rx="1.5"/>`}).join('');
+    const yTop=maxVal>=60?Math.round(maxVal/60)+'h':maxVal+'m';
+    const yMid=maxVal>=60?Math.round(maxVal/120)+'h':Math.round(maxVal/2)+'m';
+    return `<div style="margin-bottom:14px">${nav}<div style="position:relative;padding-left:20px"><svg viewBox="0 0 ${w} ${h+16}" style="width:100%;height:100px;"><line x1="0" y1="0" x2="${w}" y2="0" stroke="var(--border)" stroke-width="0.5" stroke-dasharray="3"/><line x1="0" y1="${h/2}" x2="${w}" y2="${h/2}" stroke="var(--border)" stroke-width="0.5" stroke-dasharray="3"/><line x1="0" y1="${h}" x2="${w}" y2="${h}" stroke="var(--border)" stroke-width="1"/>${barSvg}<text x="0" y="${h+12}" font-size="7" fill="var(--text-dim)">1</text><text x="${w/2}" y="${h+12}" font-size="7" fill="var(--text-dim)" text-anchor="middle">${Math.ceil(dim/2)}</text><text x="${w}" y="${h+12}" font-size="7" fill="var(--text-dim)" text-anchor="end">${dim}</text></svg><div style="position:absolute;top:0;left:0;font-size:.55rem;color:var(--text-dim)">${yTop}</div><div style="position:absolute;top:45%;left:0;font-size:.55rem;color:var(--text-dim)">${yMid}</div></div></div>`;
+  } else {
+    // Mini calendar for selected month with checkmarks
+    const dim=new Date(vizYear,vizMonth+1,0).getDate(),fd=new Date(vizYear,vizMonth,1).getDay();
+    const completedDays=new Set(hist.map(h=>h.date.slice(0,10)));
+    let cells='';for(let i=0;i<fd;i++)cells+='<div style="height:22px"></div>';
+    for(let d=1;d<=dim;d++){
+      const ds=`${vizYear}-${String(vizMonth+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+      const done=completedDays.has(ds);
+      cells+=`<div style="text-align:center;font-size:.7rem;height:22px;line-height:22px;${done?'background:var(--success);border-radius:4px;color:#166534;font-weight:bold':'color:var(--text-dim)'}">${done?'✓':d}</div>`;
+    }
+    // Pad to always have 6 rows (42 cells total)
+    const totalCells=fd+dim;const padCells=42-totalCells;
+    for(let i=0;i<padCells;i++)cells+='<div style="height:22px"></div>';
+    return `<div style="margin-bottom:14px">${nav}<div style="display:grid;grid-template-columns:repeat(7,1fr);gap:2px">${['S','M','T','W','T','F','S'].map(x=>`<div style="text-align:center;font-size:.6rem;color:var(--text-dim);font-weight:bold">${x}</div>`).join('')}${cells}</div></div>`;
+  }
+}
 function showTaskDetail(tid){
+  vizMonth=new Date().getMonth();vizYear=new Date().getFullYear();
   const task=D.tasks.find(t=>t.id===tid);if(!task)return;
-  const hist=D.pointsHistory.filter(h=>h.taskId===tid),tc=hist.length,tm=hist.reduce((s,h)=>s+(h.minutes||0),0);
-  const tw=hist.filter(h=>(new Date()-new Date(h.date))/864e5<7).length,tmo=hist.filter(h=>h.date.slice(0,7)===today().slice(0,7)).length;
+  const hist=D.pointsHistory.filter(h=>h.taskId===tid);
   const ld=hist.length?new Date(hist[hist.length-1].date).toLocaleDateString():'Never';
-  modal(`<h2 style="color:var(--accent-dark);margin-bottom:4px">${task.name}</h2><p style="font-size:.8rem;color:var(--text-dim);margin-bottom:14px">${task.type}${task.type==='recurring'?' · every '+task.cadenceDays+'d':''}</p><div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:14px"><div class="sbox"><div class="sn">${tc}</div><div class="sl">Total</div></div><div class="sbox"><div class="sn">${tw}</div><div class="sl">This week</div></div><div class="sbox"><div class="sn">${tmo}</div><div class="sl">This month</div></div><div class="sbox"><div class="sn">${tm>0?tm+'m':'—'}</div><div class="sl">Total min</div></div></div><p style="font-size:.8rem;color:var(--text-dim);margin-bottom:14px">Last: ${ld}</p><h3 style="font-size:.9rem;margin-bottom:8px">Edit</h3><input id="en" type="text" value="${task.name}" class="inf"><select id="ety" class="inf"><option value="one-time" ${task.type==='one-time'?'selected':''}>🎯 One-Time</option><option value="recurring" ${task.type==='recurring'?'selected':''}>🔄 Recurring</option><option value="evergreen" ${task.type==='evergreen'?'selected':''}>♾️ Evergreen</option></select><select id="ecat" class="inf"><option value="work" ${task.category==='work'?'selected':''}>💼 Work</option><option value="home" ${task.category==='home'?'selected':''}>🏠 Home</option><option value="growth" ${task.category==='growth'?'selected':''}>🌱 Growth</option></select><div id="ecw" style="${task.type==='recurring'?'':'display:none'}"><input id="ecd" type="number" value="${task.cadenceDays||''}" min="1" placeholder="Cadence (days)" class="inf"></div><label class="chlbl"><input id="etb" type="checkbox" ${task.timeBased?'checked':''}> Time-based</label><div id="efw" style="${task.timeBased?'display:none':''}"><input id="ept" type="number" value="${task.points||''}" min="1" placeholder="Points" class="inf"></div><div id="etw" style="${task.timeBased?'':'display:none'}"><div style="display:flex;gap:6px;align-items:center;margin-bottom:8px"><input id="epa" type="number" value="${task.ptsAmount||''}" min="1" class="inf" style="width:70px;margin:0;text-align:center"><span class="rl">pts per</span><input id="epp" type="number" value="${task.ptsPerMinutes||''}" min="1" class="inf" style="width:70px;margin:0;text-align:center"><span class="rl">min</span></div></div><div id="ee" class="err"></div><div style="display:flex;gap:8px;margin-top:8px"><button id="esv" data-id="${task.id}" class="btn bpri" style="flex:1">Save</button><button id="edl" data-id="${task.id}" class="btn bdan" style="padding:10px 16px">🗑️</button></div><button data-close class="btn bmut" style="margin-top:10px;width:100%">Close</button>`);
+  // Stats: today, this week, this month, lifetime
+  const todayH=hist.filter(h=>h.date.slice(0,10)===today());
+  const weekH=hist.filter(h=>(new Date()-new Date(h.date))/864e5<7);
+  const monthH=hist.filter(h=>h.date.slice(0,7)===today().slice(0,7));
+  function fmtStat(entries){
+    if(task.timeBased){const m=entries.reduce((s,h)=>s+(h.minutes||0),0);if(m>=60){const hr=Math.floor(m/60),mn=m%60;return mn>0?hr+'h '+mn+'m':hr+'h'}return m>0?m+'m':'—'}
+    else return entries.length>0?entries.length+'':'—'}
+  const statToday=fmtStat(todayH),statWeek=fmtStat(weekH),statMonth=fmtStat(monthH),statLife=fmtStat(hist);
+  const isSleeping=task.type==='recurring'&&task.lastCompleted&&(new Date()-new Date(task.lastCompleted))/864e5<task.cadenceDays;
+  const earlyBtn=isSleeping?`<button id="edone-early" class="btn bsuc" style="width:100%;margin-bottom:8px">⚡ Done early</button>`:'';
+  modal(`<h2 style="color:var(--accent-dark);margin-bottom:4px">${task.name}</h2><p style="font-size:.8rem;color:var(--text-dim);margin-bottom:14px">${task.type}${task.type==='recurring'?' · every '+task.cadenceDays+'d':''}</p>${earlyBtn}<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:14px"><div class="sbox"><div class="sn">${statToday}</div><div class="sl">Today</div></div><div class="sbox"><div class="sn">${statWeek}</div><div class="sl">This week</div></div><div class="sbox"><div class="sn">${statMonth}</div><div class="sl">This month</div></div><div class="sbox"><div class="sn">${statLife}</div><div class="sl">Lifetime</div></div></div><p style="font-size:.8rem;color:var(--text-dim);margin-bottom:14px">Last: ${ld}</p><div id="viz-container">${taskViz(task,hist)}</div><h3 style="font-size:.9rem;margin-bottom:8px">Edit</h3><input id="en" type="text" value="${task.name}" class="inf"><select id="ety" class="inf"><option value="one-time" ${task.type==='one-time'?'selected':''}>🎯 One-Time</option><option value="recurring" ${task.type==='recurring'?'selected':''}>🔄 Recurring</option><option value="evergreen" ${task.type==='evergreen'?'selected':''}>♾️ Evergreen</option></select><select id="ecat" class="inf"><option value="work" ${task.category==='work'?'selected':''}>💼 Work</option><option value="home" ${task.category==='home'?'selected':''}>🏠 Home</option><option value="growth" ${task.category==='growth'?'selected':''}>🌱 Growth</option></select><div id="ecw" style="${task.type==='recurring'?'':'display:none'}"><input id="ecd" type="number" value="${task.cadenceDays||''}" min="1" placeholder="Cadence (days)" class="inf"></div><label class="chlbl"><input id="etb" type="checkbox" ${task.timeBased?'checked':''}> Time-based</label><div id="efw" style="${task.timeBased?'display:none':''}"><input id="ept" type="number" value="${task.points||''}" min="1" placeholder="Points" class="inf"></div><div id="etw" style="${task.timeBased?'':'display:none'}"><div style="display:flex;gap:6px;align-items:center;margin-bottom:8px"><input id="epa" type="number" value="${task.ptsAmount||''}" min="1" class="inf" style="width:70px;margin:0;text-align:center"><span class="rl">pts per</span><input id="epp" type="number" value="${task.ptsPerMinutes||''}" min="1" class="inf" style="width:70px;margin:0;text-align:center"><span class="rl">min</span></div></div><div id="ee" class="err"></div><div style="display:flex;gap:8px;margin-top:8px"><button id="esv" data-id="${task.id}" class="btn bpri" style="flex:1">Save</button><button id="epin" data-id="${task.id}" class="btn ${task.pinned?'bpri':'bmut'}" style="padding:10px 12px;font-size:.8rem">📌</button><button id="earchive" data-id="${task.id}" class="btn bmut" style="padding:10px 12px;font-size:.8rem">${task.archived?'📤':'📦'}</button><button id="edl" data-id="${task.id}" class="btn bdan" style="padding:10px 16px">🗑️</button></div><button data-close class="btn bmut" style="margin-top:10px;width:100%">Close</button>`);
+  document.getElementById('edone-early')?.addEventListener('click',()=>{closeM();completeTask(tid)});
+  // Viz month navigation - rebuild viz in place
+  function bindVizNav(){
+    document.getElementById('viz-prev')?.addEventListener('click',()=>{vizMonth--;if(vizMonth<0){vizMonth=11;vizYear--}const vz=document.getElementById('viz-container');if(vz){vz.innerHTML=taskViz(task,hist);bindVizNav()}});
+    document.getElementById('viz-next')?.addEventListener('click',()=>{vizMonth++;if(vizMonth>11){vizMonth=0;vizYear++}const vz=document.getElementById('viz-container');if(vz){vz.innerHTML=taskViz(task,hist);bindVizNav()}});
+  }
+  bindVizNav();
   document.getElementById('ety')?.addEventListener('change',e=>{document.getElementById('ecw').style.display=e.target.value==='recurring'?'':'none'});
   document.getElementById('etb')?.addEventListener('change',e=>{document.getElementById('efw').style.display=e.target.checked?'none':'';document.getElementById('etw').style.display=e.target.checked?'':'none'});
   document.getElementById('esv')?.addEventListener('click',()=>{const n=document.getElementById('en').value.trim(),ty=document.getElementById('ety').value,tb=document.getElementById('etb').checked,err=document.getElementById('ee');if(!n){err.textContent='Name required';err.style.display='block';return}if(tb){const a=parseInt(document.getElementById('epa').value),b=parseInt(document.getElementById('epp').value);if(!Number.isInteger(a)||a<1||!Number.isInteger(b)||b<1){err.textContent='Valid pts/min required';err.style.display='block';return}task.timeBased=true;task.ptsAmount=a;task.ptsPerMinutes=b;task.points=a}else{const p=parseInt(document.getElementById('ept').value);if(!Number.isInteger(p)||p<1){err.textContent='Valid points required';err.style.display='block';return}task.timeBased=false;task.points=p}task.name=n;task.type=ty;task.category=document.getElementById('ecat').value;if(ty==='recurring'){const c=parseInt(document.getElementById('ecd').value);if(!Number.isInteger(c)||c<1){err.textContent='Valid cadence required';err.style.display='block';return}task.cadenceDays=c}save();closeM();render()});
+  document.getElementById('epin')?.addEventListener('click',()=>{task.pinned=!task.pinned;save();closeM();render()});
+  document.getElementById('earchive')?.addEventListener('click',()=>{task.archived=!task.archived;save();closeM();render()});
   document.getElementById('edl')?.addEventListener('click',()=>confirmAction('Delete this task?',()=>{deleteTask(tid);closeM()}));
 }
 
@@ -433,14 +681,26 @@ function bindAll(){
   document.getElementById('set-btn')?.addEventListener('click',showSettings);
   document.getElementById('goal-btn')?.addEventListener('click',showGoalSettingModal);
   document.querySelectorAll('.cat-btn').forEach(b=>b.addEventListener('click',()=>{categoryFilter=b.dataset.cat;render()}));
+  document.getElementById('rsort')?.addEventListener('click',()=>{recurSort=recurSort==='custom'?'due':'custom';render()});
   // Tasks
   document.querySelectorAll('.cbtn').forEach(b=>b.addEventListener('click',e=>{e.stopPropagation();const t=D.tasks.find(x=>x.id===b.dataset.id);if(t&&t.timeBased){inlineMinId=t.id;render()}else completeTask(b.dataset.id)}));
-  document.getElementById('ims')?.addEventListener('click',()=>{const m=parseInt(document.getElementById('imi')?.value);if(!m||m<1)return;completeTask(document.getElementById('ims').dataset.id,m)});
+  document.getElementById('ims')?.addEventListener('click',()=>{const h=parseInt(document.getElementById('imi-h')?.value)||0,m=parseInt(document.getElementById('imi-m')?.value)||0;const total=h*60+m;if(total<1)return;completeTask(document.getElementById('ims').dataset.id,total)});
+  document.getElementById('ims-work')?.addEventListener('click',()=>{const h=parseInt(document.getElementById('imi-h')?.value)||0,m=parseInt(document.getElementById('imi-m')?.value)||0;const total=h*60+m;if(total<1)return;completeTask(document.getElementById('ims-work').dataset.id,total,false)});
+  document.getElementById('ims-done')?.addEventListener('click',()=>{const h=parseInt(document.getElementById('imi-h')?.value)||0,m=parseInt(document.getElementById('imi-m')?.value)||0;const total=h*60+m;if(total<1)return;completeTask(document.getElementById('ims-done').dataset.id,total,true)});
   document.getElementById('imc')?.addEventListener('click',()=>{inlineMinId=null;render()});
+  // Live points preview for time-based inline input
+  ['imi-h','imi-m'].forEach(x=>document.getElementById(x)?.addEventListener('input',()=>{
+    const task=D.tasks.find(t=>t.id===inlineMinId);if(!task||!task.timeBased)return;
+    const h=parseInt(document.getElementById('imi-h')?.value)||0,m=parseInt(document.getElementById('imi-m')?.value)||0;
+    const total=h*60+m;const pts=Math.floor(total*task.ptsAmount/task.ptsPerMinutes);
+    const prev=document.getElementById('imi-preview');
+    if(prev)prev.textContent=total>0?`= ${pts} point${pts!==1?'s':''} [${task.ptsAmount} points per ${task.ptsPerMinutes} minute${task.ptsPerMinutes>1?'s':''}]`:'';
+  }));
   document.querySelectorAll('.tdet').forEach(b=>b.addEventListener('click',()=>showTaskDetail(b.dataset.id)));
   document.querySelectorAll('.sldet').forEach(b=>b.addEventListener('click',()=>showTaskDetail(b.dataset.id)));
   document.querySelectorAll('.mbtn').forEach(b=>b.addEventListener('click',e=>{e.stopPropagation();moveTask(b.dataset.id,b.dataset.d)}));
   document.getElementById('show-af')?.addEventListener('click',()=>{const c=document.getElementById('afc');if(c.innerHTML){c.innerHTML='';return}c.innerHTML=rAddForm();bindAddForm()});
+  document.getElementById('quick-log-btn')?.addEventListener('click',()=>{const c=document.getElementById('qlfc');if(c.innerHTML){c.innerHTML='';return}c.innerHTML=rQuickLog();bindQuickLog()});
   document.getElementById('surprise-btn')?.addEventListener('click',showSurpriseModal);
   // Rewards
   document.querySelectorAll('.rbtn').forEach(b=>b.addEventListener('click',()=>redeemReward(b.dataset.id)));
@@ -450,12 +710,16 @@ function bindAll(){
   // History
   document.querySelectorAll('.cc').forEach(d=>d.addEventListener('click',()=>{selDay=d.dataset.d;render()}));
   document.querySelectorAll('.hnav').forEach(b=>b.addEventListener('click',()=>{if(b.dataset.d==='prev'){hM--;if(hM<0){hM=11;hY--}}else{hM++;if(hM>11){hM=0;hY++}}selDay=null;render()}));
-  document.querySelectorAll('.hdel').forEach(b=>b.addEventListener('click',()=>confirmAction('Delete this entry and adjust points?',()=>deleteHistEntry(parseInt(b.dataset.idx)))));
-  document.querySelectorAll('.hedit').forEach(b=>b.addEventListener('click',()=>{
+  document.getElementById('show-recap')?.addEventListener('click',()=>showWeekRecap(false));
+  document.querySelectorAll('.hdel').forEach(b=>b.addEventListener('click',e=>{e.stopPropagation();confirmAction('Delete this entry and adjust points?',()=>deleteHistEntry(parseInt(b.dataset.idx)))}));
+  document.querySelectorAll('.hedit').forEach(b=>b.addEventListener('click',ev=>{ev.stopPropagation();
     const idx=parseInt(b.dataset.idx),e=D.pointsHistory[idx];if(!e)return;
-    modal(`<h2 style="color:var(--accent-dark);margin-bottom:12px">Edit Points</h2><p style="margin-bottom:8px;font-size:.9rem">${e.task}</p><input id="hep" type="number" value="${e.points}" class="inf"><button id="hes" class="btn bpri" style="width:100%;margin-top:8px">Save</button><button data-close class="btn bmut" style="width:100%;margin-top:8px">Cancel</button>`);
-    document.getElementById('hes')?.addEventListener('click',()=>{const v=parseInt(document.getElementById('hep').value);if(!Number.isInteger(v))return;editHistEntry(idx,v);closeM()});
+    const dateVal=e.date.slice(0,10);
+    modal(`<h2 style="color:var(--accent-dark);margin-bottom:12px">Edit Entry</h2><p style="margin-bottom:8px;font-size:.9rem">${e.task}</p><label class="rl">Points</label><input id="hep" type="number" value="${e.points}" class="inf"><label class="rl">Date</label><input id="hed" type="date" value="${dateVal}" class="inf"><button id="hes" class="btn bpri" style="width:100%;margin-top:8px">Save</button><button data-close class="btn bmut" style="width:100%;margin-top:8px">Cancel</button>`);
+    document.getElementById('hes')?.addEventListener('click',()=>{const v=parseInt(document.getElementById('hep').value);if(!Number.isInteger(v))return;const newDate=document.getElementById('hed').value;const oldDay=dateVal;if(newDate&&newDate!==dateVal){const timePart=e.date.slice(10);e.date=newDate+timePart}editHistEntry(idx,v);closeM();checkGoalForDay(oldDay);if(newDate&&newDate!==oldDay)checkGoalForDay(newDate)});
   }));
+  // History entry detail
+  document.querySelectorAll('.hent-click').forEach(b=>b.addEventListener('click',()=>showHistDetail(parseInt(b.dataset.idx))));
   // Tools
   document.querySelectorAll('.tlcard:not([disabled])').forEach(b=>b.addEventListener('click',()=>{toolsView=b.dataset.t;render()}));
   document.querySelectorAll('.tback').forEach(b=>b.addEventListener('click',()=>{toolsView='menu';render()}));
@@ -466,7 +730,7 @@ function bindAll(){
   document.getElementById('swst')?.addEventListener('click',stopSW);
   ['swt','swn','swp','swr'].forEach(x=>{document.getElementById(x)?.addEventListener('input',valSW);document.getElementById(x)?.addEventListener('change',valSW)});
   // Make task select and note mutually exclusive
-  document.getElementById('swt')?.addEventListener('change',e=>{if(e.target.value){document.getElementById('swn').value='';document.getElementById('swn').style.display='none'}else{document.getElementById('swn').style.display=''}valSW()});
+  document.getElementById('swt')?.addEventListener('change',e=>{if(e.target.value){document.getElementById('swn').value='';document.getElementById('swn').style.display='none';const t=D.tasks.find(x=>x.id===e.target.value);if(t&&t.timeBased){document.getElementById('swp').value=t.ptsAmount;document.getElementById('swr').value=t.ptsPerMinutes}}else{document.getElementById('swn').style.display=''}valSW()});
   document.getElementById('swn')?.addEventListener('input',e=>{if(e.target.value.trim()){document.getElementById('swt').value='';document.getElementById('swt').style.display='none'}else{document.getElementById('swt').style.display=''}valSW()});
   // Pomodoro
   document.getElementById('pms')?.addEventListener('click',startPM);
@@ -474,15 +738,23 @@ function bindAll(){
   document.getElementById('pmre')?.addEventListener('click',resume);
   document.getElementById('pmst')?.addEventListener('click',stopPM);
   ['pmt','pmn','pmp','pmr'].forEach(x=>{document.getElementById(x)?.addEventListener('input',valPM);document.getElementById(x)?.addEventListener('change',valPM)});
-  document.getElementById('pmt')?.addEventListener('change',e=>{if(e.target.value){document.getElementById('pmn').value='';document.getElementById('pmn').style.display='none'}else{document.getElementById('pmn').style.display=''}valPM()});
+  document.getElementById('pmt')?.addEventListener('change',e=>{if(e.target.value){document.getElementById('pmn').value='';document.getElementById('pmn').style.display='none';const t=D.tasks.find(x=>x.id===e.target.value);if(t&&t.timeBased){document.getElementById('pmp').value=t.ptsAmount;document.getElementById('pmr').value=t.ptsPerMinutes}}else{document.getElementById('pmn').style.display=''}valPM()});
   document.getElementById('pmn')?.addEventListener('input',e=>{if(e.target.value.trim()){document.getElementById('pmt').value='';document.getElementById('pmt').style.display='none'}else{document.getElementById('pmt').style.display=''}valPM()});
   // Techniques
   document.querySelectorAll('.ttog').forEach(b=>b.addEventListener('click',()=>{expandedTech=expandedTech===b.dataset.id?null:b.dataset.id;render()}));
-  document.querySelectorAll('.tlog').forEach(b=>b.addEventListener('click',()=>{const t=D.techniques.find(x=>x.id===b.dataset.id);if(!t)return;const n=document.querySelector(`.tni[data-id="${b.dataset.id}"]`);t.entries.push({date:new Date().toISOString(),note:n?.value||'',thumbsUp:b.dataset.u==='1'});save();render();showUndo(()=>{t.entries.pop();save();render()})}));
+  document.querySelectorAll('.tlog').forEach(b=>b.addEventListener('click',()=>{const t=D.techniques.find(x=>x.id===b.dataset.id);if(!t)return;const n=document.querySelector(`.tni[data-id="${b.dataset.id}"]`);t.entries.push({date:localISO(),note:n?.value||'',thumbsUp:b.dataset.u==='1'});save();render();showUndo(()=>{t.entries.pop();save();render()})}));
   document.querySelectorAll('.tdelt').forEach(b=>b.addEventListener('click',()=>confirmAction('Delete this technique?',()=>{D.techniques=D.techniques.filter(t=>t.id!==b.dataset.id);expandedTech=null;save();render()})));
+  document.querySelectorAll('.tdel-entry').forEach(b=>b.addEventListener('click',()=>{const t=D.techniques.find(x=>x.id===b.dataset.tid);if(!t)return;t.entries.splice(parseInt(b.dataset.ei),1);save();render()}));
   document.getElementById('tna')?.addEventListener('click',()=>{const n=document.getElementById('tnn')?.value.trim();if(!n)return;D.techniques.push({id:id(),name:n,entries:[]});save();render()});
   // Metrics
-  document.querySelectorAll('.mname').forEach(b=>b.addEventListener('click',()=>{expandedMetric=expandedMetric===b.dataset.id?null:b.dataset.id;render()}));
+  document.querySelectorAll('.mname').forEach(b=>b.addEventListener('click',()=>{expandedMetric=expandedMetric===b.dataset.id?null:b.dataset.id;metMonth=new Date().getMonth();metYear=new Date().getFullYear();render()}));
+  document.querySelectorAll('.met-prev').forEach(b=>b.addEventListener('click',()=>{metMonth--;if(metMonth<0){metMonth=11;metYear--}render()}));
+  document.querySelectorAll('.met-next').forEach(b=>b.addEventListener('click',()=>{metMonth++;if(metMonth>11){metMonth=0;metYear++}render()}));
+  // Correlation
+  document.getElementById('corr-a')?.addEventListener('change',e=>{corrA=e.target.value;render()});
+  document.getElementById('corr-b')?.addEventListener('change',e=>{corrB=e.target.value;render()});
+  document.getElementById('corr-same')?.addEventListener('click',()=>{corrLag='same';render()});
+  document.getElementById('corr-next')?.addEventListener('click',()=>{corrLag='next';render()});
   document.querySelectorAll('.mlog').forEach(b=>b.addEventListener('click',()=>{
     if(!D.metrics)D.metrics=[];
     const m=D.metrics.find(x=>x.id===b.dataset.id);if(!m)return;
@@ -496,13 +768,31 @@ function bindAll(){
 }
 
 // ===== FORM HELPERS =====
+function rQuickLog(){return `<div class="fcard" style="margin-top:12px"><h3 style="margin-bottom:12px;color:var(--accent-dark)">⚡ Quick Log</h3><input id="qln" type="text" placeholder="What did you do?" class="inf"><input id="qlp" type="number" min="1" placeholder="Points" class="inf"><label class="chlbl"><input id="qltb" type="checkbox"> Time-based</label><div id="qltw" style="display:none"><div style="display:flex;gap:6px;align-items:center;margin-bottom:8px"><input id="qlh" type="number" min="0" class="inf" style="width:60px;margin:0;text-align:center"><span class="rl">hours</span><input id="qlm" type="number" min="0" class="inf" style="width:60px;margin:0;text-align:center"><span class="rl">minutes</span></div></div><div id="qle" class="err"></div><button id="qls" class="btn bsuc" style="width:100%;opacity:.5" disabled>Log it!</button></div>`}
+function bindQuickLog(){
+  document.getElementById('qltb')?.addEventListener('change',e=>{document.getElementById('qltw').style.display=e.target.checked?'':'none';valQL()});
+  ['qln','qlp','qlh','qlm'].forEach(x=>document.getElementById(x)?.addEventListener('input',valQL));
+  document.getElementById('qls')?.addEventListener('click',()=>{
+    const name=document.getElementById('qln').value.trim(),pts=parseInt(document.getElementById('qlp').value),tb=document.getElementById('qltb').checked;
+    if(!name||!Number.isInteger(pts)||pts<1)return;
+    const h={date:localISO(),task:name,taskId:null,points:pts,type:'earned'};
+    if(tb){const hr=parseInt(document.getElementById('qlh')?.value)||0,mn=parseInt(document.getElementById('qlm')?.value)||0;h.minutes=hr*60+mn}
+    D.points+=pts;D.pointsHistory.push(h);saveL();debouncedPush();confetti();checkGoal();render();
+  });
+}
+function valQL(){
+  const name=document.getElementById('qln')?.value.trim(),pts=parseInt(document.getElementById('qlp')?.value);
+  const btn=document.getElementById('qls'),err=document.getElementById('qle');if(!btn||!err)return;
+  let ok=true,msg='';if(!name){ok=false;msg='Name required'}else if(!Number.isInteger(pts)||pts<1){ok=false;msg='Valid points required'}
+  err.textContent=msg;err.style.display=ok?'none':'block';btn.disabled=!ok;btn.style.opacity=ok?'1':'.5';
+}
 function bindAddForm(){
   document.getElementById('tft')?.addEventListener('change',e=>{document.getElementById('tfc').style.display=e.target.value==='recurring'?'block':'none';valTF()});
   document.getElementById('tftb')?.addEventListener('change',e=>{document.getElementById('tffw').style.display=e.target.checked?'none':'';document.getElementById('tftw').style.display=e.target.checked?'':'none';valTF()});
   ['tfn','tfp','tfpa','tfpp','tfcd'].forEach(x=>document.getElementById(x)?.addEventListener('input',valTF));
   document.getElementById('tfs')?.addEventListener('click',()=>{
     const n=document.getElementById('tfn').value.trim(),ty=document.getElementById('tft').value,tb=document.getElementById('tftb').checked,cat=document.getElementById('tfcat').value;
-    const task={id:id(),name:n,type:ty,timeBased:tb,category:cat};
+    const task={id:id(),name:n,type:ty,timeBased:tb,category:cat,createdAt:localISO()};
     if(tb){task.ptsAmount=parseInt(document.getElementById('tfpa').value);task.ptsPerMinutes=parseInt(document.getElementById('tfpp').value);task.points=task.ptsAmount}
     else task.points=parseInt(document.getElementById('tfp').value);
     if(ty==='recurring')task.cadenceDays=parseInt(document.getElementById('tfcd').value);
@@ -566,7 +856,7 @@ function startTick(){
       if(e>=tgt){
         if(T.phase==='work'){
           const exactPts=T.workDur*60*T.pts/(T.per*60),pts=awardTimerPts(exactPts);
-          if(pts>0){const lbl=T.note||D.tasks.find(t=>t.id===T.taskId)?.name||'🍅 Pomodoro';D.points+=pts;D.pointsHistory.push({date:new Date().toISOString(),task:'🍅 '+lbl,taskId:T.taskId||null,points:pts,type:'earned',minutes:T.workDur});saveL();debouncedPush();confetti();toast(`🍅 +${pts} pts! Break time!`);checkGoal()}
+          if(pts>0){const lbl=T.note||D.tasks.find(t=>t.id===T.taskId)?.name||'🍅 Pomodoro';D.points+=pts;D.pointsHistory.push({date:localISO(),task:'🍅 '+lbl,taskId:T.taskId||null,points:pts,type:'earned',minutes:T.workDur,seconds:T.workDur*60,pomo:`${T.workDur}/${T.breakDur}`,rate:`${T.pts} points per ${T.per} minute${T.per>1?'s':''}`});saveL();debouncedPush();confetti();toast(`🍅 +${pts} pts! Break time!`);checkGoal()}
           T.phase='break'}else{T.phase='work';toast('💪 Break over!')}
         T.elapsed=0;T.start=Date.now()}}
     // Only update timer display
@@ -576,29 +866,139 @@ function startTick(){
 function stopSW(){
   const e=elapsed();
   const label=T.note||D.tasks.find(t=>t.id===T.taskId)?.name||'Stopwatch';
+  const taskId=T.taskId;
   T.running=false;T.paused=false;clearInterval(tickInterval);
   const mins=Math.floor(e/60),exactPts=e*T.pts/(T.per*60),pts=awardTimerPts(exactPts);
-  if(pts>0){D.points+=pts;D.pointsHistory.push({date:new Date().toISOString(),task:'⏱️ '+label,taskId:T.taskId||null,points:pts,type:'earned',minutes:mins});saveL();debouncedPush();confetti();checkGoal();
-    T={running:false,paused:false,mode:null,start:null,elapsed:0,workDur:T.workDur,breakDur:T.breakDur,phase:'work',note:'',taskId:'',pts:1,per:15};render();showCongratsModal(label,e,pts)}
-  else{if(mins>0)toast(`⏱️ ${mins}min (fractional points saved for next time)`);
-    saveL();T={running:false,paused:false,mode:null,start:null,elapsed:0,workDur:T.workDur,breakDur:T.breakDur,phase:'work',note:'',taskId:'',pts:1,per:15};render()}}
-
+  if(pts>0){D.points+=pts;checkGoal()}
+  D.pointsHistory.push({date:localISO(),task:'⏱️ '+label,taskId:taskId||null,points:pts,type:'earned',minutes:mins,seconds:e,rate:`${T.pts} points per ${T.per} minute${T.per>1?'s':''}`});
+  saveL();debouncedPush();
+  T={running:false,paused:false,mode:null,start:null,elapsed:0,workDur:T.workDur,breakDur:T.breakDur,phase:'work',note:'',taskId:'',pts:1,per:15};
+  // Don't render yet - keep timer display showing until popup is dismissed
+  const linkedTask=taskId?D.tasks.find(x=>x.id===taskId):null;
+  setTimeout(()=>{
+    if(linkedTask&&(linkedTask.type==='one-time'||linkedTask.type==='recurring')&&!linkedTask.completed){
+      modal(`<div style="text-align:center"><p style="margin-bottom:12px">Mark <b>${linkedTask.name}</b> as complete?</p><p style="font-size:.8rem;color:var(--text-dim);margin-bottom:12px">(+10% completion bonus!)</p><div style="display:flex;gap:8px"><button id="qc-yes" class="btn bsuc" style="flex:1">Yes, done!</button><button id="qc-no" class="btn bmut" style="flex:1">Not yet</button></div></div>`);
+      document.getElementById('qc-yes')?.addEventListener('click',()=>{
+        if(linkedTask.type==='one-time'){linkedTask.completed=true;linkedTask.completedAt=localISO()}
+        else if(linkedTask.type==='recurring'){linkedTask.lastCompleted=localISO()}
+        // Award 10% completion bonus based on ALL points earned for this task since last completion
+        const allPtsForTask=D.pointsHistory.filter(h=>h.taskId===taskId&&h.type==='earned'&&!h.task.includes('✅')).reduce((s,h)=>s+h.points,0);
+        const bonus=Math.floor(allPtsForTask*0.1);
+        if(bonus>0){D.points+=bonus}
+        const lastEntry=D.pointsHistory[D.pointsHistory.length-1];
+        if(lastEntry&&lastEntry.taskId===taskId){lastEntry.task+=' ✅';lastEntry.points+=bonus;lastEntry.bonus=bonus}
+        saveL();debouncedPush();closeM();render();setTimeout(()=>showCongratsModal(label,e,pts+bonus),200)});
+      document.getElementById('qc-no')?.addEventListener('click',()=>{closeM();render();setTimeout(()=>showCongratsModal(label,e,pts),200)});
+    } else {render();showCongratsModal(label,e,pts)}
+  },300)}
 function stopPM(){
   const e=elapsed();
   const label=T.note||D.tasks.find(t=>t.id===T.taskId)?.name||'Pomodoro';
+  const taskId=T.taskId;
   T.running=false;T.paused=false;clearInterval(tickInterval);
+  let pts=0,mins=0;
   if(T.phase==='work'){
-    const mins=Math.floor(e/60),exactPts=e*T.pts/(T.per*60),pts=awardTimerPts(exactPts);
-    if(pts>0){D.points+=pts;D.pointsHistory.push({date:new Date().toISOString(),task:'🍅 '+label,taskId:T.taskId||null,points:pts,type:'earned',minutes:mins});saveL();debouncedPush();checkGoal();
-      T={running:false,paused:false,mode:null,start:null,elapsed:0,workDur:T.workDur,breakDur:T.breakDur,phase:'work',note:'',taskId:'',pts:1,per:15};render();showCongratsModal(label,e,pts);return}
-    else{saveL()}
+    mins=Math.floor(e/60);const exactPts=e*T.pts/(T.per*60);pts=awardTimerPts(exactPts);
+    if(pts>0){D.points+=pts;checkGoal()}
+    D.pointsHistory.push({date:localISO(),task:'🍅 '+label,taskId:taskId||null,points:pts,type:'earned',minutes:mins,seconds:e,pomo:`${T.workDur}/${T.breakDur}`,rate:`${T.pts} points per ${T.per} minute${T.per>1?'s':''}`});
+    saveL();debouncedPush();
   }
-  T={running:false,paused:false,mode:null,start:null,elapsed:0,workDur:T.workDur,breakDur:T.breakDur,phase:'work',note:'',taskId:'',pts:1,per:15};render()}
+  T={running:false,paused:false,mode:null,start:null,elapsed:0,workDur:T.workDur,breakDur:T.breakDur,phase:'work',note:'',taskId:'',pts:1,per:15};
+  const linkedTask=taskId?D.tasks.find(x=>x.id===taskId):null;
+  setTimeout(()=>{
+    if(linkedTask&&(linkedTask.type==='one-time'||linkedTask.type==='recurring')&&!linkedTask.completed){
+      modal(`<div style="text-align:center"><p style="margin-bottom:12px">Mark <b>${linkedTask.name}</b> as complete?</p><p style="font-size:.8rem;color:var(--text-dim);margin-bottom:12px">(+10% completion bonus!)</p><div style="display:flex;gap:8px"><button id="qc-yes" class="btn bsuc" style="flex:1">Yes, done!</button><button id="qc-no" class="btn bmut" style="flex:1">Not yet</button></div></div>`);
+      document.getElementById('qc-yes')?.addEventListener('click',()=>{
+        if(linkedTask.type==='one-time'){linkedTask.completed=true;linkedTask.completedAt=localISO()}
+        else if(linkedTask.type==='recurring'){linkedTask.lastCompleted=localISO()}
+        const allPtsForTask=D.pointsHistory.filter(h=>h.taskId===taskId&&h.type==='earned'&&!h.task.includes('✅')).reduce((s,h)=>s+h.points,0);
+        const bonus=Math.floor(allPtsForTask*0.1);
+        if(bonus>0){D.points+=bonus}
+        const lastEntry=D.pointsHistory[D.pointsHistory.length-1];
+        if(lastEntry&&lastEntry.taskId===taskId){lastEntry.task+=' ✅';lastEntry.points+=bonus;lastEntry.bonus=bonus}
+        saveL();debouncedPush();closeM();render();setTimeout(()=>showCongratsModal(label,e,pts+bonus),200)});
+      document.getElementById('qc-no')?.addEventListener('click',()=>{closeM();render();setTimeout(()=>showCongratsModal(label,e,pts),200)});
+    } else {render();showCongratsModal(label,e,pts)}
+  },300)}
 
 // ===== INIT =====
+function showGoodMorning(){
+  // Show if no daily goal set for today
+  if(D.settings.dailyGoal>0)return;
+  const hr=new Date().getHours();
+  const greeting=hr<12?'Good morning':hr<17?'Good afternoon':'Good evening';
+  const emoji=hr<12?'☀️':hr<17?'🌤️':'🌙';
+  const yesterday=new Date();yesterday.setDate(yesterday.getDate()-1);const yd=yesterday.toISOString().slice(0,10);
+  const yPts=ptsForDay(yd);
+  // Gather tasks for today: recurring due + one-time, fill with evergreen if few
+  const vis=visibleTasks();
+  const due=vis.filter(x=>x.type==='recurring'||x.type==='one-time');
+  let suggestions=due.slice(0,5);
+  if(suggestions.length<5){const eg=vis.filter(x=>x.type==='evergreen').slice(0,5-suggestions.length);suggestions=suggestions.concat(eg)}
+  const taskList=suggestions.length?suggestions.map(x=>`<div style="font-size:.9rem;padding:2px 0;">• ${x.name}</div>`).join(''):'<div style="font-size:.9rem;color:var(--text-dim)">Nothing specific — check your list!</div>';
+  modal(`<div style="text-align:center">
+    <div style="font-size:2rem;margin-bottom:8px">${emoji}</div>
+    <h2 style="color:var(--accent-dark);margin-bottom:12px">${greeting}!</h2>
+    ${yPts>0?`<p style="margin-bottom:6px">Yesterday you earned <b>${yPts} points</b>.</p>`:''}
+    ${D.streak>1?`<p style="margin-bottom:6px">🔥 You're on a <b>${D.streak} day</b> streak!</p>`:''}
+    <p style="margin-bottom:6px;font-size:.85rem;color:var(--text-dim)">Here are some tasks you can do today:</p>
+    <div style="margin-bottom:12px;text-align:left;padding-left:12px">${taskList}</div>
+    <button id="gm-goal" class="btn bpri" style="width:100%;margin-top:8px">Set today's goal 🎯</button>
+    <button data-close class="btn bmut" style="width:100%;margin-top:8px">Skip for now</button>
+  </div>`);
+  document.getElementById('gm-goal')?.addEventListener('click',()=>{closeM();showGoalEditModal()});
+}
+
+function getWeekRecap(){
+  // Last Mon-Sun
+  const now=new Date();const dayOfWeek=now.getDay();
+  const lastSun=new Date(now);lastSun.setDate(now.getDate()-(dayOfWeek||7));
+  const lastMon=new Date(lastSun);lastMon.setDate(lastSun.getDate()-6);
+  const monStr=lastMon.toISOString().slice(0,10),sunStr=lastSun.toISOString().slice(0,10);
+  const entries=D.pointsHistory.filter(h=>h.date.slice(0,10)>=monStr&&h.date.slice(0,10)<=sunStr);
+  const earned=entries.filter(h=>h.type==='earned').reduce((s,h)=>s+h.points,0);
+  const tasks=entries.filter(h=>h.type==='earned'&&h.task!=='🎯 Daily goal bonus').length;
+  const mins=entries.reduce((s,h)=>s+(h.minutes||0),0);
+  const goalDays=Object.keys(D.dailyGoalLog).filter(d=>d>=monStr&&d<=sunStr&&D.dailyGoalLog[d]&&D.dailyGoalLog[d]!==true).length;
+  const metDays=Object.keys(D.dailyGoalLog).filter(d=>d>=monStr&&d<=sunStr&&D.dailyGoalLog[d]&&D.dailyGoalLog[d]!==true&&ptsForDay(d)>=D.dailyGoalLog[d]).length;
+  return{monStr,sunStr,earned,tasks,mins,goalDays,metDays};
+}
+
+function showWeekRecap(auto){
+  const r=getWeekRecap();
+  if(auto){if(D._lastRecap===r.monStr)return;D._lastRecap=r.monStr;saveL()}
+  modal(`<div style="text-align:center">
+    <div style="font-size:2rem;margin-bottom:8px">📊</div>
+    <h2 style="color:var(--accent-dark);margin-bottom:12px">Weekly Recap</h2>
+    <p style="font-size:.8rem;color:var(--text-dim);margin-bottom:12px">${new Date(r.monStr+'T12:00:00').toLocaleDateString('default',{month:'short',day:'numeric'})} – ${new Date(r.sunStr+'T12:00:00').toLocaleDateString('default',{month:'short',day:'numeric'})}</p>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px">
+      <div class="sbox"><div class="sn">${r.earned}</div><div class="sl">Points earned</div></div>
+      <div class="sbox"><div class="sn">${r.tasks}</div><div class="sl">Tasks done</div></div>
+      <div class="sbox"><div class="sn">${r.mins>0?Math.round(r.mins/60*10)/10+'h':'—'}</div><div class="sl">Hours logged</div></div>
+      <div class="sbox"><div class="sn">${r.metDays}/${r.goalDays}</div><div class="sl">Goals hit</div></div>
+    </div>
+    <button data-close class="btn bpri" style="width:100%;">Nice!</button>
+  </div>`);
+}
+
+function exportData(){
+  const blob=new Blob([JSON.stringify(D,null,2)],{type:'application/json'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');a.href=url;a.download='productivity_tracker_backup_'+today()+'.json';
+  document.body.appendChild(a);a.click();document.body.removeChild(a);URL.revokeObjectURL(url);
+}
+
 loadL();updateStreak();
-if(D.settings.gistId&&D.settings.token)gistPull().then(()=>{updateStreak();render()});
-else render();
+if(D.settings.gistId&&D.settings.token)gistPull().then(()=>{updateStreak();render();showStartupModals()});
+else{render();showStartupModals()}
+function showStartupModals(){
+  // Reset daily goal each new day
+  const t=today();
+  if(D._lastDay!==t){D.settings.dailyGoal=0;D._lastDay=t;saveL()}
+  const dow=new Date().getDay();
+  if(dow===1&&D._lastRecap!==getWeekRecap().monStr){showWeekRecap(true);return}
+  showGoodMorning();
+}
 // Push when app is backgrounded/closed
 document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='hidden'){saveL();gistPush()}});
 window.addEventListener('pagehide',()=>{saveL();gistPush()});
@@ -641,16 +1041,18 @@ window.addEventListener('pagehide',()=>{saveL();gistPush()});
 .calbox{background:var(--surface);border-radius:var(--radius);padding:12px 8px;box-shadow:var(--shadow);border:1px solid var(--border)}
 .cgrid{display:grid;grid-template-columns:repeat(7,1fr);gap:2px}
 .ch{text-align:center;font-size:.7rem;color:var(--text-dim);font-weight:600;padding:4px 0}
-.cc{text-align:center;padding:6px 2px;border-radius:8px;cursor:pointer;height:40px;display:flex;flex-direction:column;align-items:center;justify-content:center}
+.cc{text-align:center;padding:6px 2px;border-radius:8px;cursor:pointer;height:40px;display:flex;flex-direction:column;align-items:center;justify-content:center;border:2px solid transparent}
 .cc:hover{background:var(--card-neutral)}
 .cn{font-size:.8rem;display:block}
 .cdot{display:block;font-size:.55rem;color:var(--accent-dark);margin-top:1px;line-height:1}
 .cdotw{color:rgba(255,255,255,.9)}
 .cact{background:var(--card-task)}
+.cgoal{background:#d1fae5}
+.cgoal .cn{font-weight:600;color:var(--success-dark)}
 .cact .cn{font-weight:600}
-.csel{background:var(--accent)!important;color:#fff!important}
-.ctd{border:2px solid var(--accent-dark)}
-.hent{display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--border)}
+.csel{background:var(--accent)!important;color:#fff!important;border-color:var(--accent)!important}
+.ctd{border-color:var(--accent-dark)!important;font-weight:bold}
+.hent{display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--border);cursor:pointer}
 .hent:last-child{border-bottom:none}
 .hpts{font-weight:bold;font-size:.85rem}
 .hpe{color:var(--success-dark)}
