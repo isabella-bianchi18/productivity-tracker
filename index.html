@@ -22,10 +22,11 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-seri
 <div id="modal-container"></div>
 <script>
 // ===== DATA =====
-const APP_VERSION='2.0.0';
-const DEFAULT_DATA={tasks:[],points:0,pointsHistory:[],rewards:[],techniques:[],metrics:[],settings:{gistId:'',token:'',dailyGoal:0},dailyGoalLog:{},streak:0,fractional:0};
+const APP_VERSION='2.1.0';
+const DEFAULT_DATA={tasks:[],points:0,pointsHistory:[],rewards:[],techniques:[],metrics:[],settings:{gistId:'',token:'',dailyGoal:0},dailyGoalLog:{},streak:0,fractional:0,groupOrder:[]};
 let D=JSON.parse(JSON.stringify(DEFAULT_DATA));
 let view='tasks',toolsView='menu',expandedTech=null,inlineMinId=null,categoryFilter='all',recurSort='custom';
+const collapsedGroups=new Set();
 let T={running:false,paused:false,mode:null,start:null,elapsed:0,workDur:25,breakDur:5,phase:'work',note:'',taskId:'',pts:1,per:15};
 let toastTimer=null,tickInterval=null;
 
@@ -52,6 +53,81 @@ const CAT_COLORS={work:'#dbeafe',home:'#d1fae5',growth:'#fef3c7'};
 const CAT_LABELS={work:'💼 Work',home:'🏠 Home',growth:'🌱 Growth'};
 function catBg(cat){return CAT_COLORS[cat]||'var(--card-task)'}
 
+function getGoalProgress(task){
+  if(!task.goal)return null;
+  const now=new Date();let periodStart;
+  if(task.goal.period==='hourly'){periodStart=new Date(now);periodStart.setMinutes(0,0,0)}
+  else if(task.goal.period==='daily'){periodStart=new Date(now.getFullYear(),now.getMonth(),now.getDate())}
+  else if(task.goal.period==='weekly'){const d=new Date(now);d.setDate(d.getDate()-d.getDay()+1);periodStart=new Date(d.getFullYear(),d.getMonth(),d.getDate())}
+  else if(task.goal.period==='monthly'){periodStart=new Date(now.getFullYear(),now.getMonth(),1)}
+  else if(task.goal.period==='annually'){periodStart=new Date(now.getFullYear(),0,1)}
+  const psStr=periodStart.toISOString().slice(0,task.goal.period==='hourly'?13:10);
+  const entries=D.pointsHistory.filter(h=>h.taskId===task.id&&h.type==='earned'&&h.date.slice(0,psStr.length)>=psStr);
+  const current=task.timeBased?entries.reduce((s,h)=>s+(h.minutes||0),0):task.countBased?entries.reduce((s,h)=>s+(h.count||0),0):entries.length;
+  return{current,target:task.goal.target,pct:Math.min(100,Math.round(current/task.goal.target*100)),period:task.goal.period};
+}
+
+function getGoalStreak(task){
+  if(!task.goal)return 0;
+  const skips=new Set(task.goalSkips||[]);
+  const now=new Date();let streak=0;
+  // Determine the start of the CURRENT period (to exclude from backward loop)
+  let currentPeriodStart;
+  if(task.goal.period==='daily'){currentPeriodStart=today()}
+  else if(task.goal.period==='weekly'){const wd=new Date(now);wd.setDate(wd.getDate()-wd.getDay()+1);currentPeriodStart=new Date(wd.getFullYear(),wd.getMonth(),wd.getDate()).toISOString().slice(0,10)}
+  else if(task.goal.period==='monthly'){currentPeriodStart=new Date(now.getFullYear(),now.getMonth(),1).toISOString().slice(0,10)}
+  // Start backward loop from the period BEFORE the current one
+  let d=new Date(now);
+  if(task.goal.period==='daily'){d.setDate(d.getDate()-1)}
+  else if(task.goal.period==='weekly'){d.setDate(d.getDate()-d.getDay()+1);d.setDate(d.getDate()-1)}
+  else if(task.goal.period==='monthly'){d.setDate(0)}
+  for(let i=0;i<365;i++){
+    let pStart,psStr;
+    if(task.goal.period==='daily'){pStart=new Date(d.getFullYear(),d.getMonth(),d.getDate());d.setDate(d.getDate()-1)}
+    else if(task.goal.period==='weekly'){const wd=new Date(d);wd.setDate(wd.getDate()-wd.getDay()+1);pStart=new Date(wd.getFullYear(),wd.getMonth(),wd.getDate());d.setDate(d.getDate()-7)}
+    else if(task.goal.period==='monthly'){pStart=new Date(d.getFullYear(),d.getMonth(),1);d.setMonth(d.getMonth()-1)}
+    else break;
+    psStr=pStart.toISOString().slice(0,10);
+    // Don't double-count the current period
+    if(psStr===currentPeriodStart)continue;
+    // Skip days preserve streak
+    if(skips.has(psStr)){streak++;continue}
+    const pEndD=task.goal.period==='daily'?new Date(pStart.getTime()+864e5):task.goal.period==='weekly'?new Date(pStart.getTime()+7*864e5):new Date(pStart.getFullYear(),pStart.getMonth()+1,1);
+    const entries=D.pointsHistory.filter(h=>h.taskId===task.id&&h.type==='earned'&&h.date.slice(0,10)>=psStr&&h.date.slice(0,10)<pEndD.toISOString().slice(0,10));
+    const val=task.timeBased?entries.reduce((s,h)=>s+(h.minutes||0),0):task.countBased?entries.reduce((s,h)=>s+(h.count||0),0):entries.length;
+    if(val>=task.goal.target)streak++;else break;
+  }
+  // Add +1 if the CURRENT period is also completed
+  if(!skips.has(currentPeriodStart)){
+    let todayStart=currentPeriodStart,todayEnd;
+    if(task.goal.period==='daily'){todayEnd=new Date(new Date(todayStart+'T00:00:00').getTime()+864e5).toISOString().slice(0,10)}
+    else if(task.goal.period==='weekly'){todayEnd=new Date(new Date(todayStart+'T00:00:00').getTime()+7*864e5).toISOString().slice(0,10)}
+    else if(task.goal.period==='monthly'){const ps=new Date(todayStart+'T00:00:00');todayEnd=new Date(ps.getFullYear(),ps.getMonth()+1,1).toISOString().slice(0,10)}
+    if(todayStart&&todayEnd){
+      const todayEntries=D.pointsHistory.filter(h=>h.taskId===task.id&&h.type==='earned'&&h.date.slice(0,10)>=todayStart&&h.date.slice(0,10)<todayEnd);
+      const todayVal=task.timeBased?todayEntries.reduce((s,h)=>s+(h.minutes||0),0):task.countBased?todayEntries.reduce((s,h)=>s+(h.count||0),0):todayEntries.length;
+      if(todayVal>=task.goal.target)streak++;
+    }
+  } else {streak++}
+  return streak;
+}
+
+// Helper: streak for daily tasks without goals (start from yesterday, add today if done)
+function getDailyStreak(task){
+  let streak=0;const now=new Date();let d=new Date(now);d.setDate(d.getDate()-1);
+  for(let i=0;i<365;i++){
+    const ds=d.toISOString().slice(0,10);
+    const hasEntry=D.pointsHistory.some(h=>h.taskId===task.id&&h.type==='earned'&&h.date.slice(0,10)===ds);
+    if(hasEntry){streak++}else break;
+    d.setDate(d.getDate()-1);
+  }
+  // Add today if also completed
+  const todayStr=today();
+  const doneToday=D.pointsHistory.some(h=>h.taskId===task.id&&h.type==='earned'&&h.date.slice(0,10)===todayStr);
+  if(doneToday)streak++;
+  return streak;
+}
+
 // Award points from timer, accumulating fractional remainders
 function awardTimerPts(exactPts){
   D.fractional=(D.fractional||0)+exactPts;
@@ -59,8 +135,8 @@ function awardTimerPts(exactPts){
   D.fractional-=whole;
   return whole;
 }
-function visibleTasks(){const n=new Date();return D.tasks.filter(t=>{if(t.archived)return false;if(t.type==='one-time')return!t.completed;if(t.type==='recurring'){if(!t.lastCompleted)return true;return(n-new Date(t.lastCompleted))/864e5>=t.cadenceDays}return true})}
-function sleepingTasks(){const n=new Date();return D.tasks.filter(t=>t.type==='recurring'&&t.lastCompleted&&(n-new Date(t.lastCompleted))/864e5<t.cadenceDays).map(t=>({...t,left:Math.ceil(t.cadenceDays-(new Date()-new Date(t.lastCompleted))/864e5)})).sort((a,b)=>a.left-b.left)}
+function visibleTasks(){const n=new Date();const td=today();return D.tasks.filter(t=>{if(t.archived)return false;if(t.type==='one-time')return!t.completed;if(t.type==='recurring'){if(!t.lastCompleted)return true;return(n-new Date(t.lastCompleted))/864e5>=t.cadenceDays}if(t.type==='daily'){if(t.goalSkips&&t.goalSkips.includes(td))return false;if(!t.lastCompleted){const completedToday=D.pointsHistory.some(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td&&h.task.includes('✅'));return!completedToday}const completedToday=D.pointsHistory.some(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td&&h.task.includes('✅'));return!completedToday}return true})}
+function sleepingTasks(){const n=new Date();const td=today();return D.tasks.filter(t=>{if(t.archived)return false;if(t.type==='recurring'&&t.lastCompleted&&(n-new Date(t.lastCompleted))/864e5<t.cadenceDays)return true;if(t.type==='daily'){const completedToday=D.pointsHistory.some(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td&&h.task.includes('✅'));if(completedToday)return true;const skippedToday=t.goalSkips&&t.goalSkips.includes(td);if(skippedToday)return true}return false}).map(t=>{if(t.type==='daily'){const skippedToday=t.goalSkips&&t.goalSkips.includes(td);return{...t,left:skippedToday?'skipped':1}}return{...t,left:Math.ceil(t.cadenceDays-(new Date()-new Date(t.lastCompleted))/864e5)}}).sort((a,b)=>(typeof a.left==='string'?0:a.left)-(typeof b.left==='string'?0:b.left))}
 function checkGoal(){const t=today(),g=D.settings.dailyGoal;if(!g||g<=0)return;
   // Store what goal was set for today
   if(!D.dailyGoalLog[t]||D.dailyGoalLog[t]===true)D.dailyGoalLog[t]=g;
@@ -106,13 +182,14 @@ function completeTask(tid,mins,finished){
   const task=D.tasks.find(t=>t.id===tid);if(!task)return;
   const now=localISO(),prev=JSON.parse(JSON.stringify(task)),prevP=D.points;
   // Only mark complete if not time-based, or if finished=true for time-based
-  const shouldComplete=!task.timeBased||(task.timeBased&&finished!==false);
+  const shouldComplete=(!task.timeBased&&!task.countBased)||((task.timeBased||task.countBased)&&finished!==false);
   if(shouldComplete){
     if(task.type==='one-time'){task.completed=true;task.completedAt=now}
-    else if(task.type==='recurring'){task.lastCompleted=now}
+    else if(task.type==='recurring'||task.type==='daily'){task.lastCompleted=now}
   }
   let pts=task.points||0;
   if(task.timeBased&&mins)pts=Math.floor(mins*task.ptsAmount/task.ptsPerMinutes);
+  if(task.countBased&&mins)pts=Math.floor(mins*task.ptsAmount/task.ptsPerCount);
   if(pts<0)pts=0;
   // Completion bonus: 10% of ALL points earned for this task since last completion
   let bonus=0;
@@ -121,14 +198,20 @@ function completeTask(tid,mins,finished){
     bonus=Math.floor((prevEarned+pts)*0.1);
   }
   D.points+=pts+bonus;
-  const h={date:now,task:task.name+(bonus>0?' ✅':''),taskId:task.id,points:pts+bonus,type:'earned',bonus:bonus,category:task.category||'',taskType:task.type};
-  if(mins)h.minutes=mins;
+  const h={date:now,task:task.name+((task.timeBased&&finished===false)||(task.countBased&&finished===false)?'':' ✅'),taskId:task.id,points:pts+bonus,type:'earned',bonus:bonus,category:task.category||'',taskType:task.type};
+  if(task.timeBased&&mins)h.minutes=mins;
+  if(task.countBased&&mins){h.count=mins;h.countUnit=task.countUnit}
   if(task.timeBased){h.rate=`${task.ptsAmount} points per ${task.ptsPerMinutes} minute${task.ptsPerMinutes>1?'s':''}`}
+  if(task.countBased){h.rate=`${task.ptsAmount} points per ${task.ptsPerCount} ${task.countUnit}`}
   const prevHistLen=D.pointsHistory.length;
   D.pointsHistory.push(h);
-  inlineMinId=null;saveL();debouncedPush();confetti();checkGoal();render();
+  inlineMinId=null;saveL();debouncedPush();confetti();checkGoal();
+  // Check if task goal was just met
+  if(task.goal){const gp=getGoalProgress(task);if(gp&&gp.pct>=100){const contribution=task.timeBased?(mins||0):task.countBased?(mins||0):1;if(gp.current-contribution<task.goal.target)setTimeout(()=>{const tc=document.getElementById('toast-container');const goalToast=document.createElement('div');goalToast.className='toast';goalToast.style.cssText='bottom:auto;top:80px';goalToast.textContent='🎯 '+task.name+' goal hit!';tc.appendChild(goalToast);setTimeout(()=>goalToast.remove(),3000)},500)}}
+  render();
   const bonusMsg=bonus>0?` (includes +${bonus} completion bonus!)`:'';
   showUndo(()=>{Object.assign(task,prev);D.points=prevP;D.pointsHistory.length=prevHistLen;saveL();debouncedPush();render()});
+  setTimeout(checkAchievements,600);
 }
 function deleteTask(tid){D.tasks=D.tasks.filter(t=>t.id!==tid);save();render()}
 function moveTask(tid,dir){
@@ -155,7 +238,7 @@ function deleteHistEntry(idx){
   // If this was a recurring or one-time task completion, reset state
   if(e.taskId){
     const task=D.tasks.find(t=>t.id===e.taskId);
-    if(task&&task.type==='recurring'){
+    if(task&&(task.type==='recurring'||task.type==='daily')){
       const remaining=D.pointsHistory.filter(h=>h.taskId===e.taskId&&h.type==='earned');
       if(remaining.length>0){task.lastCompleted=remaining[remaining.length-1].date}
       else{task.lastCompleted=null}
@@ -186,7 +269,7 @@ function confetti(){const cv=document.getElementById('confetti-canvas'),cx=cv.ge
 
 // ===== TOAST =====
 function toast(msg){const c=document.getElementById('toast-container');c.innerHTML=`<div class="toast">${msg}</div>`;if(toastTimer)clearTimeout(toastTimer);toastTimer=setTimeout(()=>{c.innerHTML='';toastTimer=null},3500)}
-function showUndo(fn){const c=document.getElementById('toast-container'),uid='u'+id();c.innerHTML=`<div class="toast">✅ Done! <button id="${uid}" class="undo-btn">Undo</button></div>`;if(toastTimer)clearTimeout(toastTimer);setTimeout(()=>document.getElementById(uid)?.addEventListener('click',()=>{clearTimeout(toastTimer);c.innerHTML='';toastTimer=null;fn()}),0);toastTimer=setTimeout(()=>{c.innerHTML='';toastTimer=null},4000)}
+function showUndo(fn){const c=document.getElementById('toast-container'),uid='u'+id();c.innerHTML=`<div class="toast">✅ Done! <button id="${uid}" class="undo-btn">Undo</button></div>`;if(toastTimer)clearTimeout(toastTimer);const btn=document.getElementById(uid);if(btn)btn.addEventListener('click',()=>{clearTimeout(toastTimer);c.innerHTML='';toastTimer=null;fn()});toastTimer=setTimeout(()=>{c.innerHTML='';toastTimer=null},4000)}
 
 // ===== MODAL =====
 function modal(html){const m=document.getElementById('modal-container');m.innerHTML=`<div class="modal-bg"><div class="modal-box">${html}</div></div>`;m.querySelector('[data-close]')?.addEventListener('click',closeM);m.querySelector('.modal-bg')?.addEventListener('click',e=>{if(e.target.classList.contains('modal-bg'))closeM()})}
@@ -200,7 +283,7 @@ function confirmAction(msg,onYes){
 }
 
 function showInfoModal(){
-  modal(`<h2 style="color:var(--accent-dark);margin-bottom:12px">🧮 Points Calculator</h2>
+  modal(`<h2 style="color:var(--accent-dark);margin-bottom:12px">💡 Points Calculator</h2>
     <div style="margin-bottom:16px;">
       <h3 style="font-size:.9rem;margin-bottom:8px;">Task Points</h3>
       <p style="font-size:.8rem;color:var(--text-dim);margin-bottom:8px">Formula: (minutes ÷ 15) × annoyance + importance</p>
@@ -289,7 +372,7 @@ function tickRender(){const el=document.getElementById('tld'),pl=document.getEle
 
 function rHeader(){
   const g=D.settings.dailyGoal||0,e=ptsToday(),p=g>0?Math.min(100,Math.round(e/g*100)):0,sk=D.streak>1?`<div style="font-size:.75rem;color:var(--warning-dark);margin-top:4px;text-align:center">🔥 ${D.streak} day streak</div>`:'';
-  return `<header class="hdr"><div style="display:flex;justify-content:space-between;align-items:center"><h1 style="font-size:1.3rem;color:var(--accent-dark)">⚡ Tracker</h1><div style="display:flex;align-items:center;gap:8px"><span style="font-weight:bold">✨ ${D.points}</span><button id="goal-btn" class="ibtn">🎯</button><button id="info-btn" class="ibtn">🧮</button><button id="set-btn" class="ibtn">⚙️</button></div></div>${g>0?`<div style="margin-top:8px;display:flex;align-items:center;gap:8px"><div class="pbar"><div class="pfill" style="width:${p}%;background:${p>=100?'var(--success)':'var(--accent)'}"></div></div><span style="font-size:.75rem;color:var(--text-dim)">${e}/${g}</span></div>${sk}`:''}</header>`}
+  return `<header class="hdr"><div style="display:flex;justify-content:space-between;align-items:center"><h1 style="font-size:1.3rem;color:var(--accent-dark)">⚡ Tracker</h1><div style="display:flex;align-items:center;gap:8px"><span style="font-weight:bold">✨ ${D.points}</span><span style="font-size:.7rem;color:var(--text-dim)">🏆 ${D.pointsHistory.filter(h=>h.type==='earned').reduce((s,h)=>s+h.points,0)}</span><button id="goal-btn" class="ibtn">🎯</button><button id="info-btn" class="ibtn">💡</button><button id="set-btn" class="ibtn">⚙️</button></div></div>${g>0?`<div style="margin-top:8px;display:flex;align-items:center;gap:8px"><div class="pbar"><div class="pfill" style="width:${p}%;background:${p>=100?'var(--success)':'var(--accent)'}"></div></div><span style="font-size:.75rem;color:var(--text-dim)">${e}/${g}</span></div>${sk}`:''}</header>`}
 
 function rNav(){
   const tabs=[{v:'tasks',i:'🚀',l:'Tasks'},{v:'rewards',i:'🍭',l:'Rewards'},{v:'history',i:'🗓️',l:'History'},{v:'tools',i:'🧰',l:'Tools'}];
@@ -307,27 +390,77 @@ function rTasks(){
     const vis=visibleTasks().filter(t=>!t.archived&&(categoryFilter==='all'||t.category===categoryFilter)),ot=vis.filter(t=>t.type==='one-time'&&!t.pinned);
     let rc=vis.filter(t=>t.type==='recurring'&&!t.pinned);
     if(recurSort==='due'){rc.sort((a,b)=>{const aOver=(a.lastCompleted?(new Date()-new Date(a.lastCompleted))/864e5-a.cadenceDays:999);const bOver=(b.lastCompleted?(new Date()-new Date(b.lastCompleted))/864e5-b.cadenceDays:999);return bOver-aOver})}
-    const ev=vis.filter(t=>t.type==='evergreen'&&!t.pinned),sl=sleepingTasks().filter(t=>!t.archived&&!t.pinned&&(categoryFilter==='all'||t.category===categoryFilter));
+    const ev=vis.filter(t=>t.type==='evergreen'&&!t.pinned),dy=vis.filter(t=>t.type==='daily'&&!t.pinned),sl=sleepingTasks().filter(t=>!t.archived&&!t.pinned&&(categoryFilter==='all'||t.category===categoryFilter));
+    const slRecurring=sl.filter(t=>t.type==='recurring'),slDaily=sl.filter(t=>t.type==='daily');
     const pinned=vis.filter(t=>t.pinned);
     const pinnedSection=pinned.length?`<div style="margin-bottom:18px"><h2 style="font-size:1rem;color:var(--accent-dark);margin-bottom:8px">📌 Pinned</h2>${pinned.map((t,i)=>rCard(t,i,pinned.length)).join('')}</div>`:'';
-    content=`<div style="display:flex;gap:8px;margin-bottom:14px"><button id="show-af" class="abtn" style="flex:1">+ Add Task</button><button id="quick-log-btn" class="btn bmut" style="padding:14px 12px;border-radius:var(--radius);font-size:.85rem">⚡ Quick Log</button><button id="surprise-btn" class="btn bwar" style="flex-shrink:0;padding:14px 16px;border-radius:var(--radius);font-size:1rem">🎲</button></div><div id="afc"></div><div id="qlfc"></div>${pinnedSection}${rBucket('🎯 One-Time',ot)}${rBucket('🔄 Recurring',rc,true)}${sl.length?rSleep(sl):''}${rBucket('♾️ Evergreen',ev)}`;
+    const td=today();const allSkippable=D.tasks.filter(t=>!t.archived&&(t.type==='daily'||(t.goal&&t.goal.period==='daily')));const allSkipped=allSkippable.length>0&&allSkippable.every(t=>t.goalSkips&&t.goalSkips.includes(td));
+    content=`<div style="display:flex;gap:8px;margin-bottom:14px"><button id="show-af" class="abtn" style="flex:1">+ Add Task</button><button id="quick-log-btn" class="btn bmut" style="padding:14px 12px;border-radius:var(--radius);font-size:.85rem">⚡ Quick Log</button><button id="bulk-skip-btn" class="btn ${allSkipped?'bwar':'bmut'}" style="padding:14px 12px;border-radius:var(--radius);font-size:.85rem">⏭️ Skip All</button><button id="surprise-btn" class="btn bwar" style="flex-shrink:0;padding:14px 16px;border-radius:var(--radius);font-size:1rem">🎲</button></div><div id="afc"></div><div id="qlfc"></div>${pinnedSection}${rBucket('🎯 One-Time',ot)}${rBucket('🔄 Recurring',rc,true)}${slRecurring.length?rSleep(slRecurring):''}${rBucket('📅 Daily',dy)}${slDaily.length?rSleep(slDaily):''}${rBucket('♾️ Evergreen',ev)}`;
   }
   const fb=`<div style="display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap;"><button class="cat-btn ${categoryFilter==='all'?'cat-active':''}" data-cat="all" style="background:var(--card-neutral)">All</button><button class="cat-btn ${categoryFilter==='work'?'cat-active':''}" data-cat="work" style="background:#dbeafe">💼 Work</button><button class="cat-btn ${categoryFilter==='home'?'cat-active':''}" data-cat="home" style="background:#d1fae5">🏠 Home</button><button class="cat-btn ${categoryFilter==='growth'?'cat-active':''}" data-cat="growth" style="background:#fef3c7">🌱 Growth</button><button class="cat-btn ${categoryFilter==='archived'?'cat-active':''}" data-cat="archived" style="background:#e5e7eb">📦 Archived</button></div>`;
   return `<div class="vc">${fb}${content}</div>`}
 function rBucket(title,tasks,sortable){
   const sortBtn=sortable?`<button id="rsort" class="ibtn" style="font-size:.75rem;margin-left:6px">${recurSort==='custom'?'↕️ by due':'↕️ custom'}</button>`:'';
-  return `<div style="margin-bottom:18px"><h2 style="font-size:1rem;color:var(--accent-dark);margin-bottom:8px;display:inline">${title}</h2>${sortBtn}${tasks.length?'<div style="margin-top:8px">'+tasks.map((t,i)=>rCard(t,i,tasks.length)).join('')+'</div>':'<p style="color:var(--text-dim);font-size:.85rem;font-style:italic;margin-top:8px">Nothing here ✨</p>'}</div>`}
+  if(!tasks.length)return `<div style="margin-bottom:18px"><h2 style="font-size:1rem;color:var(--accent-dark);margin-bottom:8px;display:inline">${title}</h2>${sortBtn}<p style="color:var(--text-dim);font-size:.85rem;font-style:italic;margin-top:8px">Nothing here ✨</p></div>`;
+  // Group tasks visually
+  const grouped=[];const ungrouped=[];
+  const groupOrder=[];
+  tasks.forEach(t=>{if(t.group){if(!groupOrder.includes(t.group))groupOrder.push(t.group);grouped.push(t)}else ungrouped.push(t)});
+  // Sort groups by stored order if available
+  if(D.groupOrder&&D.groupOrder.length){groupOrder.sort((a,b)=>{const ai=D.groupOrder.indexOf(a),bi=D.groupOrder.indexOf(b);return(ai<0?999:ai)-(bi<0?999:bi)})}
+  const td=today();
+  const grpColors=['#fce4ec','#fff3e0','#e8eaf6','#efebe9','#e0f2f1','#fbe9e7'];
+  let cards='';
+  groupOrder.forEach((g,gi)=>{
+    const gTasks=grouped.filter(t=>t.group===g);
+    const collapsed=collapsedGroups.has(g);
+    const gColor=grpColors[gi%grpColors.length];
+    // Progress: how many done today
+    const doneToday=gTasks.filter(t=>{
+      if(t.type==='daily')return D.pointsHistory.some(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td&&h.task.includes('✅'));
+      if(t.type==='one-time')return t.completed;
+      return false;
+    }).length;
+    const skippedAll=gTasks.every(t=>t.goalSkips&&t.goalSkips.includes(td));
+    // Points: earned today for this group
+    const grpPtsToday=D.pointsHistory.filter(h=>h.date.slice(0,10)===td&&h.type==='earned'&&gTasks.some(t=>t.id===h.taskId)).reduce((s,h)=>s+h.points,0);
+    const progressText=`${doneToday}/${gTasks.length}`;
+    const ptsText=grpPtsToday>0?` · ${grpPtsToday}pts`:'';
+    const moveUp=gi>0?`<button class="grp-move ibtn" data-grp="${g}" data-d="up" style="font-size:.65rem;padding:2px 4px">▲</button>`:'';
+    const moveDown=gi<groupOrder.length-1?`<button class="grp-move ibtn" data-grp="${g}" data-d="down" style="font-size:.65rem;padding:2px 4px">▼</button>`:'';
+    cards+=`<div class="grp-hdr" data-grp="${g}" style="margin:10px 0 4px;font-size:.8rem;color:var(--accent-dark);font-weight:600;padding:8px 10px;background:${gColor};border-radius:8px;cursor:pointer"><div style="display:flex;justify-content:space-between;align-items:center"><span>${collapsed?'▶':'▼'} 📁 ${g}</span><span style="font-size:.7rem;color:var(--text-dim);font-weight:normal">${progressText}${ptsText}</span></div>${collapsed?`<div style="display:flex;gap:6px;margin-top:6px;align-items:center" onclick="event.stopPropagation()"><button class="grp-done btn bsuc" data-grp="${g}" style="font-size:.7rem;padding:4px 8px">✓ All</button><button class="grp-skip btn ${skippedAll?'bwar':'bmut'}" data-grp="${g}" style="font-size:.7rem;padding:4px 8px">⏭️ Skip</button><div style="flex:1"></div>${moveUp}${moveDown}</div>`:''}</div>`;
+    if(!collapsed){
+      cards+=`<div style="padding-left:10px;border-left:3px solid ${gColor};margin-left:4px">`;
+      cards+=gTasks.map((t,i)=>rCard(t,i,gTasks.length)).join('');
+      cards+=`<div style="display:flex;gap:6px;margin:4px 0 8px" onclick="event.stopPropagation()"><button class="grp-done btn bsuc" data-grp="${g}" style="font-size:.7rem;padding:4px 8px">✓ Complete group</button><button class="grp-skip btn ${skippedAll?'bwar':'bmut'}" data-grp="${g}" style="font-size:.7rem;padding:4px 8px">⏭️ Skip group</button><div style="flex:1"></div>${moveUp}${moveDown}</div>`;
+      cards+=`</div>`;
+    }
+  });
+  if(ungrouped.length){cards+=ungrouped.map((t,i)=>rCard(t,i,ungrouped.length)).join('')}
+  return `<div style="margin-bottom:18px"><h2 style="font-size:1rem;color:var(--accent-dark);margin-bottom:8px;display:inline">${title}</h2>${sortBtn}<div style="margin-top:8px">${cards}</div></div>`}
 function rCard(t,i,n){
-  const isM=inlineMinId===t.id,pl=t.timeBased?`${t.ptsAmount}/${t.ptsPerMinutes}m`:`+${t.points}`;
+  const isM=inlineMinId===t.id,pl=t.timeBased?`${t.ptsAmount}/${t.ptsPerMinutes}m`:t.countBased?`${t.ptsAmount}/${t.ptsPerCount}${t.countUnit}`:`+${t.points}`;
+  // Goal progress bar
+  const gp=getGoalProgress(t);
+  const goalBar=gp?`<div style="margin-top:6px"><div style="display:flex;justify-content:space-between;font-size:.6rem;color:var(--text-dim);margin-bottom:2px"><span>${gp.current}/${gp.target} ${t.timeBased?'min':t.countUnit||'units'} ${gp.period}${getGoalStreak(t)>0?' · 🔥'+getGoalStreak(t):''}</span><span>${gp.pct}%</span></div><div style="height:4px;background:var(--card-neutral);border-radius:2px;overflow:hidden"><div style="height:100%;width:${gp.pct}%;background:${gp.pct>=100?'var(--success)':'var(--accent)'};border-radius:2px"></div></div></div>`:'';
   // Task aging for one-time tasks
   let ageBadge='';
   if(t.type==='one-time'&&t.createdAt){const days=Math.floor((new Date()-new Date(t.createdAt))/864e5);if(days>=7)ageBadge=`<span style="font-size:.65rem;color:var(--warning-dark);margin-left:4px">⏰ ${days}d</span>`}
+  // Overdue badge for recurring tasks
+  if(t.type==='recurring'){if(!t.lastCompleted){ageBadge=`<span style="font-size:.65rem;color:var(--danger-dark);margin-left:4px">⚠️ never completed</span>`}else{const overdue=Math.floor((new Date()-new Date(t.lastCompleted))/864e5)-t.cadenceDays;if(overdue>0)ageBadge=`<span style="font-size:.65rem;color:var(--danger-dark);margin-left:4px">⚠️ ${overdue}d overdue</span>`}}
   // Time invested for time-based incomplete tasks
   let investedBadge='';
   if(t.timeBased&&!(t.type==='one-time'&&t.completed)){const totalMins=D.pointsHistory.filter(h=>h.taskId===t.id&&h.type==='earned'&&!h.task.includes('✅')).reduce((s,h)=>s+(h.minutes||0),0);if(totalMins>0){const ih=Math.floor(totalMins/60),im=totalMins%60;investedBadge=` · ${ih?ih+'h ':''}${im}m invested`}}
-  return `<div class="tcard" style="background:${catBg(t.category)}"><div style="display:flex;align-items:center;gap:10px"><button class="cbtn" data-id="${t.id}">✓</button><div style="flex:1;min-width:0;cursor:pointer" class="tdet" data-id="${t.id}"><div style="font-weight:600;font-size:.9rem">${t.name}${ageBadge}</div>${t.type==='recurring'?`<div style="font-size:.7rem;color:var(--text-dim)">Every ${t.cadenceDays}d</div>`:''}${t.timeBased?`<div style="font-size:.7rem;color:var(--accent-dark)">⏱ time-based${investedBadge}</div>`:''}</div><span style="color:var(--warning-dark);font-weight:bold;font-size:.8rem">${pl}</span><div style="display:flex;flex-direction:column;gap:1px">${i>0?`<button class="mbtn" data-id="${t.id}" data-d="up">▲</button>`:'<div style="height:16px"></div>'}${i<n-1?`<button class="mbtn" data-id="${t.id}" data-d="down">▼</button>`:'<div style="height:16px"></div>'}</div></div>${isM?`<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);"><div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><input id="imi-h" type="number" min="0" placeholder="" class="inf" style="width:60px;margin:0;text-align:center"><span class="rl">hours</span><input id="imi-m" type="number" min="0" max="59" placeholder="" class="inf" style="width:60px;margin:0;text-align:center"><span class="rl">minutes</span></div><div id="imi-preview" style="font-size:.8rem;color:var(--accent-dark);margin:6px 0;"></div><div style="display:flex;gap:6px;flex-wrap:wrap">${t.type==='evergreen'?`<button id="ims" data-id="${t.id}" class="btn bsuc" style="padding:8px 12px;font-size:.8rem">Submit</button>`:`<button id="ims-work" data-id="${t.id}" class="btn bmut" style="padding:8px 10px;font-size:.8rem">Worked on it</button><button id="ims-done" data-id="${t.id}" class="btn bsuc" style="padding:8px 10px;font-size:.8rem">Finished! 🎉</button>`}<button id="imc" class="btn bmut" style="padding:8px 10px">✕</button></div></div>`:''}</div>`}
-function rSleep(tasks){return `<div style="margin-bottom:18px"><h3 style="font-size:.85rem;color:var(--text-dim);margin-bottom:6px">💤 Upcoming</h3>${tasks.map(t=>`<div class="slcard sldet" data-id="${t.id}" style="cursor:pointer"><span>${t.name}</span><span style="color:var(--accent-dark);font-weight:600">↻ ${t.left}d</span></div>`).join('')}</div>`}
-function rAddForm(){return `<div class="fcard" style="margin-top:12px"><h3 style="margin-bottom:12px;color:var(--accent-dark)">New Task</h3><input id="tfn" type="text" placeholder="Task name" class="inf"><select id="tft" class="inf"><option value="one-time">🎯 One-Time</option><option value="recurring">🔄 Recurring</option><option value="evergreen">♾️ Evergreen</option></select><select id="tfcat" class="inf"><option value="work">💼 Work</option><option value="home">🏠 Home</option><option value="growth">🌱 Growth</option></select><div id="tfc" style="display:none"><input id="tfcd" type="number" min="1" placeholder="Cadence (days)" class="inf"></div><label class="chlbl"><input id="tftb" type="checkbox"> Time-based</label><div id="tffw"><input id="tfp" type="number" min="1" placeholder="Points" class="inf"></div><div id="tftw" style="display:none"><div style="display:flex;gap:6px;align-items:center;margin-bottom:8px"><input id="tfpa" type="number" min="1" class="inf" style="width:70px;margin:0;text-align:center"><span class="rl">pts per</span><input id="tfpp" type="number" min="1" class="inf" style="width:70px;margin:0;text-align:center"><span class="rl">min</span></div></div><div id="tfe" class="err"></div><button id="tfs" class="btn bpri" style="width:100%;opacity:.5" disabled>Add Task</button></div>`}
+  return `<div class="tcard" style="background:${catBg(t.category)}"><div style="display:flex;align-items:center;gap:10px"><button class="cbtn" data-id="${t.id}">✓</button><div style="flex:1;min-width:0;cursor:pointer" class="tdet" data-id="${t.id}"><div style="font-weight:600;font-size:.9rem">${t.name}${ageBadge}</div>${t.type==='recurring'?`<div style="font-size:.7rem;color:var(--text-dim)">Every ${t.cadenceDays}d</div>`:''}${t.type==='daily'&&!t.goal&&getDailyStreak(t)>0?`<div style="font-size:.7rem;color:var(--warning-dark)">🔥 ${getDailyStreak(t)} day streak</div>`:''}${t.timeBased?`<div style="font-size:.7rem;color:var(--accent-dark)">⏱ time-based${investedBadge}</div>`:''}${t.countBased?`<div style="font-size:.7rem;color:var(--accent-dark)">🔢 ${t.countUnit}-based</div>`:''}</div><span style="color:var(--warning-dark);font-weight:bold;font-size:.8rem">${pl}</span><div style="display:flex;flex-direction:column;gap:1px">${i>0?`<button class="mbtn" data-id="${t.id}" data-d="up">▲</button>`:'<div style="height:16px"></div>'}${i<n-1?`<button class="mbtn" data-id="${t.id}" data-d="down">▼</button>`:'<div style="height:16px"></div>'}</div></div>${goalBar}${isM?`<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);">${t.countBased?`<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><input id="imi-count" type="number" min="1" placeholder="" class="inf" style="width:70px;margin:0;text-align:center"><span class="rl">${t.countUnit||'units'}</span></div><div id="imi-preview" style="font-size:.8rem;color:var(--accent-dark);margin:6px 0;"></div>`:`<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><input id="imi-h" type="number" min="0" placeholder="" class="inf" style="width:60px;margin:0;text-align:center"><span class="rl">hours</span><input id="imi-m" type="number" min="0" max="59" placeholder="" class="inf" style="width:60px;margin:0;text-align:center"><span class="rl">minutes</span></div><div id="imi-preview" style="font-size:.8rem;color:var(--accent-dark);margin:6px 0;"></div>`}<div style="display:flex;gap:6px;flex-wrap:wrap">${t.type==='evergreen'?`<button id="ims" data-id="${t.id}" class="btn bsuc" style="padding:8px 12px;font-size:.8rem">Submit</button>`:`<button id="ims-work" data-id="${t.id}" class="btn bmut" style="padding:8px 10px;font-size:.8rem">Worked on it</button><button id="ims-done" data-id="${t.id}" class="btn bsuc" style="padding:8px 10px;font-size:.8rem">Finished! 🎉</button>`}<button id="imc" class="btn bmut" style="padding:8px 10px">✕</button></div></div>`:''}</div>`}
+function rSleep(tasks){const td=today();return `<div style="margin-bottom:18px"><h3 style="font-size:.85rem;color:var(--text-dim);margin-bottom:6px">💤 Upcoming</h3>${tasks.map(t=>{const streak=t.goal?getGoalStreak(t):(t.type==='daily'?getDailyStreak(t):0);const streakBadge=streak>0?`<span style="color:var(--warning-dark);font-size:.75rem;margin-left:4px">🔥${streak}</span>`:'';const leftLabel=t.left==='skipped'?'⏭️ skipped':`↻ ${t.left}d`;return `<div class="slcard sldet" data-id="${t.id}" style="cursor:pointer"><span>${t.name}${streakBadge}</span><span style="color:var(--accent-dark);font-weight:600">${leftLabel}</span></div>`}).join('')}</div>`}
+function getGroups(){const groups=new Set();D.tasks.forEach(t=>{if(t.group)groups.add(t.group)});return[...groups].sort()}
+function moveInArr(arr,idx,dir){const si=dir==='up'?idx-1:idx+1;if(si<0||si>=arr.length)return;[arr[idx],arr[si]]=[arr[si],arr[idx]]}
+function rGroupSelect(id,selected){const groups=getGroups();const opts=groups.map(g=>`<option value="${g}" ${g===selected?'selected':''}>${g}</option>`).join('');return `<div style="display:flex;gap:6px;align-items:center;margin-bottom:8px"><select id="${id}" class="inf" style="flex:1;margin:0"><option value="">No group</option>${opts}<option value="__new__">+ New group...</option></select><input id="${id}-new" type="text" placeholder="Group name" class="inf" style="flex:1;margin:0;display:none"></div>`}
+function bindGroupSelect(id){
+  document.getElementById(id)?.addEventListener('change',e=>{const ni=document.getElementById(id+'-new');if(e.target.value==='__new__'){ni.style.display='';ni.focus()}else{ni.style.display='none';ni.value=''}});
+}
+function getGroupValue(id){const sel=document.getElementById(id);if(!sel)return '';if(sel.value==='__new__')return document.getElementById(id+'-new')?.value.trim()||'';return sel.value}
+function rAddForm(){return `<div class="fcard" style="margin-top:12px"><h3 style="margin-bottom:12px;color:var(--accent-dark)">New Task</h3><input id="tfn" type="text" placeholder="Task name" class="inf"><select id="tft" class="inf"><option value="one-time">🎯 One-Time</option><option value="recurring">🔄 Recurring</option><option value="daily">📅 Daily</option><option value="evergreen">♾️ Evergreen</option></select><select id="tfcat" class="inf"><option value="work">💼 Work</option><option value="home">🏠 Home</option><option value="growth">🌱 Growth</option></select>${rGroupSelect('tfgrp','')}<div id="tfc" style="display:none"><input id="tfcd" type="number" min="1" placeholder="Cadence (days)" class="inf"></div><label class="chlbl"><input id="tftb" type="checkbox"> Time-based</label><label class="chlbl"><input id="tfcb" type="checkbox"> Count-based</label><div id="tffw"><input id="tfp" type="number" min="1" placeholder="Points" class="inf"></div><div id="tftw" style="display:none"><div style="display:flex;gap:6px;align-items:center;margin-bottom:8px"><input id="tfpa" type="number" min="1" class="inf" style="width:70px;margin:0;text-align:center"><span class="rl">pts per</span><input id="tfpp" type="number" min="1" class="inf" style="width:70px;margin:0;text-align:center"><span class="rl">min</span></div></div><div id="tfcw" style="display:none"><div style="display:flex;gap:6px;align-items:center;margin-bottom:8px"><input id="tfca" type="number" min="1" class="inf" style="width:70px;margin:0;text-align:center"><span class="rl">pts per</span><input id="tfcu" type="number" min="1" class="inf" style="width:70px;margin:0;text-align:center"><input id="tfcun" type="text" placeholder="unit" class="inf" style="width:70px;margin:0"></div></div><div id="tfe" class="err"></div><button id="tfs" class="btn bpri" style="width:100%;opacity:.5" disabled>Add Task</button></div>`}
 
 // ===== REWARDS =====
 function rRewards(){
@@ -363,6 +496,7 @@ function rHistory(){
         let durInfo='';
         if(e.seconds!=null){const h=Math.floor(e.seconds/3600),m=Math.floor((e.seconds%3600)/60),s=e.seconds%60;let dur='';if(h>0)dur+=h+' hour'+(h>1?'s':'');if(m>0)dur+=(dur?' and ':'')+m+' minute'+(m>1?'s':'');if(!dur)dur=s+' second'+(s!==1?'s':'');durInfo=` · ${dur}`}
         else if(e.minutes!=null){const h=Math.floor(e.minutes/60),m=e.minutes%60;let dur='';if(h>0)dur+=h+' hour'+(h>1?'s':'');if(m>0)dur+=(dur?' and ':'')+m+' minute'+(m>1?'s':'');if(!dur)dur='0 minutes';durInfo=` · ${dur}`}
+        if(e.count!=null)durInfo+=` · ${e.count} ${e.countUnit||'units'}`;
         return `<div class="hent hent-click" data-idx="${idx}"><div style="flex:1"><div style="font-size:.85rem;font-weight:500">${e.task}</div><div style="font-size:.7rem;color:var(--text-dim)">${time}${durInfo}</div></div><span class="hpts ${e.type==='earned'?'hpe':'hps'}">${e.type==='earned'?'+':''}${e.points}</span><button class="hedit ibtn" data-idx="${idx}">✏️</button><button class="hdel ibtn" data-idx="${idx}">🗑️</button></div>`}).join('')}
     else detail='<p style="color:var(--text-dim);font-style:italic;font-size:.85rem">No activity.</p>'}
 
@@ -371,8 +505,8 @@ function rHistory(){
   return `<div class="vc">${streakInfo}<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px"><button class="hnav ibtn" data-d="prev">◀</button><h2 style="font-size:1rem;color:var(--accent-dark)">${mn}</h2><button class="hnav ibtn" data-d="next">▶</button></div><div class="calbox"><div class="cgrid">${['S','M','T','W','T','F','S'].map(x=>`<div class="ch">${x}</div>`).join('')}${cells}</div></div>${selDay?`<div class="fcard" style="margin-top:14px"><h3 style="font-size:.9rem;margin-bottom:10px">${new Date(selDay+'T12:00:00').toLocaleDateString('default',{weekday:'long',month:'short',day:'numeric'})}</h3>${detail}</div>`:''}</div>`}
 
 // ===== TOOLS =====
-function rTools(){if(toolsView==='menu')return rToolsMenu();if(toolsView==='sw')return rSW();if(toolsView==='pm')return rPM();if(toolsView==='tech')return rTech();if(toolsView==='metrics')return rMetrics();return rToolsMenu()}
-function rToolsMenu(){const a=T.running||T.paused,m=T.mode;return `<div class="vc"><h2 style="font-size:1.1rem;color:var(--accent-dark);margin-bottom:16px">🧰 Tools</h2><button class="tlcard${a&&m!=='sw'?' dis':''}" data-t="sw" ${a&&m!=='sw'?'disabled':''}>⏱️ <b>Stopwatch</b><br><span class="tdesc">Open-ended timer</span>${a&&m==='sw'?'<br><span style="font-size:.75rem;color:var(--success-dark)">Running...</span>':''}${a&&m!=='sw'?'<br><span style="font-size:.75rem;color:var(--danger-dark)">Stop timer first</span>':''}</button><button class="tlcard${a&&m!=='pm'?' dis':''}" data-t="pm" ${a&&m!=='pm'?'disabled':''}>🍅 <b>Pomodoro</b><br><span class="tdesc">Work/break cycles</span>${a&&m==='pm'?'<br><span style="font-size:.75rem;color:var(--success-dark)">Running...</span>':''}${a&&m!=='pm'?'<br><span style="font-size:.75rem;color:var(--danger-dark)">Stop timer first</span>':''}</button><button class="tlcard" data-t="tech">🧠 <b>Techniques</b><br><span class="tdesc">Anti-procrastination tracker</span></button><button class="tlcard" data-t="metrics">📊 <b>Metrics</b><br><span class="tdesc">Track daily habits & feelings</span></button></div>`}
+function rTools(){if(toolsView==='menu')return rToolsMenu();if(toolsView==='sw')return rSW();if(toolsView==='pm')return rPM();if(toolsView==='tech')return rTech();if(toolsView==='metrics')return rMetrics();if(toolsView==='achieve')return rAchievements();if(toolsView==='insights')return rInsights();return rToolsMenu()}
+function rToolsMenu(){const a=T.running||T.paused,m=T.mode;return `<div class="vc"><h2 style="font-size:1.1rem;color:var(--accent-dark);margin-bottom:16px">🧰 Tools</h2><button class="tlcard${a&&m!=='sw'?' dis':''}" data-t="sw" ${a&&m!=='sw'?'disabled':''}>⏱️ <b>Stopwatch</b><br><span class="tdesc">Open-ended timer</span>${a&&m==='sw'?'<br><span style="font-size:.75rem;color:var(--success-dark)">Running...</span>':''}${a&&m!=='sw'?'<br><span style="font-size:.75rem;color:var(--danger-dark)">Stop timer first</span>':''}</button><button class="tlcard${a&&m!=='pm'?' dis':''}" data-t="pm" ${a&&m!=='pm'?'disabled':''}>🍅 <b>Pomodoro</b><br><span class="tdesc">Work/break cycles</span>${a&&m==='pm'?'<br><span style="font-size:.75rem;color:var(--success-dark)">Running...</span>':''}${a&&m!=='pm'?'<br><span style="font-size:.75rem;color:var(--danger-dark)">Stop timer first</span>':''}</button><button class="tlcard" data-t="tech">🧠 <b>Techniques</b><br><span class="tdesc">Anti-procrastination tracker</span></button><button class="tlcard" data-t="metrics">📊 <b>Metrics</b><br><span class="tdesc">Track daily habits & feelings</span></button><button class="tlcard" data-t="insights">🔍 <b>Insights</b><br><span class="tdesc">Best days & times analysis</span></button><button class="tlcard" data-t="achieve">🏅 <b>Achievements</b><br><span class="tdesc">Milestones and badges</span></button></div>`}
 
 function rSW(){
   const opts=visibleTasks().map(t=>`<option value="${t.id}">${t.name}</option>`).join('');
@@ -401,7 +535,7 @@ function rTech(){
 // ===== SETTINGS/DETAIL MODALS =====
 function showSettings(){
   modal(`<h2 style="color:var(--accent-dark);margin-bottom:16px">⚙️ Settings</h2><p style="font-size:.85rem;color:var(--text-dim);margin-bottom:12px"><b>Gist Sync</b><br><a href="https://gist.github.com/" target="_blank" style="color:var(--accent-dark)">Create secret Gist</a> (file: <code>productivity_data.json</code> with <code>{}</code>)<br><a href="https://github.com/settings/tokens/new?scopes=gist&description=Productivity+Tracker" target="_blank" style="color:var(--accent-dark)">Generate token</a> (classic, gist scope only)</p><input id="sgi" type="text" value="${D.settings.gistId}" placeholder="Gist ID" class="inf"><input id="sgt" type="password" value="${D.settings.token}" placeholder="Token" class="inf"><button id="ssv" class="btn bsuc" style="width:100%;margin-bottom:8px">Save & Sync</button><button id="spl" class="btn bmut" style="width:100%;margin-bottom:8px">⬇️ Pull</button><button id="spu" class="btn bmut" style="width:100%;margin-bottom:8px">⬆️ Push</button><button id="sexp" class="btn bmut" style="width:100%;margin-bottom:8px">📦 Export Backup</button><button id="simp" class="btn bmut" style="width:100%;margin-bottom:8px">📥 Import Backup</button><input id="simp-file" type="file" accept=".json" style="display:none"><div id="sst" style="text-align:center;font-size:.85rem;color:var(--text-dim);margin-top:8px"></div><button data-close class="btn bmut" style="margin-top:12px;width:100%">Close</button><p style="text-align:center;font-size:.75rem;color:var(--text-dim);margin-top:12px">App version: ${APP_VERSION}</p>`);
-  document.getElementById('ssv')?.addEventListener('click',async()=>{D.settings.gistId=document.getElementById('sgi').value.trim();D.settings.token=document.getElementById('sgt').value.trim();saveL();const s=document.getElementById('sst');s.textContent='Syncing...';const ok=await gistPush();s.textContent=ok?'✅ Synced!':(D.settings.gistId?'❌ Failed':'✅ Saved');render()});
+  document.getElementById('ssv')?.addEventListener('click',async()=>{D.settings.gistId=document.getElementById('sgi').value.trim();D.settings.token=document.getElementById('sgt').value.trim();saveL();const s=document.getElementById('sst');s.textContent='Syncing...';const pulled=await gistPull();if(pulled){updateStreak();s.textContent='✅ Synced!';closeM();render()}else{s.textContent='❌ Failed — check credentials'}});
   document.getElementById('spl')?.addEventListener('click',async()=>{const s=document.getElementById('sst');s.textContent='Pulling...';const ok=await gistPull();s.textContent=ok?'✅ Pulled!':'❌ Failed';if(ok){updateStreak();closeM();render()}});
   document.getElementById('spu')?.addEventListener('click',async()=>{const s=document.getElementById('sst');s.textContent='Pushing...';const ok=await gistPush();s.textContent=ok?'✅ Pushed!':'❌ Failed'});
   document.getElementById('sexp')?.addEventListener('click',exportData);
@@ -445,6 +579,97 @@ function showGoalEditModal(){
   document.getElementById('dg-hrs')?.addEventListener('input',calc);
   document.getElementById('dg-ann')?.addEventListener('change',calc);
   document.getElementById('dg-save')?.addEventListener('click',()=>{const v=parseInt(document.getElementById('dg-val').value);if(!Number.isInteger(v)||v<1)return;D.settings.dailyGoal=v;D.dailyGoalLog[today()]=v;saveL();debouncedPush();closeM();render()});
+}
+// ===== ACHIEVEMENTS =====
+function rAchievements(){
+  const achievements=getAchievements();
+  const unlocked=achievements.filter(a=>a.done).length;
+  const cards=achievements.map(a=>`<div style="display:flex;align-items:center;gap:10px;padding:10px;margin-bottom:6px;border-radius:10px;background:${a.done?'var(--card-task)':'var(--card-neutral)'};opacity:${a.done?'1':'.5'}"><span style="font-size:1.5rem">${a.icon}</span><div style="flex:1"><div style="font-weight:600;font-size:.85rem">${a.name}</div><div style="font-size:.7rem;color:var(--text-dim)">${a.desc}</div></div>${a.done?'<span style="color:var(--success-dark);font-weight:bold">✓</span>':''}</div>`).join('');
+  return `<div class="vc"><button class="tback">← Back</button><h2 style="font-size:1.1rem;color:var(--accent-dark);margin-bottom:4px">🏅 Achievements</h2><p style="font-size:.8rem;color:var(--text-dim);margin-bottom:14px">${unlocked}/${achievements.length} unlocked</p>${cards}</div>`;
+}
+function getAchievements(){
+  const lifetime=D.pointsHistory.filter(h=>h.type==='earned').reduce((s,h)=>s+h.points,0);
+  const totalTasks=D.pointsHistory.filter(h=>h.type==='earned'&&h.task!=='🎯 Daily goal bonus').length;
+  const longestStreak=D.longestStreak||0;
+  let speedDemon=false;
+  const earned=D.pointsHistory.filter(h=>h.type==='earned'&&h.task!=='🎯 Daily goal bonus').sort((a,b)=>a.date.localeCompare(b.date));
+  for(let i=0;i<earned.length-2;i++){const t1=new Date(earned[i].date),t3=new Date(earned[i+2].date);if((t3-t1)/36e5<=1){speedDemon=true;break}}
+  return[
+    {icon:'🌱',name:'First Task',desc:'Complete your first task',done:totalTasks>=1},
+    {icon:'🔥',name:'Week Warrior',desc:'7-day streak',done:longestStreak>=7},
+    {icon:'⚡',name:'Speed Demon',desc:'3 tasks in 1 hour',done:speedDemon},
+    {icon:'💯',name:'Century Club',desc:'100 lifetime points',done:lifetime>=100},
+    {icon:'⭐',name:'Rising Star',desc:'500 lifetime points',done:lifetime>=500},
+    {icon:'🏔️',name:'Summiteer',desc:'1,000 lifetime points',done:lifetime>=1000},
+    {icon:'🚀',name:'Rocket',desc:'2,000 lifetime points',done:lifetime>=2000},
+    {icon:'👑',name:'Legend',desc:'5,000 lifetime points',done:lifetime>=5000},
+    {icon:'💎',name:'Diamond',desc:'10,000 lifetime points',done:lifetime>=10000},
+    {icon:'🔟',name:'Decathlon',desc:'10 tasks in one day',done:D.pointsHistory.some((_,__,arr)=>{const days={};arr.filter(h=>h.type==='earned'&&h.task!=='🎯 Daily goal bonus').forEach(h=>{const d=h.date.slice(0,10);days[d]=(days[d]||0)+1});return Object.values(days).some(v=>v>=10)})},
+    {icon:'📅',name:'Consistency',desc:'30-day streak',done:longestStreak>=30},
+  ];
+}
+function checkAchievements(){
+  if(!D._unlockedAchievements)D._unlockedAchievements=[];
+  const achievements=getAchievements();
+  const newlyUnlocked=achievements.filter(a=>a.done&&!D._unlockedAchievements.includes(a.name));
+  if(newlyUnlocked.length>0){
+    newlyUnlocked.forEach(a=>D._unlockedAchievements.push(a.name));
+    saveL();
+    const a=newlyUnlocked[0];
+    confetti();
+    modal(`<div style="text-align:center;">
+      <div style="font-size:3rem;margin-bottom:8px;">${a.icon}</div>
+      <h2 style="color:var(--accent-dark);margin-bottom:8px;">Achievement Unlocked!</h2>
+      <p style="font-size:1.1rem;font-weight:bold;margin-bottom:4px;">${a.name}</p>
+      <p style="color:var(--text-dim);font-size:.85rem;margin-bottom:16px;">${a.desc}</p>
+      ${newlyUnlocked.length>1?`<p style="font-size:.8rem;color:var(--warning-dark);margin-bottom:12px;">+${newlyUnlocked.length-1} more unlocked!</p>`:''}
+      <button data-close class="btn bpri" style="width:100%;">Nice! 🎉</button>
+    </div>`);
+  }
+}
+// ===== INSIGHTS =====
+function rInsights(){
+  const earned=D.pointsHistory.filter(h=>h.type==='earned'&&h.task!=='🎯 Daily goal bonus');
+  if(earned.length<3)return `<div class="vc"><button class="tback">← Back</button><h2 style="font-size:1.1rem;color:var(--accent-dark);margin-bottom:12px">🔍 Insights</h2><p style="color:var(--text-dim);font-style:italic">Need more data — complete a few more tasks to see patterns!</p></div>`;
+  // Best day of week
+  const dayNames=['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+  const byDay=[0,0,0,0,0,0,0],byDayCount=[0,0,0,0,0,0,0];
+  earned.forEach(h=>{const dow=new Date(h.date).getDay();byDay[dow]+=h.points;byDayCount[dow]++});
+  const avgByDay=byDay.map((pts,i)=>{const uniqueDays=new Set(earned.filter(h=>new Date(h.date).getDay()===i).map(h=>h.date.slice(0,10))).size;return uniqueDays>0?Math.round(pts/uniqueDays):0});
+  const bestDayIdx=avgByDay.indexOf(Math.max(...avgByDay));
+  const worstDayIdx=avgByDay.indexOf(Math.min(...avgByDay.filter(v=>v>0)));
+  // Best time of day (using local time from history timestamps)
+  const byHour=Array(24).fill(0),byHourCount=Array(24).fill(0);
+  earned.forEach(h=>{const hr=new Date(h.date).getHours();byHour[hr]+=h.points;byHourCount[hr]++});
+  const timeBlocks=[
+    {name:'Early Morning',range:'5–8am',hrs:[5,6,7]},
+    {name:'Morning',range:'8am–12pm',hrs:[8,9,10,11]},
+    {name:'Afternoon',range:'12–5pm',hrs:[12,13,14,15,16]},
+    {name:'Evening',range:'5–9pm',hrs:[17,18,19,20]},
+    {name:'Night',range:'9pm–12am',hrs:[21,22,23]},
+  ];
+  const blockPts=timeBlocks.map(b=>({...b,pts:b.hrs.reduce((s,hr)=>s+byHour[hr],0),count:b.hrs.reduce((s,hr)=>s+byHourCount[hr],0)}));
+  const bestBlock=blockPts.reduce((a,b)=>b.pts>a.pts?b:a);
+  // Day of week bar chart
+  const maxDayPts=Math.max(...avgByDay,1);
+  const dayBars=avgByDay.map((v,i)=>{const pct=Math.round(v/maxDayPts*100);return `<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px"><span style="font-size:.75rem;width:30px;color:${i===bestDayIdx?'var(--success-dark)':i===worstDayIdx?'var(--danger-dark)':'var(--text-dim)'};font-weight:${i===bestDayIdx||i===worstDayIdx?'bold':'normal'}">${dayNames[i].slice(0,3)}</span><div style="flex:1;height:14px;background:var(--card-neutral);border-radius:4px;overflow:hidden"><div style="height:100%;width:${pct}%;background:${i===bestDayIdx?'var(--success)':i===worstDayIdx?'var(--danger)':'var(--accent)'};border-radius:4px"></div></div><span style="font-size:.7rem;color:var(--text-dim);width:30px;text-align:right">${v}</span></div>`}).join('');
+  // Time block chart
+  const maxBlockPts=Math.max(...blockPts.map(b=>b.pts),1);
+  const blockBars=blockPts.map(b=>{const pct=Math.round(b.pts/maxBlockPts*100);const isBest=b===bestBlock;return `<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px"><span style="font-size:.7rem;width:55px;color:var(--text-dim)">${b.range}</span><div style="flex:1;height:14px;background:var(--card-neutral);border-radius:4px;overflow:hidden"><div style="height:100%;width:${pct}%;background:${isBest?'var(--success)':'var(--accent)'};border-radius:4px"></div></div><span style="font-size:.7rem;color:var(--text-dim);width:30px;text-align:right">${b.pts}</span></div>`}).join('');
+  // Category breakdown
+  const cats={work:0,home:0,growth:0};
+  earned.forEach(h=>{if(h.category&&cats[h.category]!==undefined)cats[h.category]+=h.points});
+  const totalCatPts=Object.values(cats).reduce((s,v)=>s+v,0);
+  const catBars=totalCatPts>0?Object.entries(cats).map(([k,v])=>{const pct=Math.round(v/totalCatPts*100);const label=k==='work'?'💼 Work':k==='home'?'🏠 Home':'🌱 Growth';return `<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px"><span style="font-size:.75rem;width:60px">${label}</span><div style="flex:1;height:14px;background:var(--card-neutral);border-radius:4px;overflow:hidden"><div style="height:100%;width:${pct}%;background:var(--accent);border-radius:4px"></div></div><span style="font-size:.7rem;color:var(--text-dim);width:35px;text-align:right">${pct}%</span></div>`}).join(''):'';
+  // Productivity score: rolling 7-day avg
+  const last7=[];for(let i=0;i<7;i++){const d=new Date();d.setDate(d.getDate()-i);const ds=d.toISOString().slice(0,10);last7.push(ptsForDay(ds))}
+  const avg7=Math.round(last7.reduce((s,v)=>s+v,0)/7);
+  return `<div class="vc"><button class="tback">← Back</button><h2 style="font-size:1.1rem;color:var(--accent-dark);margin-bottom:16px">🔍 Insights</h2>
+    <div class="fcard" style="margin-bottom:12px;text-align:center"><div style="font-size:.8rem;color:var(--text-dim);margin-bottom:4px">7-day average</div><div style="font-size:1.5rem;font-weight:bold;color:var(--accent-dark)">${avg7} pts/day</div></div>
+    <div class="fcard" style="margin-bottom:12px"><div style="font-size:.85rem;font-weight:600;margin-bottom:8px">📅 Best Day of Week</div><p style="font-size:.8rem;color:var(--text-dim);margin-bottom:8px">Average points per day (${dayNames[bestDayIdx]} is your best)</p>${dayBars}</div>
+    <div class="fcard" style="margin-bottom:12px"><div style="font-size:.85rem;font-weight:600;margin-bottom:8px">⏰ Best Time of Day</div><p style="font-size:.8rem;color:var(--text-dim);margin-bottom:8px">Total points by time block (${bestBlock.name} is your peak)</p>${blockBars}</div>
+    ${catBars?`<div class="fcard" style="margin-bottom:12px"><div style="font-size:.85rem;font-weight:600;margin-bottom:8px">🏷️ Category Breakdown</div>${catBars}</div>`:''}
+  </div>`;
 }
 // ===== METRICS =====
 function rCorrelation(){
@@ -600,8 +825,9 @@ function showHistDetail(idx){
   if(e.pomo)details.push(`<div><b>Pomodoro:</b> ${e.pomo} (work/break)</div>`);
   if(e.seconds!=null){const h=Math.floor(e.seconds/3600),m=Math.floor((e.seconds%3600)/60),s=e.seconds%60;let dur='';if(h>0)dur+=h+'h ';if(m>0)dur+=m+'m ';dur+=s+'s';details.push(`<div><b>Duration:</b> ${dur.trim()}</div>`)}
   else if(e.minutes!=null){const h=Math.floor(e.minutes/60),m=e.minutes%60;let dur='';if(h>0)dur+=h+'h ';if(m>0)dur+=m+'m';details.push(`<div><b>Duration:</b> ${dur.trim()||'0m'}</div>`)}
+  if(e.count!=null)details.push(`<div><b>Count:</b> ${e.count} ${e.countUnit||'units'}</div>`);
   if(e.category)details.push(`<div><b>Category:</b> ${e.category==='work'?'💼 Work':e.category==='home'?'🏠 Home':e.category==='growth'?'🌱 Growth':e.category}</div>`);
-  if(e.taskType)details.push(`<div><b>Type:</b> ${e.taskType==='one-time'?'🎯 One-Time':e.taskType==='recurring'?'🔄 Recurring':e.taskType==='evergreen'?'♾️ Evergreen':e.taskType}</div>`);
+  if(e.taskType)details.push(`<div><b>Type:</b> ${e.taskType==='one-time'?'🎯 One-Time':e.taskType==='recurring'?'🔄 Recurring':e.taskType==='daily'?'📅 Daily':e.taskType==='evergreen'?'♾️ Evergreen':e.taskType}</div>`);
   if(e.taskId){const allForTask=D.pointsHistory.filter(h=>h.taskId===e.taskId&&h.type==='earned');const totalMins=allForTask.reduce((s,h)=>s+(h.minutes||0),0);if(totalMins>0){const th=Math.floor(totalMins/60),tm=totalMins%60;let dur='';if(th>0)dur+=th+' hour'+(th>1?'s':'');if(tm>0)dur+=(dur?' and ':'')+tm+' minute'+(tm>1?'s':'');details.push(`<div><b>Total invested:</b> ${dur}</div>`)}}
   modal(`<h2 style="color:var(--accent-dark);margin-bottom:8px">${e.task}</h2><div style="font-size:.85rem;line-height:1.8;margin-bottom:16px">${details.join('')}</div><button data-close class="btn bmut" style="width:100%">Close</button>`);
 }
@@ -617,16 +843,70 @@ function taskViz(task,hist){
   if(!hist.length)return '<p style="font-size:.8rem;color:var(--text-dim);margin-bottom:14px;font-style:italic">No history yet.</p>';
   const mnName=new Date(vizYear,vizMonth).toLocaleString('default',{month:'long',year:'numeric'});
   const nav=`<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px"><button id="viz-prev" class="ibtn">◀</button><span style="font-size:.8rem;color:var(--text-dim)">${mnName}</span><button id="viz-next" class="ibtn">▶</button></div>`;
-  if(task.timeBased){
-    // Bar graph: minutes per day for the selected month
+  if(task.timeBased||task.countBased){
+    // Bar graph: minutes or counts per day for the selected month
     const dim=new Date(vizYear,vizMonth+1,0).getDate();
-    const bars=[];for(let d=1;d<=dim;d++){const ds=`${vizYear}-${String(vizMonth+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;bars.push(hist.filter(h=>h.date.slice(0,10)===ds).reduce((s,h)=>s+(h.minutes||0),0))}
-    const maxVal=Math.max(...bars,1);
+    const bars=[];for(let d=1;d<=dim;d++){const ds=`${vizYear}-${String(vizMonth+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;bars.push(hist.filter(h=>h.date.slice(0,10)===ds).reduce((s,h)=>s+(task.timeBased?(h.minutes||0):(h.count||0)),0))}
+    const goalTarget=(task.goal&&task.goal.period==='daily')?task.goal.target:0;
+    const weeklyTarget=(task.goal&&task.goal.period==='weekly')?task.goal.target:0;
+    const monthlyTarget=(task.goal&&task.goal.period==='monthly')?task.goal.target:0;
+    let effectiveMax=Math.max(...bars,goalTarget,1);
+    // Compute cumulative for weekly or monthly goals
+    if(weeklyTarget>0){
+      effectiveMax=Math.max(effectiveMax,weeklyTarget);
+      let weekSum=0;
+      for(let d=1;d<=dim;d++){const dow=new Date(vizYear,vizMonth,d).getDay();if(dow===1)weekSum=0;weekSum+=bars[d-1];effectiveMax=Math.max(effectiveMax,weekSum)}
+    }
+    if(monthlyTarget>0){
+      effectiveMax=Math.max(effectiveMax,monthlyTarget);
+      let mSum=0;for(let d=0;d<dim;d++){mSum+=bars[d];effectiveMax=Math.max(effectiveMax,mSum)}
+    }
+    const maxVal=effectiveMax;
     const w=280,h=80,bw=w/dim;
-    const barSvg=bars.map((v,i)=>{const bh=v>0?Math.max(2,v/maxVal*h):0;return `<rect x="${i*bw+0.5}" y="${h-bh}" width="${bw-1}" height="${bh}" fill="var(--accent)" rx="1.5"/>`}).join('');
-    const yTop=maxVal>=60?Math.round(maxVal/60)+'h':maxVal+'m';
-    const yMid=maxVal>=60?Math.round(maxVal/120)+'h':Math.round(maxVal/2)+'m';
-    return `<div style="margin-bottom:14px">${nav}<div style="position:relative;padding-left:20px"><svg viewBox="0 0 ${w} ${h+16}" style="width:100%;height:100px;"><line x1="0" y1="0" x2="${w}" y2="0" stroke="var(--border)" stroke-width="0.5" stroke-dasharray="3"/><line x1="0" y1="${h/2}" x2="${w}" y2="${h/2}" stroke="var(--border)" stroke-width="0.5" stroke-dasharray="3"/><line x1="0" y1="${h}" x2="${w}" y2="${h}" stroke="var(--border)" stroke-width="1"/>${barSvg}<text x="0" y="${h+12}" font-size="7" fill="var(--text-dim)">1</text><text x="${w/2}" y="${h+12}" font-size="7" fill="var(--text-dim)" text-anchor="middle">${Math.ceil(dim/2)}</text><text x="${w}" y="${h+12}" font-size="7" fill="var(--text-dim)" text-anchor="end">${dim}</text></svg><div style="position:absolute;top:0;left:0;font-size:.55rem;color:var(--text-dim)">${yTop}</div><div style="position:absolute;top:45%;left:0;font-size:.55rem;color:var(--text-dim)">${yMid}</div></div></div>`;
+    const barSvg=bars.map((v,i)=>{const bh=v>0?Math.max(2,v/maxVal*h):0;const fill=goalTarget>0&&v>=goalTarget?'var(--success-dark)':'var(--accent)';return `<rect x="${i*bw+0.5}" y="${h-bh}" width="${bw-1}" height="${bh}" fill="${fill}" rx="1.5"/>`}).join('');
+    // Daily goal line
+    const goalLine=goalTarget>0?`<line x1="0" y1="${h-goalTarget/maxVal*h}" x2="${w}" y2="${h-goalTarget/maxVal*h}" stroke="var(--danger-dark)" stroke-width="1" stroke-dasharray="4,2" opacity="0.7"/>`:'';
+    const goalLabel=goalTarget>0?`<div style="position:absolute;top:${Math.max(0,(1-goalTarget/maxVal)*100-2)}%;right:0;font-size:.5rem;color:var(--danger-dark);font-weight:bold">goal: ${goalTarget}${task.timeBased?'m':''}</div>`:'';
+    // Weekly goal: separate line segments per week + target line
+    let cumOverlay='',cumGoalLine='',cumLabel='';
+    if(weeklyTarget>0){
+      const wGoalY=h-weeklyTarget/maxVal*h;
+      cumGoalLine=`<line x1="0" y1="${wGoalY}" x2="${w}" y2="${wGoalY}" stroke="var(--danger-dark)" stroke-width="1" stroke-dasharray="4,2" opacity="0.7"/>`;
+      cumLabel=`<div style="position:absolute;top:${Math.max(0,(1-weeklyTarget/maxVal)*100-2)}%;right:0;font-size:.5rem;color:var(--danger-dark);font-weight:bold">goal: ${weeklyTarget}${task.timeBased?'m':''}/wk</div>`;
+      // Build separate polyline per week, green if goal met
+      let segments=[];let segTotals=[];let seg=[];let weekSum=0;
+      for(let d=1;d<=dim;d++){
+        const dow=new Date(vizYear,vizMonth,d).getDay();
+        if(dow===1&&seg.length>0){segments.push(seg);segTotals.push(weekSum);seg=[];weekSum=0}
+        weekSum+=bars[d-1];
+        const x=(d-0.5)*bw;
+        const y=h-weekSum/maxVal*h;
+        seg.push(`${x.toFixed(1)},${y.toFixed(1)}`);
+      }
+      if(seg.length>0){segments.push(seg);segTotals.push(weekSum)}
+      cumOverlay=segments.map((s,i)=>{const color=segTotals[i]>=weeklyTarget?'var(--success-dark)':'var(--warning-dark)';return `<polyline points="${s.join(' ')}" fill="none" stroke="${color}" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" opacity="0.8"/>`}).join('');
+    }
+    // Monthly goal: single cumulative line across the month + target line
+    if(monthlyTarget>0){
+      const mGoalY=h-monthlyTarget/maxVal*h;
+      cumGoalLine=`<line x1="0" y1="${mGoalY}" x2="${w}" y2="${mGoalY}" stroke="var(--danger-dark)" stroke-width="1" stroke-dasharray="4,2" opacity="0.7"/>`;
+      cumLabel=`<div style="position:absolute;top:${Math.max(0,(1-monthlyTarget/maxVal)*100-2)}%;right:0;font-size:.5rem;color:var(--danger-dark);font-weight:bold">goal: ${monthlyTarget}${task.timeBased?'m':''}/mo</div>`;
+      let mSum=0;let pts=[];
+      for(let d=1;d<=dim;d++){
+        mSum+=bars[d-1];
+        const x=(d-0.5)*bw;
+        const y=h-mSum/maxVal*h;
+        pts.push(`${x.toFixed(1)},${y.toFixed(1)}`);
+      }
+      const mColor=mSum>=monthlyTarget?'var(--success-dark)':'var(--warning-dark)';
+      cumOverlay=`<polyline points="${pts.join(' ')}" fill="none" stroke="${mColor}" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" opacity="0.8"/>`;
+    }
+    const unit=task.timeBased?'m':(task.countUnit||'');
+    function fmtAxis(val){if(!task.timeBased)return val+unit;if(val>=60){const hr=Math.floor(val/60),mn=val%60;return mn>0?hr+'h'+mn+'m':hr+'h'}return val+'m'}
+    const yTop=fmtAxis(maxVal);
+    const midVal=Math.round(maxVal/2);
+    const yMid=midVal>0&&midVal!==maxVal?fmtAxis(midVal):'';
+    return `<div style="margin-bottom:14px">${nav}<div style="position:relative;padding-left:20px"><svg viewBox="0 0 ${w} ${h+16}" style="width:100%;height:100px;"><line x1="0" y1="0" x2="${w}" y2="0" stroke="var(--border)" stroke-width="0.5" stroke-dasharray="3"/><line x1="0" y1="${h/2}" x2="${w}" y2="${h/2}" stroke="var(--border)" stroke-width="0.5" stroke-dasharray="3"/><line x1="0" y1="${h}" x2="${w}" y2="${h}" stroke="var(--border)" stroke-width="1"/>${goalLine}${cumGoalLine}${barSvg}${cumOverlay}<text x="0" y="${h+12}" font-size="7" fill="var(--text-dim)">1</text><text x="${w/2}" y="${h+12}" font-size="7" fill="var(--text-dim)" text-anchor="middle">${Math.ceil(dim/2)}</text><text x="${w}" y="${h+12}" font-size="7" fill="var(--text-dim)" text-anchor="end">${dim}</text></svg><div style="position:absolute;top:0;left:0;font-size:.55rem;color:var(--text-dim)">${yTop}</div><div style="position:absolute;top:45%;left:0;font-size:.55rem;color:var(--text-dim)">${yMid}</div>${goalLabel}${cumLabel}</div></div>`;
   } else {
     // Mini calendar for selected month with checkmarks
     const dim=new Date(vizYear,vizMonth+1,0).getDate(),fd=new Date(vizYear,vizMonth,1).getDay();
@@ -656,10 +936,20 @@ function showTaskDetail(tid){
     if(task.timeBased){const m=entries.reduce((s,h)=>s+(h.minutes||0),0);if(m>=60){const hr=Math.floor(m/60),mn=m%60;return mn>0?hr+'h '+mn+'m':hr+'h'}return m>0?m+'m':'—'}
     else return entries.length>0?entries.length+'':'—'}
   const statToday=fmtStat(todayH),statWeek=fmtStat(weekH),statMonth=fmtStat(monthH),statLife=fmtStat(hist);
-  const isSleeping=task.type==='recurring'&&task.lastCompleted&&(new Date()-new Date(task.lastCompleted))/864e5<task.cadenceDays;
+  const goalStreak=task.goal?getGoalStreak(task):0;
+  // Daily tasks without goals get a simple completion streak
+  let dailyStreak=0;
+  if(task.type==='daily'&&!task.goal){dailyStreak=getDailyStreak(task)}
+  const isSkipped=task.goalSkips&&task.goalSkips.includes(today());
+  const canSkip=task.type==='daily'||task.goal;
+  const skipBtn=canSkip?`<button id="eskip" class="btn ${isSkipped?'bwar':'bmut'}" style="width:100%;margin-bottom:8px;font-size:.85rem">${isSkipped?'⏭️ Skipped today (tap to undo)':'⏭️ Skip today (preserve streak)'}</button>`:'';
+  const goalInfo=task.goal?`<div style="margin-bottom:14px;font-size:.85rem;color:var(--text-dim)">📊 Goal: ${task.goal.target} ${task.timeBased?'min':task.countUnit||'units'} per ${task.goal.period}${goalStreak>0?` · 🔥 ${goalStreak} ${task.goal.period} streak`:''}</div>${skipBtn}`:(task.type==='daily'?`${dailyStreak>0?`<div style="margin-bottom:14px;font-size:.85rem;color:var(--text-dim)">🔥 ${dailyStreak} day streak</div>`:''}${skipBtn}`:'');
+  const isSleeping=(task.type==='recurring'&&task.lastCompleted&&(new Date()-new Date(task.lastCompleted))/864e5<task.cadenceDays)||(task.type==='daily'&&D.pointsHistory.some(h=>h.taskId===task.id&&h.type==='earned'&&h.date.slice(0,10)===today()&&h.task.includes('✅')));
   const earlyBtn=isSleeping?`<button id="edone-early" class="btn bsuc" style="width:100%;margin-bottom:8px">⚡ Done early</button>`:'';
-  modal(`<h2 style="color:var(--accent-dark);margin-bottom:4px">${task.name}</h2><p style="font-size:.8rem;color:var(--text-dim);margin-bottom:14px">${task.type}${task.type==='recurring'?' · every '+task.cadenceDays+'d':''}</p>${earlyBtn}<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:14px"><div class="sbox"><div class="sn">${statToday}</div><div class="sl">Today</div></div><div class="sbox"><div class="sn">${statWeek}</div><div class="sl">This week</div></div><div class="sbox"><div class="sn">${statMonth}</div><div class="sl">This month</div></div><div class="sbox"><div class="sn">${statLife}</div><div class="sl">Lifetime</div></div></div><p style="font-size:.8rem;color:var(--text-dim);margin-bottom:14px">Last: ${ld}</p><div id="viz-container">${taskViz(task,hist)}</div><h3 style="font-size:.9rem;margin-bottom:8px">Edit</h3><input id="en" type="text" value="${task.name}" class="inf"><select id="ety" class="inf"><option value="one-time" ${task.type==='one-time'?'selected':''}>🎯 One-Time</option><option value="recurring" ${task.type==='recurring'?'selected':''}>🔄 Recurring</option><option value="evergreen" ${task.type==='evergreen'?'selected':''}>♾️ Evergreen</option></select><select id="ecat" class="inf"><option value="work" ${task.category==='work'?'selected':''}>💼 Work</option><option value="home" ${task.category==='home'?'selected':''}>🏠 Home</option><option value="growth" ${task.category==='growth'?'selected':''}>🌱 Growth</option></select><div id="ecw" style="${task.type==='recurring'?'':'display:none'}"><input id="ecd" type="number" value="${task.cadenceDays||''}" min="1" placeholder="Cadence (days)" class="inf"></div><label class="chlbl"><input id="etb" type="checkbox" ${task.timeBased?'checked':''}> Time-based</label><div id="efw" style="${task.timeBased?'display:none':''}"><input id="ept" type="number" value="${task.points||''}" min="1" placeholder="Points" class="inf"></div><div id="etw" style="${task.timeBased?'':'display:none'}"><div style="display:flex;gap:6px;align-items:center;margin-bottom:8px"><input id="epa" type="number" value="${task.ptsAmount||''}" min="1" class="inf" style="width:70px;margin:0;text-align:center"><span class="rl">pts per</span><input id="epp" type="number" value="${task.ptsPerMinutes||''}" min="1" class="inf" style="width:70px;margin:0;text-align:center"><span class="rl">min</span></div></div><div id="ee" class="err"></div><div style="display:flex;gap:8px;margin-top:8px"><button id="esv" data-id="${task.id}" class="btn bpri" style="flex:1">Save</button><button id="epin" data-id="${task.id}" class="btn ${task.pinned?'bpri':'bmut'}" style="padding:10px 12px;font-size:.8rem">📌</button><button id="earchive" data-id="${task.id}" class="btn bmut" style="padding:10px 12px;font-size:.8rem">${task.archived?'📤':'📦'}</button><button id="edl" data-id="${task.id}" class="btn bdan" style="padding:10px 16px">🗑️</button></div><button data-close class="btn bmut" style="margin-top:10px;width:100%">Close</button>`);
+  modal(`<h2 style="color:var(--accent-dark);margin-bottom:4px">${task.name}</h2><p style="font-size:.8rem;color:var(--text-dim);margin-bottom:14px">${task.type}${task.type==='recurring'?' · every '+task.cadenceDays+'d':''}</p>${earlyBtn}<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:14px"><div class="sbox"><div class="sn">${statToday}</div><div class="sl">Today</div></div><div class="sbox"><div class="sn">${statWeek}</div><div class="sl">This week</div></div><div class="sbox"><div class="sn">${statMonth}</div><div class="sl">This month</div></div><div class="sbox"><div class="sn">${statLife}</div><div class="sl">Lifetime</div></div></div>${goalInfo}<p style="font-size:.8rem;color:var(--text-dim);margin-bottom:14px">Last: ${ld}</p><div id="viz-container">${taskViz(task,hist)}</div><h3 style="font-size:.9rem;margin-bottom:8px">Edit</h3><input id="en" type="text" value="${task.name}" class="inf"><select id="ety" class="inf"><option value="one-time" ${task.type==='one-time'?'selected':''}>🎯 One-Time</option><option value="recurring" ${task.type==='recurring'?'selected':''}>🔄 Recurring</option><option value="daily" ${task.type==='daily'?'selected':''}>📅 Daily</option><option value="evergreen" ${task.type==='evergreen'?'selected':''}>♾️ Evergreen</option></select><select id="ecat" class="inf"><option value="work" ${task.category==='work'?'selected':''}>💼 Work</option><option value="home" ${task.category==='home'?'selected':''}>🏠 Home</option><option value="growth" ${task.category==='growth'?'selected':''}>🌱 Growth</option></select>${rGroupSelect('egrp',task.group||'')}<div id="ecw" style="${task.type==='recurring'?'':'display:none'}"><input id="ecd" type="number" value="${task.cadenceDays||''}" min="1" placeholder="Cadence (days)" class="inf"></div><label class="chlbl"><input id="etb" type="checkbox" ${task.timeBased?'checked':''}> Time-based</label><div id="efw" style="${task.timeBased?'display:none':''}"><input id="ept" type="number" value="${task.points||''}" min="1" placeholder="Points" class="inf"></div><div id="etw" style="${task.timeBased?'':'display:none'}"><div style="display:flex;gap:6px;align-items:center;margin-bottom:8px"><input id="epa" type="number" value="${task.ptsAmount||''}" min="1" class="inf" style="width:70px;margin:0;text-align:center"><span class="rl">pts per</span><input id="epp" type="number" value="${task.ptsPerMinutes||''}" min="1" class="inf" style="width:70px;margin:0;text-align:center"><span class="rl">min</span></div></div>${task.countBased?`<div style="margin-bottom:8px"><input id="ecunit" type="text" value="${task.countUnit||''}" placeholder="Unit name" class="inf" style="margin:0"></div>`:''}<div id="ee" class="err"></div>${(task.timeBased||task.countBased)?`<div style="margin-bottom:8px;padding:8px;background:var(--card-neutral);border-radius:8px"><div style="font-size:.8rem;font-weight:600;margin-bottom:6px">📊 Goal (optional)</div><div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><input id="egoal-target" type="number" min="1" value="${task.goal?.target||''}" placeholder="" class="inf" style="width:70px;margin:0;text-align:center"><span class="rl">${task.timeBased?'min':task.countUnit||'units'} per</span><select id="egoal-period" class="inf" style="width:auto;margin:0"><option value="">None</option><option value="hourly" ${task.goal?.period==='hourly'?'selected':''}>Hour</option><option value="daily" ${task.goal?.period==='daily'?'selected':''}>Day</option><option value="weekly" ${task.goal?.period==='weekly'?'selected':''}>Week</option><option value="monthly" ${task.goal?.period==='monthly'?'selected':''}>Month</option><option value="annually" ${task.goal?.period==='annually'?'selected':''}>Year</option></select></div></div>`:''}<div style="display:flex;gap:8px;margin-top:8px"><button id="esv" data-id="${task.id}" class="btn bpri" style="flex:1">Save</button><button id="epin" data-id="${task.id}" class="btn ${task.pinned?'bpri':'bmut'}" style="padding:10px 12px;font-size:.8rem">📌</button><button id="earchive" data-id="${task.id}" class="btn bmut" style="padding:10px 12px;font-size:.8rem">${task.archived?'📤':'📦'}</button><button id="edl" data-id="${task.id}" class="btn bdan" style="padding:10px 16px">🗑️</button></div><button data-close class="btn bmut" style="margin-top:10px;width:100%">Close</button>`);
   document.getElementById('edone-early')?.addEventListener('click',()=>{closeM();completeTask(tid)});
+  document.getElementById('eskip')?.addEventListener('click',()=>{if(!task.goalSkips)task.goalSkips=[];const t=today();const idx=task.goalSkips.indexOf(t);if(idx>=0){task.goalSkips.splice(idx,1);save();render();showTaskDetail(tid);toast('↩️ Skip removed')}else{task.goalSkips.push(t);save();render();showTaskDetail(tid);toast('⏭️ Skipped — streak preserved')}});
+  bindGroupSelect('egrp');
   // Viz month navigation - rebuild viz in place
   function bindVizNav(){
     document.getElementById('viz-prev')?.addEventListener('click',()=>{vizMonth--;if(vizMonth<0){vizMonth=11;vizYear--}const vz=document.getElementById('viz-container');if(vz){vz.innerHTML=taskViz(task,hist);bindVizNav()}});
@@ -668,7 +958,7 @@ function showTaskDetail(tid){
   bindVizNav();
   document.getElementById('ety')?.addEventListener('change',e=>{document.getElementById('ecw').style.display=e.target.value==='recurring'?'':'none'});
   document.getElementById('etb')?.addEventListener('change',e=>{document.getElementById('efw').style.display=e.target.checked?'none':'';document.getElementById('etw').style.display=e.target.checked?'':'none'});
-  document.getElementById('esv')?.addEventListener('click',()=>{const n=document.getElementById('en').value.trim(),ty=document.getElementById('ety').value,tb=document.getElementById('etb').checked,err=document.getElementById('ee');if(!n){err.textContent='Name required';err.style.display='block';return}if(tb){const a=parseInt(document.getElementById('epa').value),b=parseInt(document.getElementById('epp').value);if(!Number.isInteger(a)||a<1||!Number.isInteger(b)||b<1){err.textContent='Valid pts/min required';err.style.display='block';return}task.timeBased=true;task.ptsAmount=a;task.ptsPerMinutes=b;task.points=a}else{const p=parseInt(document.getElementById('ept').value);if(!Number.isInteger(p)||p<1){err.textContent='Valid points required';err.style.display='block';return}task.timeBased=false;task.points=p}task.name=n;task.type=ty;task.category=document.getElementById('ecat').value;if(ty==='recurring'){const c=parseInt(document.getElementById('ecd').value);if(!Number.isInteger(c)||c<1){err.textContent='Valid cadence required';err.style.display='block';return}task.cadenceDays=c}save();closeM();render()});
+  document.getElementById('esv')?.addEventListener('click',()=>{const n=document.getElementById('en').value.trim(),ty=document.getElementById('ety').value,tb=document.getElementById('etb').checked,err=document.getElementById('ee');if(!n){err.textContent='Name required';err.style.display='block';return}if(tb){const a=parseInt(document.getElementById('epa').value),b=parseInt(document.getElementById('epp').value);if(!Number.isInteger(a)||a<1||!Number.isInteger(b)||b<1){err.textContent='Valid pts/min required';err.style.display='block';return}task.timeBased=true;task.ptsAmount=a;task.ptsPerMinutes=b;task.points=a}else{const p=parseInt(document.getElementById('ept').value);if(!Number.isInteger(p)||p<1){err.textContent='Valid points required';err.style.display='block';return}task.timeBased=false;task.points=p}task.name=n;task.type=ty;task.category=document.getElementById('ecat').value;const grp=getGroupValue('egrp');task.group=grp||undefined;if(document.getElementById('ecunit'))task.countUnit=document.getElementById('ecunit').value.trim();if(ty==='recurring'){const c=parseInt(document.getElementById('ecd').value);if(!Number.isInteger(c)||c<1){err.textContent='Valid cadence required';err.style.display='block';return}task.cadenceDays=c}const goalTarget=parseInt(document.getElementById('egoal-target')?.value),goalPeriod=document.getElementById('egoal-period')?.value;if(goalPeriod&&Number.isInteger(goalTarget)&&goalTarget>0){task.goal={target:goalTarget,period:goalPeriod}}else{delete task.goal}save();closeM();render()});
   document.getElementById('epin')?.addEventListener('click',()=>{task.pinned=!task.pinned;save();closeM();render()});
   document.getElementById('earchive')?.addEventListener('click',()=>{task.archived=!task.archived;save();closeM();render()});
   document.getElementById('edl')?.addEventListener('click',()=>confirmAction('Delete this task?',()=>{deleteTask(tid);closeM()}));
@@ -683,12 +973,16 @@ function bindAll(){
   document.querySelectorAll('.cat-btn').forEach(b=>b.addEventListener('click',()=>{categoryFilter=b.dataset.cat;render()}));
   document.getElementById('rsort')?.addEventListener('click',()=>{recurSort=recurSort==='custom'?'due':'custom';render()});
   // Tasks
-  document.querySelectorAll('.cbtn').forEach(b=>b.addEventListener('click',e=>{e.stopPropagation();const t=D.tasks.find(x=>x.id===b.dataset.id);if(t&&t.timeBased){inlineMinId=t.id;render()}else completeTask(b.dataset.id)}));
-  document.getElementById('ims')?.addEventListener('click',()=>{const h=parseInt(document.getElementById('imi-h')?.value)||0,m=parseInt(document.getElementById('imi-m')?.value)||0;const total=h*60+m;if(total<1)return;completeTask(document.getElementById('ims').dataset.id,total)});
-  document.getElementById('ims-work')?.addEventListener('click',()=>{const h=parseInt(document.getElementById('imi-h')?.value)||0,m=parseInt(document.getElementById('imi-m')?.value)||0;const total=h*60+m;if(total<1)return;completeTask(document.getElementById('ims-work').dataset.id,total,false)});
-  document.getElementById('ims-done')?.addEventListener('click',()=>{const h=parseInt(document.getElementById('imi-h')?.value)||0,m=parseInt(document.getElementById('imi-m')?.value)||0;const total=h*60+m;if(total<1)return;completeTask(document.getElementById('ims-done').dataset.id,total,true)});
+  document.querySelectorAll('.grp-hdr').forEach(b=>b.addEventListener('click',()=>{const g=b.dataset.grp;if(collapsedGroups.has(g))collapsedGroups.delete(g);else collapsedGroups.add(g);render()}));
+  document.querySelectorAll('.grp-done').forEach(b=>b.addEventListener('click',e=>{e.stopPropagation();const g=b.dataset.grp;const td=today();const gTasks=D.tasks.filter(t=>t.group===g&&!t.archived);const prevStates=gTasks.map(t=>({id:t.id,state:JSON.parse(JSON.stringify(t))}));const prevP=D.points;const prevHistLen=D.pointsHistory.length;let completed=0;gTasks.forEach(t=>{if(t.type==='evergreen'){if(t.timeBased)completeTask(t.id,t.ptsPerMinutes||1);else if(t.countBased)completeTask(t.id,1);else completeTask(t.id);completed++;return}if(t.timeBased||t.countBased)return;if(t.type==='one-time'&&!t.completed){completeTask(t.id);completed++}else if(t.type==='daily'){const doneToday=D.pointsHistory.some(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td&&h.task.includes('✅'));if(!doneToday){completeTask(t.id);completed++}}else if(t.type==='recurring'){completeTask(t.id);completed++}});if(completed>0){render();showUndo(()=>{prevStates.forEach(ps=>{const t=D.tasks.find(x=>x.id===ps.id);if(t)Object.assign(t,ps.state)});D.points=prevP;D.pointsHistory.length=prevHistLen;saveL();debouncedPush();render()})}}));
+  document.querySelectorAll('.grp-skip').forEach(b=>b.addEventListener('click',e=>{e.stopPropagation();const g=b.dataset.grp;const td=today();const gTasks=D.tasks.filter(t=>t.group===g&&!t.archived);const allSkipped=gTasks.every(t=>t.goalSkips&&t.goalSkips.includes(td));if(allSkipped){gTasks.forEach(t=>{if(t.goalSkips){const idx=t.goalSkips.indexOf(td);if(idx>=0)t.goalSkips.splice(idx,1)}});save();render();toast(`↩️ Unskipped ${g}`)}else{let count=0;gTasks.forEach(t=>{if(!t.goalSkips)t.goalSkips=[];if(!t.goalSkips.includes(td)){t.goalSkips.push(td);count++}});save();render();toast(`⏭️ Skipped ${g} (${count} tasks)`)}}));
+  document.querySelectorAll('.grp-move').forEach(b=>b.addEventListener('click',e=>{e.stopPropagation();const g=b.dataset.grp,dir=b.dataset.d;if(!D.groupOrder)D.groupOrder=getGroups();const idx=D.groupOrder.indexOf(g);if(idx<0){D.groupOrder=getGroups();const idx2=D.groupOrder.indexOf(g);if(idx2<0)return;moveInArr(D.groupOrder,idx2,dir)}else{moveInArr(D.groupOrder,idx,dir)}save();render()}));
+  document.querySelectorAll('.cbtn').forEach(b=>b.addEventListener('click',e=>{e.stopPropagation();const t=D.tasks.find(x=>x.id===b.dataset.id);if(t&&(t.timeBased||t.countBased)){inlineMinId=t.id;render()}else completeTask(b.dataset.id)}));
+  document.getElementById('ims')?.addEventListener('click',()=>{const task=D.tasks.find(t=>t.id===inlineMinId);if(task&&task.countBased){const c=parseInt(document.getElementById('imi-count')?.value)||0;if(c<1)return;completeTask(task.id,c)}else{const h=parseInt(document.getElementById('imi-h')?.value)||0,m=parseInt(document.getElementById('imi-m')?.value)||0;const total=h*60+m;if(total<1)return;completeTask(document.getElementById('ims').dataset.id,total)}});
+  document.getElementById('ims-work')?.addEventListener('click',()=>{const task=D.tasks.find(t=>t.id===inlineMinId);if(task&&task.countBased){const c=parseInt(document.getElementById('imi-count')?.value)||0;if(c<1)return;completeTask(task.id,c,false)}else{const h=parseInt(document.getElementById('imi-h')?.value)||0,m=parseInt(document.getElementById('imi-m')?.value)||0;const total=h*60+m;if(total<1)return;completeTask(document.getElementById('ims-work').dataset.id,total,false)}});
+  document.getElementById('ims-done')?.addEventListener('click',()=>{const task=D.tasks.find(t=>t.id===inlineMinId);if(task&&task.countBased){const c=parseInt(document.getElementById('imi-count')?.value)||0;if(c<1)return;completeTask(task.id,c,true)}else{const h=parseInt(document.getElementById('imi-h')?.value)||0,m=parseInt(document.getElementById('imi-m')?.value)||0;const total=h*60+m;if(total<1)return;completeTask(document.getElementById('ims-done').dataset.id,total,true)}});
   document.getElementById('imc')?.addEventListener('click',()=>{inlineMinId=null;render()});
-  // Live points preview for time-based inline input
+  // Live points preview for time-based and count-based inline input
   ['imi-h','imi-m'].forEach(x=>document.getElementById(x)?.addEventListener('input',()=>{
     const task=D.tasks.find(t=>t.id===inlineMinId);if(!task||!task.timeBased)return;
     const h=parseInt(document.getElementById('imi-h')?.value)||0,m=parseInt(document.getElementById('imi-m')?.value)||0;
@@ -696,12 +990,35 @@ function bindAll(){
     const prev=document.getElementById('imi-preview');
     if(prev)prev.textContent=total>0?`= ${pts} point${pts!==1?'s':''} [${task.ptsAmount} points per ${task.ptsPerMinutes} minute${task.ptsPerMinutes>1?'s':''}]`:'';
   }));
+  document.getElementById('imi-count')?.addEventListener('input',()=>{
+    const task=D.tasks.find(t=>t.id===inlineMinId);if(!task||!task.countBased)return;
+    const c=parseInt(document.getElementById('imi-count')?.value)||0;
+    const pts=Math.floor(c*task.ptsAmount/task.ptsPerCount);
+    const prev=document.getElementById('imi-preview');
+    if(prev)prev.textContent=c>0?`= ${pts} point${pts!==1?'s':''} [${task.ptsAmount} points per ${task.ptsPerCount} ${task.countUnit}]`:'';
+  });
   document.querySelectorAll('.tdet').forEach(b=>b.addEventListener('click',()=>showTaskDetail(b.dataset.id)));
   document.querySelectorAll('.sldet').forEach(b=>b.addEventListener('click',()=>showTaskDetail(b.dataset.id)));
   document.querySelectorAll('.mbtn').forEach(b=>b.addEventListener('click',e=>{e.stopPropagation();moveTask(b.dataset.id,b.dataset.d)}));
   document.getElementById('show-af')?.addEventListener('click',()=>{const c=document.getElementById('afc');if(c.innerHTML){c.innerHTML='';return}c.innerHTML=rAddForm();bindAddForm()});
   document.getElementById('quick-log-btn')?.addEventListener('click',()=>{const c=document.getElementById('qlfc');if(c.innerHTML){c.innerHTML='';return}c.innerHTML=rQuickLog();bindQuickLog()});
   document.getElementById('surprise-btn')?.addEventListener('click',showSurpriseModal);
+  document.getElementById('bulk-skip-btn')?.addEventListener('click',()=>{
+    const td=today();
+    const skippable=D.tasks.filter(t=>!t.archived&&(t.type==='daily'||(t.goal&&t.goal.period==='daily')));
+    const allSkipped=skippable.length>0&&skippable.every(t=>t.goalSkips&&t.goalSkips.includes(td));
+    if(allSkipped){
+      // Unskip all
+      let count=0;
+      skippable.forEach(t=>{if(t.goalSkips){const idx=t.goalSkips.indexOf(td);if(idx>=0){t.goalSkips.splice(idx,1);count++}}});
+      if(count>0){save();render();toast(`↩️ Unskipped ${count} task${count>1?'s':''}`)}
+    } else {
+      // Skip all
+      let count=0;
+      skippable.forEach(t=>{if(!t.goalSkips)t.goalSkips=[];if(!t.goalSkips.includes(td)){t.goalSkips.push(td);count++}});
+      if(count>0){save();render();toast(`⏭️ Skipped ${count} task${count>1?'s':''} for today`)}else{toast('All tasks already skipped or completed')}
+    }
+  });
   // Rewards
   document.querySelectorAll('.rbtn').forEach(b=>b.addEventListener('click',()=>redeemReward(b.dataset.id)));
   document.querySelectorAll('.rdet').forEach(b=>b.addEventListener('click',()=>showRewardEdit(b.dataset.id)));
@@ -788,23 +1105,29 @@ function valQL(){
 }
 function bindAddForm(){
   document.getElementById('tft')?.addEventListener('change',e=>{document.getElementById('tfc').style.display=e.target.value==='recurring'?'block':'none';valTF()});
-  document.getElementById('tftb')?.addEventListener('change',e=>{document.getElementById('tffw').style.display=e.target.checked?'none':'';document.getElementById('tftw').style.display=e.target.checked?'':'none';valTF()});
-  ['tfn','tfp','tfpa','tfpp','tfcd'].forEach(x=>document.getElementById(x)?.addEventListener('input',valTF));
+  document.getElementById('tftb')?.addEventListener('change',e=>{document.getElementById('tffw').style.display=e.target.checked?'none':'';document.getElementById('tftw').style.display=e.target.checked?'':'none';if(e.target.checked){document.getElementById('tfcb').checked=false;document.getElementById('tfcw').style.display='none'}valTF()});
+  document.getElementById('tfcb')?.addEventListener('change',e=>{document.getElementById('tffw').style.display=e.target.checked?'none':'';document.getElementById('tfcw').style.display=e.target.checked?'':'none';if(e.target.checked){document.getElementById('tftb').checked=false;document.getElementById('tftw').style.display='none'}valTF()});
+  bindGroupSelect('tfgrp');
+  ['tfn','tfp','tfpa','tfpp','tfcd','tfca','tfcu','tfcun'].forEach(x=>document.getElementById(x)?.addEventListener('input',valTF));
   document.getElementById('tfs')?.addEventListener('click',()=>{
-    const n=document.getElementById('tfn').value.trim(),ty=document.getElementById('tft').value,tb=document.getElementById('tftb').checked,cat=document.getElementById('tfcat').value;
-    const task={id:id(),name:n,type:ty,timeBased:tb,category:cat,createdAt:localISO()};
+    const n=document.getElementById('tfn').value.trim(),ty=document.getElementById('tft').value,tb=document.getElementById('tftb').checked,cb=document.getElementById('tfcb')?.checked,cat=document.getElementById('tfcat').value;
+    const task={id:id(),name:n,type:ty,timeBased:tb,countBased:cb||false,category:cat,createdAt:localISO()};
+    const grp=getGroupValue('tfgrp');if(grp)task.group=grp;
     if(tb){task.ptsAmount=parseInt(document.getElementById('tfpa').value);task.ptsPerMinutes=parseInt(document.getElementById('tfpp').value);task.points=task.ptsAmount}
+    else if(cb){task.ptsAmount=parseInt(document.getElementById('tfca').value);task.ptsPerCount=parseInt(document.getElementById('tfcu').value);task.countUnit=document.getElementById('tfcun').value.trim();task.points=task.ptsAmount}
     else task.points=parseInt(document.getElementById('tfp').value);
     if(ty==='recurring')task.cadenceDays=parseInt(document.getElementById('tfcd').value);
+    if(ty==='daily')task.cadenceDays=1;
     if(ty==='one-time')task.completed=false;
     D.tasks.push(task);save();render()});
 }
 function valTF(){
-  const n=document.getElementById('tfn')?.value.trim(),tb=document.getElementById('tftb')?.checked,ty=document.getElementById('tft')?.value;
+  const n=document.getElementById('tfn')?.value.trim(),tb=document.getElementById('tftb')?.checked,cb=document.getElementById('tfcb')?.checked,ty=document.getElementById('tft')?.value;
   const btn=document.getElementById('tfs'),err=document.getElementById('tfe');if(!btn||!err)return;
   let ok=true,msg='';
   if(!n){ok=false;msg='Name required'}
   else if(tb){const a=parseInt(document.getElementById('tfpa')?.value),b=parseInt(document.getElementById('tfpp')?.value);if(!Number.isInteger(a)||a<1||!Number.isInteger(b)||b<1){ok=false;msg='Valid pts/min required'}}
+  else if(cb){const a=parseInt(document.getElementById('tfca')?.value),b=parseInt(document.getElementById('tfcu')?.value),u=document.getElementById('tfcun')?.value.trim();if(!Number.isInteger(a)||a<1||!Number.isInteger(b)||b<1||!u){ok=false;msg='Valid pts/count and unit required'}}
   else{const p=parseInt(document.getElementById('tfp')?.value);if(!Number.isInteger(p)||p<1){ok=false;msg='Valid points required'}}
   if(ok&&ty==='recurring'){const c=parseInt(document.getElementById('tfcd')?.value);if(!Number.isInteger(c)||c<1){ok=false;msg='Valid cadence required'}}
   err.textContent=msg;err.style.display=ok?'none':'block';btn.disabled=!ok;btn.style.opacity=ok?'1':'.5';
@@ -876,11 +1199,11 @@ function stopSW(){
   // Don't render yet - keep timer display showing until popup is dismissed
   const linkedTask=taskId?D.tasks.find(x=>x.id===taskId):null;
   setTimeout(()=>{
-    if(linkedTask&&(linkedTask.type==='one-time'||linkedTask.type==='recurring')&&!linkedTask.completed){
+    if(linkedTask&&(linkedTask.type==='one-time'||linkedTask.type==='recurring'||linkedTask.type==='daily')&&!linkedTask.completed){
       modal(`<div style="text-align:center"><p style="margin-bottom:12px">Mark <b>${linkedTask.name}</b> as complete?</p><p style="font-size:.8rem;color:var(--text-dim);margin-bottom:12px">(+10% completion bonus!)</p><div style="display:flex;gap:8px"><button id="qc-yes" class="btn bsuc" style="flex:1">Yes, done!</button><button id="qc-no" class="btn bmut" style="flex:1">Not yet</button></div></div>`);
       document.getElementById('qc-yes')?.addEventListener('click',()=>{
         if(linkedTask.type==='one-time'){linkedTask.completed=true;linkedTask.completedAt=localISO()}
-        else if(linkedTask.type==='recurring'){linkedTask.lastCompleted=localISO()}
+        else if(linkedTask.type==='recurring'||linkedTask.type==='daily'){linkedTask.lastCompleted=localISO()}
         // Award 10% completion bonus based on ALL points earned for this task since last completion
         const allPtsForTask=D.pointsHistory.filter(h=>h.taskId===taskId&&h.type==='earned'&&!h.task.includes('✅')).reduce((s,h)=>s+h.points,0);
         const bonus=Math.floor(allPtsForTask*0.1);
@@ -906,11 +1229,11 @@ function stopPM(){
   T={running:false,paused:false,mode:null,start:null,elapsed:0,workDur:T.workDur,breakDur:T.breakDur,phase:'work',note:'',taskId:'',pts:1,per:15};
   const linkedTask=taskId?D.tasks.find(x=>x.id===taskId):null;
   setTimeout(()=>{
-    if(linkedTask&&(linkedTask.type==='one-time'||linkedTask.type==='recurring')&&!linkedTask.completed){
+    if(linkedTask&&(linkedTask.type==='one-time'||linkedTask.type==='recurring'||linkedTask.type==='daily')&&!linkedTask.completed){
       modal(`<div style="text-align:center"><p style="margin-bottom:12px">Mark <b>${linkedTask.name}</b> as complete?</p><p style="font-size:.8rem;color:var(--text-dim);margin-bottom:12px">(+10% completion bonus!)</p><div style="display:flex;gap:8px"><button id="qc-yes" class="btn bsuc" style="flex:1">Yes, done!</button><button id="qc-no" class="btn bmut" style="flex:1">Not yet</button></div></div>`);
       document.getElementById('qc-yes')?.addEventListener('click',()=>{
         if(linkedTask.type==='one-time'){linkedTask.completed=true;linkedTask.completedAt=localISO()}
-        else if(linkedTask.type==='recurring'){linkedTask.lastCompleted=localISO()}
+        else if(linkedTask.type==='recurring'||linkedTask.type==='daily'){linkedTask.lastCompleted=localISO()}
         const allPtsForTask=D.pointsHistory.filter(h=>h.taskId===taskId&&h.type==='earned'&&!h.task.includes('✅')).reduce((s,h)=>s+h.points,0);
         const bonus=Math.floor(allPtsForTask*0.1);
         if(bonus>0){D.points+=bonus}
@@ -930,11 +1253,12 @@ function showGoodMorning(){
   const emoji=hr<12?'☀️':hr<17?'🌤️':'🌙';
   const yesterday=new Date();yesterday.setDate(yesterday.getDate()-1);const yd=yesterday.toISOString().slice(0,10);
   const yPts=ptsForDay(yd);
-  // Gather tasks for today: recurring due + one-time, fill with evergreen if few
+  // Gather tasks for today: prioritize one-time (first 2), then due recurring, then remaining one-time, then evergreen. Exclude daily.
   const vis=visibleTasks();
-  const due=vis.filter(x=>x.type==='recurring'||x.type==='one-time');
-  let suggestions=due.slice(0,5);
-  if(suggestions.length<5){const eg=vis.filter(x=>x.type==='evergreen').slice(0,5-suggestions.length);suggestions=suggestions.concat(eg)}
+  const ot=vis.filter(x=>x.type==='one-time');
+  const rc=vis.filter(x=>x.type==='recurring');
+  const ev=vis.filter(x=>x.type==='evergreen');
+  let suggestions=[...ot.slice(0,2),...rc,...ot.slice(2),...ev].slice(0,5);
   const taskList=suggestions.length?suggestions.map(x=>`<div style="font-size:.9rem;padding:2px 0;">• ${x.name}</div>`).join(''):'<div style="font-size:.9rem;color:var(--text-dim)">Nothing specific — check your list!</div>';
   modal(`<div style="text-align:center">
     <div style="font-size:2rem;margin-bottom:8px">${emoji}</div>
@@ -989,6 +1313,8 @@ function exportData(){
 }
 
 loadL();updateStreak();
+// Seed achievements tracker on first run so existing achievements don't popup
+if(!D._unlockedAchievements){D._unlockedAchievements=getAchievements().filter(a=>a.done).map(a=>a.name);saveL()}
 if(D.settings.gistId&&D.settings.token)gistPull().then(()=>{updateStreak();render();showStartupModals()});
 else{render();showStartupModals()}
 function showStartupModals(){
