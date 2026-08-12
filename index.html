@@ -25,7 +25,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-seri
 if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
 
 // ===== DATA =====
-const APP_VERSION='3.3.6';
+const APP_VERSION='3.3.7';
 const DEFAULT_DATA={tasks:[],points:0,pointsHistory:[],rewards:[],techniques:[],metrics:[],settings:{gistId:'',token:'',dailyGoal:0},dailyGoalLog:{},streak:0,fractional:0,groupOrder:[],plan:[],savedPlans:[]};
 let D=JSON.parse(JSON.stringify(DEFAULT_DATA));
 let view='tasks',toolsView='menu',expandedTech=null,inlineMinId=null,categoryFilter='all',recurSort='custom';
@@ -49,7 +49,10 @@ let pullInProgress=false;
 async function gistPull(){const{gistId:g,token:t}=D.settings;if(!g||!t)return false;if(pullInProgress)return false;pullInProgress=true;try{const r=await fetch(`https://api.github.com/gists/${g}`,{headers:{'Authorization':`token ${t}`,'Accept':'application/vnd.github.v3+json'}});if(!r.ok){pullInProgress=false;return false}const j=await r.json();const c=j.files['productivity_data.json']?.content;if(c){const remote=JSON.parse(c);if(remote._lastModified&&D._lastModified&&remote._lastModified<=D._lastModified){pullInProgress=false;return true}const ls=D.settings;D={...JSON.parse(JSON.stringify(DEFAULT_DATA)),...remote,settings:ls};saveL();pullInProgress=false;return true}pullInProgress=false}catch(e){pullInProgress=false}return false}
 let syncInterval=null;
 function startAutoSync(){if(syncInterval)return;syncInterval=setInterval(()=>{if(document.visibilityState==='visible')gistPull().then(ok=>{if(ok)render()})},30000)}
-function save(){saveL();debouncedPush()}
+function save(){
+  // Defensive: remove corrupted plan entries before saving
+  if(D.plan)D.plan=D.plan.filter(item=>item.type!=='task'||typeof item.id==='string');
+  saveL();debouncedPush()}
 
 // ===== UTILS =====
 function id(){return Date.now().toString(36)+Math.random().toString(36).slice(2,7)}
@@ -2285,6 +2288,8 @@ function exportData(){
 loadL();updateStreak();
 // Migrate flat plan array to sectioned format
 if(D.plan&&D.plan.length>0&&typeof D.plan[0]==='string'){D.plan=D.plan.map(id=>({type:'task',id}));saveL()}
+// Clean corrupted plan entries (id stored as object instead of string)
+if(D.plan&&D.plan.length){let cleaned=false;D.plan=D.plan.filter(item=>{if(item.type==='task'&&typeof item.id==='object'){cleaned=true;return false}return true});if(cleaned)saveL()}
 if(!D.savedPlans)D.savedPlans=[];
 // Seed achievements tracker on first run so existing achievements don't popup
 if(!D._unlockedAchievements){D._unlockedAchievements=getAchievements().filter(a=>a.done).map(a=>a.name);saveL()}
