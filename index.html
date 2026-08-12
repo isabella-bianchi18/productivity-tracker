@@ -25,7 +25,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-seri
 if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
 
 // ===== DATA =====
-const APP_VERSION='3.3.5';
+const APP_VERSION='3.3.6';
 const DEFAULT_DATA={tasks:[],points:0,pointsHistory:[],rewards:[],techniques:[],metrics:[],settings:{gistId:'',token:'',dailyGoal:0},dailyGoalLog:{},streak:0,fractional:0,groupOrder:[],plan:[],savedPlans:[]};
 let D=JSON.parse(JSON.stringify(DEFAULT_DATA));
 let view='tasks',toolsView='menu',expandedTech=null,inlineMinId=null,categoryFilter='all',recurSort='custom';
@@ -533,7 +533,7 @@ function rPlan(){
   const planPtsToday=D.pointsHistory.filter(h=>h.date.slice(0,10)===td&&h.type==='earned'&&allPlanTasks.some(t=>t.id===h.taskId)).reduce((s,h)=>s+h.points,0);
   const timeStr=planMinsToday>=60?`${Math.floor(planMinsToday/60)}h ${planMinsToday%60}m`:`${planMinsToday}m`;
   const progressBar=totalCount>0?`<div style="margin-bottom:16px"><div style="display:flex;justify-content:space-between;font-size:.8rem;color:var(--text-dim);margin-bottom:4px"><span>${doneCount}/${totalCount} done</span><span>${planPtsToday} pts · ${timeStr}</span></div><div style="height:8px;background:var(--card-neutral);border-radius:4px;overflow:hidden"><div style="height:100%;width:${pct}%;background:${pct>=100?'var(--success)':'var(--accent)'};border-radius:4px;transition:width .3s"></div></div></div>`:'';
-  // Pre-compute global indices for each task in each section
+  // Pre-compute global indices for each task in each section (only for tasks that exist in allTasks)
   const secGlobalIndices=[];
   let gIdx=0;
   sections.forEach((sec,si)=>{
@@ -541,7 +541,9 @@ function rPlan(){
     // Skip header items at the start
     while(gIdx<D.plan.length&&(D.plan[gIdx].type==='header'))gIdx++;
     sec.forEach(item=>{
-      if(item.type==='task'){while(gIdx<D.plan.length&&D.plan[gIdx].type!=='task')gIdx++;indices.push(gIdx);gIdx++}
+      if(item.type==='task'){while(gIdx<D.plan.length&&D.plan[gIdx].type!=='task')gIdx++;
+        if(allTasks.find(t=>t.id===item.id))indices.push(gIdx);
+        gIdx++}
     });
     secGlobalIndices.push(indices);
     // Skip break after section
@@ -1621,7 +1623,12 @@ function bindAll(){
     if(t.timeBased||t.countBased){inlineMinId=t.id;render()}
     else if(pg||(t.goal&&(t.goal.period==='daily'||t.goal.period==='hourly'||t.goal.period==='total'))){completeTask(t.id);if(view==='plan')checkPlanComplete()}
     else{completeTask(t.id);if(view==='plan')checkPlanComplete()}}));
-  document.querySelectorAll('.plan-move-g').forEach(b=>b.addEventListener('click',e=>{e.stopPropagation();const gi=parseInt(b.dataset.gi),dir=b.dataset.d;const si=dir==='up'?gi-1:gi+1;if(si<0||si>=D.plan.length)return;
+  document.querySelectorAll('.plan-move-g').forEach(b=>b.addEventListener('click',e=>{e.stopPropagation();const gi=parseInt(b.dataset.gi),dir=b.dataset.d;
+    if(isNaN(gi)||gi<0||gi>=D.plan.length)return;
+    // Find the next swappable position (skip headers)
+    let si=dir==='up'?gi-1:gi+1;
+    while(si>=0&&si<D.plan.length&&D.plan[si].type==='header')si+=(dir==='up'?-1:1);
+    if(si<0||si>=D.plan.length)return;
     // If swapping across a break, check for duplicates in destination section
     const movingTask=D.plan[gi];const target=D.plan[si];
     if(movingTask.type==='task'&&target.type==='break'){
