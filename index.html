@@ -22,13 +22,13 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-seri
 <div id="modal-container"></div>
 <script>
 // ===== DATA =====
-const APP_VERSION='3.1.2';
+const APP_VERSION='3.2.0';
 const DEFAULT_DATA={tasks:[],points:0,pointsHistory:[],rewards:[],techniques:[],metrics:[],settings:{gistId:'',token:'',dailyGoal:0},dailyGoalLog:{},streak:0,fractional:0,groupOrder:[],plan:[]};
 let D=JSON.parse(JSON.stringify(DEFAULT_DATA));
 let view='tasks',toolsView='menu',expandedTech=null,inlineMinId=null,categoryFilter='all',recurSort='custom';
 const collapsedGroups=new Set();
 const expandedSleep=new Set();
-let T={running:false,paused:false,mode:null,start:null,elapsed:0,workDur:25,breakDur:5,phase:'work',note:'',taskId:'',pts:1,per:15,planMode:false,planQueue:[],planTimes:{},planCurrentStart:0,planCompleted:[],planCounts:{}};
+let T={running:false,paused:false,mode:null,start:null,elapsed:0,workDur:25,breakDur:5,phase:'work',note:'',taskId:'',pts:1,per:15,planMode:false,planQueue:[],planTimes:{},planCurrentStart:0,planCompleted:[],planCounts:{},totalWork:0,totalBreak:0,awaitingAck:false};
 let toastTimer=null,tickInterval=null;
 
 // ===== STORAGE =====
@@ -330,14 +330,15 @@ function showInfoModal(){
   ['rcalc-num','rcalc-unit'].forEach(x=>document.getElementById(x)?.addEventListener('change',calcReward));
 }
 
-function showCongratsModal(note,totalSecs,pts){
+function showCongratsModal(note,totalSecs,pts,workSecs,breakSecs){
   confetti();
   const mins=Math.floor(totalSecs/60),secs=totalSecs%60;
   const timeStr=mins>0?`${mins} minute${mins!==1?'s':''}${secs>0?' '+secs+' second'+(secs!==1?'s':''):''}`:`${secs} second${secs!==1?'s':''}`;
+  const pomoBrk=(workSecs||breakSecs)?`<p style="font-size:.8rem;color:var(--text-dim);margin-bottom:8px;">💪 ${Math.floor((workSecs||0)/60)}m working · ☕ ${Math.floor((breakSecs||0)/60)}m resting</p>`:'';
   modal(`<div style="text-align:center;">
     <div style="font-size:2rem;margin-bottom:8px;">🎉</div>
     <h2 style="color:var(--accent-dark);margin-bottom:12px;">Great work!</h2>
-    <p style="margin-bottom:8px;">You worked on <strong>${note||'your task'}</strong> for <strong>${timeStr}</strong>, earning <strong>${pts} point${pts!==1?'s':''}.</strong></p>
+    <p style="margin-bottom:8px;">You worked on <strong>${note||'your task'}</strong> for <strong>${timeStr}</strong>, earning <strong>${pts} point${pts!==1?'s':''}.</strong></p>${pomoBrk}
     <p style="color:var(--text-dim);font-size:.85rem;margin-bottom:16px;">Keep up the great work! 💪</p>
     <button data-close class="btn bpri" style="width:100%;">Nice!</button>
   </div>`);
@@ -387,7 +388,7 @@ function showSurpriseModal(){
 
 // ===== RENDER =====
 function render(){document.getElementById('app').innerHTML=rHeader()+(view==='tasks'?rTasks():'')+(view==='plan'?rPlan():'')+(view==='history'?rHistory():'')+(view==='tools'?rTools():'')+rNav();bindAll()}
-function tickRender(){const el=document.getElementById('tld'),pl=document.getElementById('tlp');if(!el){render();return}const e=elapsed();if(T.mode==='sw'){const m=Math.floor(e/60),s=e%60;el.textContent=`${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;if(pl){const p=Math.floor(e*T.pts/(T.per*60));pl.textContent=`${p} point${p!==1?'s':''} earned so far`}}else if(T.mode==='pm'){const tgt=(T.phase==='work'?T.workDur:T.breakDur)*60,rem=Math.max(0,tgt-e),m=Math.floor(rem/60),s=rem%60;el.textContent=`${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;if(pl&&T.phase==='work'){const p=Math.floor(e*T.pts/(T.per*60));pl.textContent=`${p} point${p!==1?'s':''} this session`}}}
+function tickRender(){const el=document.getElementById('tld'),pl=document.getElementById('tlp');if(!el){render();return}const e=elapsed();if(T.mode==='sw'){const m=Math.floor(e/60),s=e%60;el.textContent=`${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;if(pl){const p=Math.floor(e*T.pts/(T.per*60));pl.textContent=`${p} point${p!==1?'s':''} earned so far`}}else if(T.mode==='pm'){const tgt=(T.phase==='work'?T.workDur:T.breakDur)*60;if(T.awaitingAck){const over=e-tgt;const m=Math.floor(over/60),s=over%60;el.textContent=`+${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;if(pl)pl.textContent=T.phase==='work'?'☕ Break time! Tap to start':'💪 Ready? Tap to start'}else{const rem=Math.max(0,tgt-e),m=Math.floor(rem/60),s=rem%60;el.textContent=`${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;if(pl&&T.phase==='work'){const p=Math.floor(e*T.pts/(T.per*60));pl.textContent=`${p} point${p!==1?'s':''} this session`}}}}
 
 function rHeader(){
   const g=D.settings.dailyGoal||0,e=ptsToday(),p=g>0?Math.min(100,Math.round(e/g*100)):0,sk=D.streak>1?`<div style="font-size:.75rem;color:var(--warning-dark);margin-top:4px;text-align:center">🔥 ${D.streak} day streak</div>`:'';
@@ -1140,12 +1141,13 @@ function showHistDetail(idx){
   if(e.bonus)details.push(`<div><b>Completion bonus:</b> +${e.bonus}</div>`);
   if(e.rate)details.push(`<div><b>Rate:</b> ${e.rate}</div>`);
   if(e.pomo)details.push(`<div><b>Pomodoro:</b> ${e.pomo} (work/break)</div>`);
-  if(e.seconds!=null){const h=Math.floor(e.seconds/3600),m=Math.floor((e.seconds%3600)/60),s=e.seconds%60;let dur='';if(h>0)dur+=h+'h ';if(m>0)dur+=m+'m ';dur+=s+'s';details.push(`<div><b>Duration:</b> ${dur.trim()}</div>`)}
-  else if(e.minutes!=null){const h=Math.floor(e.minutes/60),m=e.minutes%60;let dur='';if(h>0)dur+=h+'h ';if(m>0)dur+=m+'m';details.push(`<div><b>Duration:</b> ${dur.trim()||'0m'}</div>`)}
+  if(e.seconds!=null){const h=Math.floor(e.seconds/3600),m=Math.floor((e.seconds%3600)/60),s=e.seconds%60;let dur='';if(h>0)dur+=h+'h ';if(m>0)dur+=m+'m ';dur+=s+'s';details.push(`<div><b>Working duration:</b> ${dur.trim()}</div>`)}
+  else if(e.minutes!=null){const h=Math.floor(e.minutes/60),m=e.minutes%60;let dur='';if(h>0)dur+=h+'h ';if(m>0)dur+=m+'m';details.push(`<div><b>Working duration:</b> ${dur.trim()||'0m'}</div>`)}
+  if(e.breakSeconds!=null&&e.breakSeconds>0){const bh=Math.floor(e.breakSeconds/3600),bm=Math.floor((e.breakSeconds%3600)/60),bs=e.breakSeconds%60;let bdur='';if(bh>0)bdur+=bh+'h ';if(bm>0)bdur+=bm+'m ';bdur+=bs+'s';details.push(`<div><b>Break duration:</b> ${bdur.trim()}</div>`)}
   if(e.count!=null)details.push(`<div><b>Count:</b> ${e.count} ${e.countUnit||'units'}</div>`);
   if(e.category)details.push(`<div><b>Category:</b> ${e.category==='work'?'💼 Work':e.category==='home'?'🏠 Home':e.category==='growth'?'🌱 Growth':e.category}</div>`);
   if(e.taskType)details.push(`<div><b>Type:</b> ${e.taskType==='one-time'?'🎯 One-Time':e.taskType==='recurring'?'🔄 Recurring':e.taskType==='daily'?'📅 Daily':e.taskType==='evergreen'?'♾️ Evergreen':e.taskType}</div>`);
-  if(e.taskId){const allForTask=D.pointsHistory.filter(h=>h.taskId===e.taskId&&h.type==='earned');const totalMins=allForTask.reduce((s,h)=>s+(h.minutes||0),0);if(totalMins>0){const th=Math.floor(totalMins/60),tm=totalMins%60;let dur='';if(th>0)dur+=th+' hour'+(th>1?'s':'');if(tm>0)dur+=(dur?' and ':'')+tm+' minute'+(tm>1?'s':'');details.push(`<div><b>Total invested:</b> ${dur}</div>`)}}
+  if(e.taskId){const allForTask=D.pointsHistory.filter(h=>h.taskId===e.taskId&&h.type==='earned');const totalMins=allForTask.reduce((s,h)=>s+(h.minutes||0),0);if(totalMins>0){const th=Math.floor(totalMins/60),tm=totalMins%60;let dur='';if(th>0)dur+=th+' hour'+(th>1?'s':'');if(tm>0)dur+=(dur?' and ':'')+tm+' minute'+(tm>1?'s':'');details.push(`<div><b>Total time invested:</b> ${dur}</div>`)}}
   modal(`<h2 style="color:var(--accent-dark);margin-bottom:8px">${e.task}</h2><div style="font-size:.85rem;line-height:1.8;margin-bottom:16px">${details.join('')}</div><button data-close class="btn bmut" style="width:100%">Close</button>`);
 }
 
@@ -1559,7 +1561,7 @@ function startPM(){
   const planQueue=isPlan?D.plan.filter(tid=>{const t=D.tasks.find(x=>x.id===tid);if(!t)return false;const td=today();if(t.type==='one-time')return!t.completed;if(t.type==='daily')return!D.pointsHistory.some(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td&&h.task.includes('✅'));if(t.type==='recurring')return!(t.lastCompleted&&(new Date()-new Date(t.lastCompleted))/864e5<t.cadenceDays);if(t.type==='evergreen')return!D.pointsHistory.some(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td&&h.task.includes('✅'));return true}):[];
   T={running:true,paused:false,mode:'pm',start:Date.now(),elapsed:0,workDur:w,breakDur:b,phase:'work',
     note:isPlan?'':document.getElementById('pmn')?.value||'',taskId:isPlan?(planQueue[0]||''):selTask,pts:p,per:r,
-    planMode:isPlan,planQueue:planQueue,planTimes:isPlan?{}:{},planCurrentStart:isPlan?Date.now():0,planCompleted:[],planCounts:{}};
+    planMode:isPlan,planQueue:planQueue,planTimes:isPlan?{}:{},planCurrentStart:isPlan?Date.now():0,planCompleted:[],planCounts:{},totalWork:0,totalBreak:0,awaitingAck:false};
   startTick()}
 function pause(){if(T.planMode&&T.planQueue.length>0){const curId=T.planQueue[0];const curExtra=Math.floor((Date.now()-T.planCurrentStart)/1000);T.planTimes[curId]=(T.planTimes[curId]||0)+curExtra}T.elapsed=elapsed();T.running=false;T.paused=true;clearInterval(tickInterval);render()}
 function resume(){T.running=true;T.paused=false;T.start=Date.now();if(T.planMode)T.planCurrentStart=Date.now();startTick()}
@@ -1568,16 +1570,33 @@ function startTick(){
   if(tickInterval)clearInterval(tickInterval);render();
   tickInterval=setInterval(()=>{
     if(!T.running){clearInterval(tickInterval);return}
-    if(T.mode==='pm'){
+    if(T.mode==='pm'&&!T.awaitingAck){
       const e=elapsed(),tgt=(T.phase==='work'?T.workDur:T.breakDur)*60;
       if(e>=tgt){
+        // Phase ended — show popup, keep timer counting
+        T.awaitingAck=true;
         if(T.phase==='work'){
-          const exactPts=T.workDur*60*T.pts/(T.per*60),pts=awardTimerPts(exactPts);
-          if(pts>0){const lbl=T.note||D.tasks.find(t=>t.id===T.taskId)?.name||'🍅 Pomodoro';D.points+=pts;D.pointsHistory.push({date:localISO(),task:'🍅 '+lbl,taskId:T.taskId||null,points:pts,type:'earned',minutes:T.workDur,seconds:T.workDur*60,pomo:`${T.workDur}/${T.breakDur}`,rate:`${T.pts} points per ${T.per} minute${T.per>1?'s':''}`});saveL();debouncedPush();confetti();toast(`🍅 +${pts} pts! Break time!`);checkGoal()}
-          T.phase='break'}else{T.phase='work';toast('💪 Break over!')}
-        T.elapsed=0;T.start=Date.now()}}
+          // Save plan current task time at phase boundary
+          if(T.planMode&&T.planQueue.length>0){const curId=T.planQueue[0];const curExtra=Math.floor((Date.now()-T.planCurrentStart)/1000);T.planTimes[curId]=(T.planTimes[curId]||0)+curExtra;T.planCurrentStart=Date.now()}
+          // Award points for the work phase
+          if(!T.planMode){}
+          confetti();
+          modal(`<div style="text-align:center"><div style="font-size:2rem;margin-bottom:8px">☕</div><h2 style="color:var(--accent-dark);margin-bottom:8px">Time for a break!</h2><p style="font-size:.85rem;color:var(--text-dim);margin-bottom:8px">${T.workDur} minutes of work done. Take ${T.breakDur} minutes to recharge.</p><div id="pm-ack-timer" style="font-size:1.5rem;font-weight:bold;color:var(--warning-dark);margin-bottom:4px">+00:00</div><div id="pm-ack-pts" style="font-size:.85rem;color:var(--success-dark);margin-bottom:16px">+0 pts overtime</div><button id="pm-ack" class="btn bpri" style="width:100%">Start break</button></div>`);
+          document.getElementById('pm-ack')?.addEventListener('click',()=>{T.totalWork+=elapsed();T.awaitingAck=false;T.phase='break';T.elapsed=0;T.start=Date.now();closeM();render()});
+        } else {
+          modal(`<div style="text-align:center"><div style="font-size:2rem;margin-bottom:8px">💪</div><h2 style="color:var(--accent-dark);margin-bottom:8px">Break's over!</h2><p style="font-size:.85rem;color:var(--text-dim);margin-bottom:8px">Ready to get back to work?</p><div id="pm-ack-timer" style="font-size:1.5rem;font-weight:bold;color:var(--warning-dark);margin-bottom:16px">+00:00</div><button id="pm-ack" class="btn bsuc" style="width:100%">Let's go!</button></div>`);
+          document.getElementById('pm-ack')?.addEventListener('click',()=>{T.totalBreak+=elapsed();T.awaitingAck=false;T.phase='work';T.elapsed=0;T.start=Date.now();if(T.planMode)T.planCurrentStart=Date.now();closeM();render()});
+        }
+      }
+    }
+    // While awaiting ack, update the timer in the popup
+    if(T.mode==='pm'&&T.awaitingAck){
+      const ackEl=document.getElementById('pm-ack-timer');
+      if(ackEl){const e2=elapsed(),tgt2=(T.phase==='work'?T.workDur:T.breakDur)*60,over=Math.max(0,e2-tgt2);const om=Math.floor(over/60),os=over%60;ackEl.textContent=`+${String(om).padStart(2,'0')}:${String(os).padStart(2,'0')}`}
+      if(T.phase==='work'){const ptsEl=document.getElementById('pm-ack-pts');if(ptsEl){const e2=elapsed(),tgt2=T.workDur*60,over=Math.max(0,e2-tgt2);const overPts=Math.floor(over*T.pts/(T.per*60));ptsEl.textContent=overPts>0?`+${overPts} pts overtime`:''}}
+    }
     // Only update timer display
-    if(view==='tools'&&(toolsView==='sw'||toolsView==='pm')){tickRender();if(T.planMode){const curEl=document.querySelector('[data-plan-cur-time]');if(curEl&&T.planQueue[0]){const curId=T.planQueue[0];const curSecs=(T.planTimes[curId]||0)+Math.floor((Date.now()-T.planCurrentStart)/1000);const cm=Math.floor(curSecs/60),cs=curSecs%60;curEl.textContent=`${String(cm).padStart(2,'0')}:${String(cs).padStart(2,'0')}`}}}
+    if(view==='tools'&&(toolsView==='sw'||toolsView==='pm')){tickRender();if(T.planMode&&T.running&&!(T.awaitingAck&&T.phase==='break')){const curEl=document.querySelector('[data-plan-cur-time]');if(curEl&&T.planQueue[0]){const curId=T.planQueue[0];const curSecs=(T.planTimes[curId]||0)+Math.floor((Date.now()-T.planCurrentStart)/1000);const cm=Math.floor(curSecs/60),cs=curSecs%60;curEl.textContent=`${String(cm).padStart(2,'0')}:${String(cs).padStart(2,'0')}`}}}
   },1000)}
 
 function stopSW(){
@@ -1643,7 +1662,7 @@ function stopSW(){
     totalPlanPts=pts;
   }
   const savedPts=T.pts,savedPer=T.per;
-  T={running:false,paused:false,mode:null,start:null,elapsed:0,workDur:T.workDur,breakDur:T.breakDur,phase:'work',note:'',taskId:'',pts:1,per:15,planMode:false,planQueue:[],planTimes:{},planCurrentStart:0,planCompleted:[],planCounts:{}};
+  T={running:false,paused:false,mode:null,start:null,elapsed:0,workDur:T.workDur,breakDur:T.breakDur,phase:'work',note:'',taskId:'',pts:1,per:15,planMode:false,planQueue:[],planTimes:{},planCurrentStart:0,planCompleted:[],planCounts:{},totalWork:0,totalBreak:0,awaitingAck:false};
   // Show summary
   if(wasPlanMode){
     setTimeout(()=>{
@@ -1728,17 +1747,22 @@ function stopPM(){
         planTaskDetails.push({taskId:tid,name:t.name,minutes:taskMins,seconds:taskSecs,points:p,completed,count,countUnit:t.countUnit||'',timeBased:!!t.timeBased,countBased:!!t.countBased,ptsAmount:t.ptsAmount,ptsPerMinutes:t.ptsPerMinutes,ptsPerCount:t.ptsPerCount,flatPoints:t.points});
       }
     });
-    D.pointsHistory.push({date:localISO(),task:'🍅 Plan',points:totalPlanPts,type:'earned',minutes:mins,seconds:e,pomo:`${T.workDur}/${T.breakDur}`,planTasks:planTaskDetails});
+    D.pointsHistory.push({date:localISO(),task:'🍅 Plan',points:totalPlanPts,type:'earned',minutes:mins,seconds:e,pomo:`${T.workDur}/${T.breakDur}`,planTasks:planTaskDetails,workSeconds:T.totalWork+(T.phase==='work'?e:0),breakSeconds:T.totalBreak+(T.phase==='break'?e:0)});
     if(totalPlanPts>0)checkGoal();
     pts=totalPlanPts;
     saveL();debouncedPush();
-  } else if(T.phase==='work'){
-    mins=Math.floor(e/60);const exactPts=e*T.pts/(T.per*60);pts=awardTimerPts(exactPts);
-    if(pts>0){D.points+=pts;checkGoal()}
-    D.pointsHistory.push({date:localISO(),task:'🍅 '+label,taskId:taskId||null,points:pts,type:'earned',minutes:mins,seconds:e,pomo:`${T.workDur}/${T.breakDur}`,rate:`${T.pts} points per ${T.per} minute${T.per>1?'s':''}`});
+  } else if(T.phase==='work'||T.totalWork>0){
+    const workSecs=T.totalWork+(T.phase==='work'?e:0);const breakSecs=T.totalBreak+(T.phase==='break'?e:0);
+    mins=Math.floor(workSecs/60);
+    if(!T.planMode){const exactPts=workSecs*T.pts/(T.per*60);pts=awardTimerPts(exactPts);if(pts>0){D.points+=pts;checkGoal()}}
+    D.pointsHistory.push({date:localISO(),task:'🍅 '+label,taskId:taskId||null,points:pts,type:'earned',minutes:mins,seconds:workSecs,pomo:`${T.workDur}/${T.breakDur}`,rate:`${T.pts} points per ${T.per} minute${T.per>1?'s':''}`,workSeconds:workSecs,breakSeconds:breakSecs});
     saveL();debouncedPush();
   }
-  T={running:false,paused:false,mode:null,start:null,elapsed:0,workDur:T.workDur,breakDur:T.breakDur,phase:'work',note:'',taskId:'',pts:1,per:15,planMode:false,planQueue:[],planTimes:{},planCurrentStart:0,planCompleted:[],planCounts:{}};
+  const sessionWorkSecs=T.totalWork+(T.phase==='work'?e:0);
+  const sessionBreakSecs=T.totalBreak+(T.phase==='break'?e:0);
+  // Calculate total points earned this session (current partial + all completed phases already logged)
+  const sessionTotalPts=wasPlanMode?pts:Math.floor(sessionWorkSecs*T.pts/(T.per*60));
+  T={running:false,paused:false,mode:null,start:null,elapsed:0,workDur:T.workDur,breakDur:T.breakDur,phase:'work',note:'',taskId:'',pts:1,per:15,planMode:false,planQueue:[],planTimes:{},planCurrentStart:0,planCompleted:[],planCounts:{},totalWork:0,totalBreak:0,awaitingAck:false};
   if(wasPlanMode){
     setTimeout(()=>{
       confetti();
@@ -1754,7 +1778,9 @@ function stopPM(){
         else if(!s.timeBased&&!s.countBased&&s.flatPoints)detail+=` · +${s.flatPoints} pts flat`;
         return `<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--border)"><div><div style="font-size:.85rem;font-weight:500">${s.name}</div><div style="font-size:.7rem;color:var(--text-dim)">${detail}</div></div><span style="font-weight:bold;color:var(--success-dark);font-size:.85rem">+${s.points}</span></div>`;
       }).join('');
-      modal(`<div style="text-align:center"><div style="font-size:2rem;margin-bottom:8px">🎉</div><h2 style="color:var(--accent-dark);margin-bottom:4px">Session complete!</h2><p style="font-size:.85rem;color:var(--text-dim);margin-bottom:16px">${totalTime} total · ${pts} points earned</p></div><div style="text-align:left">${rows}</div><button data-close class="btn bpri" style="width:100%;margin-top:16px">Nice!</button>`);
+      const workTimeStr=sessionWorkSecs>=3600?`${Math.floor(sessionWorkSecs/3600)}h ${Math.floor((sessionWorkSecs%3600)/60)}m`:`${Math.floor(sessionWorkSecs/60)}m`;
+      const breakTimeStr=sessionBreakSecs>0?(sessionBreakSecs>=3600?`${Math.floor(sessionBreakSecs/3600)}h ${Math.floor((sessionBreakSecs%3600)/60)}m`:`${Math.floor(sessionBreakSecs/60)}m`):'0m';
+      modal(`<div style="text-align:center"><div style="font-size:2rem;margin-bottom:8px">🎉</div><h2 style="color:var(--accent-dark);margin-bottom:4px">Session complete!</h2><p style="font-size:.85rem;color:var(--text-dim);margin-bottom:4px">${totalTime} total · ${pts} points earned</p><p style="font-size:.8rem;color:var(--text-dim);margin-bottom:16px">💪 ${workTimeStr} working · ☕ ${breakTimeStr} resting</p></div><div style="text-align:left">${rows}</div><button data-close class="btn bpri" style="width:100%;margin-top:16px">Nice!</button>`);
       render();
     },300);
   } else {
@@ -1772,11 +1798,11 @@ function stopPM(){
         const lastEntry=D.pointsHistory[D.pointsHistory.length-1];
         if(lastEntry&&lastEntry.taskId===taskId){lastEntry.task+=' ✅';lastEntry.points+=bonus;lastEntry.bonus=bonus}
         if(linkedTask.countBased){const cnt=parseInt(document.getElementById('qc-count')?.value)||0;if(cnt>0&&lastEntry&&lastEntry.taskId===taskId){lastEntry.count=cnt;lastEntry.countUnit=linkedTask.countUnit;const countPts=Math.floor(cnt*linkedTask.ptsAmount/linkedTask.ptsPerCount);lastEntry.points+=countPts;D.points+=countPts}}
-        saveL();debouncedPush();closeM();render();setTimeout(()=>showCongratsModal(label,e,pts+bonus),200)});
+        saveL();debouncedPush();closeM();render();setTimeout(()=>showCongratsModal(label,sessionWorkSecs,sessionTotalPts+bonus,sessionWorkSecs,sessionBreakSecs),200)});
       document.getElementById('qc-no')?.addEventListener('click',()=>{
         if(linkedTask.countBased){const cnt=parseInt(document.getElementById('qc-count')?.value)||0;if(cnt>0){const lastEntry=D.pointsHistory[D.pointsHistory.length-1];if(lastEntry&&lastEntry.taskId===taskId){lastEntry.count=cnt;lastEntry.countUnit=linkedTask.countUnit;const countPts=Math.floor(cnt*linkedTask.ptsAmount/linkedTask.ptsPerCount);lastEntry.points+=countPts;D.points+=countPts;saveL();debouncedPush()}}}
-        closeM();render();setTimeout(()=>showCongratsModal(label,e,pts),200)});
-    } else {render();showCongratsModal(label,e,pts)}
+        closeM();render();setTimeout(()=>showCongratsModal(label,sessionWorkSecs,sessionTotalPts,sessionWorkSecs,sessionBreakSecs),200)});
+    } else {render();showCongratsModal(label,sessionWorkSecs,sessionTotalPts,sessionWorkSecs,sessionBreakSecs)}
     },300);
   }
 }
