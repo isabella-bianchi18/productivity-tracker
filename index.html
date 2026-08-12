@@ -22,7 +22,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-seri
 <div id="modal-container"></div>
 <script>
 // ===== DATA =====
-const APP_VERSION='3.0.2';
+const APP_VERSION='3.1.0';
 const DEFAULT_DATA={tasks:[],points:0,pointsHistory:[],rewards:[],techniques:[],metrics:[],settings:{gistId:'',token:'',dailyGoal:0},dailyGoalLog:{},streak:0,fractional:0,groupOrder:[],plan:[]};
 let D=JSON.parse(JSON.stringify(DEFAULT_DATA));
 let view='tasks',toolsView='menu',expandedTech=null,inlineMinId=null,categoryFilter='all',recurSort='custom';
@@ -464,7 +464,8 @@ function rPlan(){
   // Add task picker (ordered like task page: one-time, recurring, daily, evergreen, preserving order within type)
   const typeOrder={'one-time':0,'recurring':1,'daily':2,'evergreen':3};
   const sortedAvailable=[...available].sort((a,b)=>{const td2=((typeOrder[a.type]??9)-(typeOrder[b.type]??9));if(td2!==0)return td2;return D.tasks.indexOf(a)-D.tasks.indexOf(b)});
-  const opts=sortedAvailable.map(t=>`<option value="${t.id}">${t.name} (${t.type})</option>`).join('');
+  const typeEmoji={'one-time':'🎯','recurring':'🔄','daily':'📅','evergreen':'♾️'};
+  const opts=sortedAvailable.map(t=>`<option value="${t.id}">${typeEmoji[t.type]||''} ${t.name}</option>`).join('');
   const picker=`<div style="margin-bottom:16px"><select id="plan-add-select" class="inf" style="margin:0"><option value="">+ Add task to plan...</option>${opts}</select></div>`;
 
   const clearBtn=totalCount>0?`<button id="plan-clear" class="btn bmut" style="width:100%;margin-top:12px;font-size:.8rem">🗑️ Clear plan</button>`:'';
