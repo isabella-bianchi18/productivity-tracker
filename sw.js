@@ -6,7 +6,6 @@ self.addEventListener('install', e => {
 });
 
 self.addEventListener('activate', e => {
-  // Delete old caches when a new version activates
   e.waitUntil(
     caches.keys().then(keys =>
       Promise.all(keys.filter(k => k !== CACHE_VERSION).map(k => caches.delete(k)))
@@ -15,10 +14,15 @@ self.addEventListener('activate', e => {
 });
 
 self.addEventListener('fetch', e => {
-  // Always go to network first, fall back to cache
+  const url = new URL(e.request.url);
+  // Never cache the service worker itself
+  if(url.pathname.endsWith('sw.js')) {
+    e.respondWith(fetch(e.request));
+    return;
+  }
+  // Network-first for everything else
   e.respondWith(
     fetch(e.request).then(res => {
-      // Cache a copy for offline fallback
       if(res.ok && e.request.method === 'GET') {
         const clone = res.clone();
         caches.open(CACHE_VERSION).then(c => c.put(e.request, clone));
