@@ -25,7 +25,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-seri
 if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
 
 // ===== DATA =====
-const APP_VERSION='3.3.4';
+const APP_VERSION='3.3.5';
 const DEFAULT_DATA={tasks:[],points:0,pointsHistory:[],rewards:[],techniques:[],metrics:[],settings:{gistId:'',token:'',dailyGoal:0},dailyGoalLog:{},streak:0,fractional:0,groupOrder:[],plan:[],savedPlans:[]};
 let D=JSON.parse(JSON.stringify(DEFAULT_DATA));
 let view='tasks',toolsView='menu',expandedTech=null,inlineMinId=null,categoryFilter='all',recurSort='custom';
@@ -41,10 +41,14 @@ function saveL(){localStorage.setItem(SK,JSON.stringify(D))}
 function loadL(){const s=localStorage.getItem(SK);if(s)D={...JSON.parse(JSON.stringify(DEFAULT_DATA)),...JSON.parse(s)}}
 let pushTimeout=null;
 async function gistPush(){const{gistId:g,token:t}=D.settings;if(!g||!t)return false;
+  D._lastModified=Date.now();saveL();
   const pushData=JSON.parse(JSON.stringify(D));delete pushData.settings.token;delete pushData.settings.gistId;
   try{const r=await fetch(`https://api.github.com/gists/${g}`,{method:'PATCH',headers:{'Authorization':`token ${t}`,'Content-Type':'application/json','Accept':'application/vnd.github.v3+json'},body:JSON.stringify({files:{'productivity_data.json':{content:JSON.stringify(pushData)}}})});return r.ok}catch(e){return false}}
-function debouncedPush(){if(pushTimeout)clearTimeout(pushTimeout);pushTimeout=setTimeout(()=>{gistPush()},5000)}
-async function gistPull(){const{gistId:g,token:t}=D.settings;if(!g||!t)return false;try{const r=await fetch(`https://api.github.com/gists/${g}`,{headers:{'Authorization':`token ${t}`,'Accept':'application/vnd.github.v3+json'}});if(!r.ok)return false;const j=await r.json();const c=j.files['productivity_data.json']?.content;if(c){const remote=JSON.parse(c);const ls=D.settings;D={...JSON.parse(JSON.stringify(DEFAULT_DATA)),...remote,settings:ls};saveL();return true}}catch(e){}return false}
+function debouncedPush(){if(pushTimeout)clearTimeout(pushTimeout);pushTimeout=setTimeout(()=>{gistPush()},2000)}
+let pullInProgress=false;
+async function gistPull(){const{gistId:g,token:t}=D.settings;if(!g||!t)return false;if(pullInProgress)return false;pullInProgress=true;try{const r=await fetch(`https://api.github.com/gists/${g}`,{headers:{'Authorization':`token ${t}`,'Accept':'application/vnd.github.v3+json'}});if(!r.ok){pullInProgress=false;return false}const j=await r.json();const c=j.files['productivity_data.json']?.content;if(c){const remote=JSON.parse(c);if(remote._lastModified&&D._lastModified&&remote._lastModified<=D._lastModified){pullInProgress=false;return true}const ls=D.settings;D={...JSON.parse(JSON.stringify(DEFAULT_DATA)),...remote,settings:ls};saveL();pullInProgress=false;return true}pullInProgress=false}catch(e){pullInProgress=false}return false}
+let syncInterval=null;
+function startAutoSync(){if(syncInterval)return;syncInterval=setInterval(()=>{if(document.visibilityState==='visible')gistPull().then(ok=>{if(ok)render()})},30000)}
 function save(){saveL();debouncedPush()}
 
 // ===== UTILS =====
@@ -936,7 +940,7 @@ function rTech(){
 // ===== SETTINGS/DETAIL MODALS =====
 function showSettings(){
   modal(`<h2 style="color:var(--accent-dark);margin-bottom:16px">⚙️ Settings</h2><p style="font-size:.85rem;color:var(--text-dim);margin-bottom:12px"><b>Gist Sync</b><br><a href="https://gist.github.com/" target="_blank" style="color:var(--accent-dark)">Create secret Gist</a> (file: <code>productivity_data.json</code> with <code>{}</code>)<br><a href="https://github.com/settings/tokens/new?scopes=gist&description=Productivity+Tracker" target="_blank" style="color:var(--accent-dark)">Generate token</a> (classic, gist scope only)</p><input id="sgi" type="text" value="${D.settings.gistId}" placeholder="Gist ID" class="inf"><input id="sgt" type="password" value="${D.settings.token}" placeholder="Token" class="inf"><button id="ssv" class="btn bsuc" style="width:100%;margin-bottom:8px">Save & Sync</button><button id="spl" class="btn bmut" style="width:100%;margin-bottom:8px">⬇️ Pull</button><button id="spu" class="btn bmut" style="width:100%;margin-bottom:8px">⬆️ Push</button><button id="sexp" class="btn bmut" style="width:100%;margin-bottom:8px">📦 Export Backup</button><button id="simp" class="btn bmut" style="width:100%;margin-bottom:8px">📥 Import Backup</button><input id="simp-file" type="file" accept=".json" style="display:none"><div id="sst" style="text-align:center;font-size:.85rem;color:var(--text-dim);margin-top:8px"></div><button data-close class="btn bmut" style="margin-top:12px;width:100%">Close</button><p style="text-align:center;font-size:.75rem;color:var(--text-dim);margin-top:12px">App version: ${APP_VERSION}</p>`);
-  document.getElementById('ssv')?.addEventListener('click',async()=>{D.settings.gistId=document.getElementById('sgi').value.trim();D.settings.token=document.getElementById('sgt').value.trim();saveL();const s=document.getElementById('sst');s.textContent='Syncing...';const pulled=await gistPull();if(pulled){updateStreak();s.textContent='✅ Synced!';closeM();render()}else{s.textContent='❌ Failed — check credentials'}});
+  document.getElementById('ssv')?.addEventListener('click',async()=>{D.settings.gistId=document.getElementById('sgi').value.trim();D.settings.token=document.getElementById('sgt').value.trim();saveL();const s=document.getElementById('sst');s.textContent='Syncing...';const pulled=await gistPull();if(pulled){updateStreak();s.textContent='✅ Synced!';startAutoSync();closeM();render()}else{s.textContent='❌ Failed — check credentials'}});
   document.getElementById('spl')?.addEventListener('click',async()=>{const s=document.getElementById('sst');s.textContent='Pulling...';const ok=await gistPull();s.textContent=ok?'✅ Pulled!':'❌ Failed';if(ok){updateStreak();closeM();render()}});
   document.getElementById('spu')?.addEventListener('click',async()=>{const s=document.getElementById('sst');s.textContent='Pushing...';const ok=await gistPush();s.textContent=ok?'✅ Pushed!':'❌ Failed'});
   document.getElementById('sexp')?.addEventListener('click',exportData);
@@ -1532,7 +1536,7 @@ function bindAll(){
   document.querySelectorAll('.tdet').forEach(b=>b.addEventListener('click',()=>showTaskDetail(b.dataset.id)));
   document.querySelectorAll('.sldet').forEach(b=>b.addEventListener('click',()=>showTaskDetail(b.dataset.id)));
   document.querySelectorAll('.sleep-folder').forEach(b=>b.addEventListener('click',()=>{const s=b.dataset.section;if(expandedSleep.has(s))expandedSleep.delete(s);else expandedSleep.add(s);render()}));
-  document.querySelectorAll('.mbtn').forEach(b=>b.addEventListener('click',e=>{e.stopPropagation();moveTask(b.dataset.id,b.dataset.d)}));
+  document.querySelectorAll('.mbtn:not(.plan-move-g):not(.plan-q-move)').forEach(b=>b.addEventListener('click',e=>{e.stopPropagation();moveTask(b.dataset.id,b.dataset.d)}));
   document.getElementById('show-af')?.addEventListener('click',()=>{const c=document.getElementById('afc');if(c.innerHTML){c.innerHTML='';return}c.innerHTML=rAddForm();bindAddForm()});
   document.getElementById('quick-log-btn')?.addEventListener('click',()=>{const c=document.getElementById('qlfc');if(c.innerHTML){c.innerHTML='';return}c.innerHTML=rQuickLog();bindQuickLog()});
   document.getElementById('surprise-btn')?.addEventListener('click',showSurpriseModal);
@@ -2278,7 +2282,7 @@ if(!D.savedPlans)D.savedPlans=[];
 // Seed achievements tracker on first run so existing achievements don't popup
 if(!D._unlockedAchievements){D._unlockedAchievements=getAchievements().filter(a=>a.done).map(a=>a.name);saveL()}
 if(!D._lastLevel){D._lastLevel=getLevel().level;saveL()}
-if(D.settings.gistId&&D.settings.token)gistPull().then(()=>{updateStreak();render();showStartupModals()});
+if(D.settings.gistId&&D.settings.token){gistPull().then(()=>{updateStreak();render();showStartupModals()});startAutoSync()}
 else{render();showStartupModals()}
 function showStartupModals(){
   // Version update popup
@@ -2296,8 +2300,8 @@ function showStartupModals(){
   if(dow===1&&D._lastRecap!==getWeekRecap().monStr){showWeekRecap(true);return}
   showGoodMorning();
 }
-// Push when app is backgrounded/closed
-document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='hidden'){saveL();gistPush()}});
+// Sync when app is backgrounded or foregrounded
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='hidden'){saveL();gistPush()}else if(document.visibilityState==='visible'){gistPull().then(ok=>{if(ok){updateStreak();render()}})}});
 window.addEventListener('pagehide',()=>{saveL();gistPush()});
 </script>
 <style>
