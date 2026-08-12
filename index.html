@@ -22,7 +22,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-seri
 <div id="modal-container"></div>
 <script>
 // ===== DATA =====
-const APP_VERSION='3.0.1';
+const APP_VERSION='3.0.2';
 const DEFAULT_DATA={tasks:[],points:0,pointsHistory:[],rewards:[],techniques:[],metrics:[],settings:{gistId:'',token:'',dailyGoal:0},dailyGoalLog:{},streak:0,fractional:0,groupOrder:[],plan:[]};
 let D=JSON.parse(JSON.stringify(DEFAULT_DATA));
 let view='tasks',toolsView='menu',expandedTech=null,inlineMinId=null,categoryFilter='all',recurSort='custom';
@@ -461,9 +461,9 @@ function rPlan(){
     return `<div class="tcard" style="background:${done?'var(--card-neutral)':catBg(t.category)};${done?'opacity:.6':''}"><div style="display:flex;align-items:center;gap:10px"><button class="plan-done-btn cbtn-plan" data-id="${t.id}" style="${done?'opacity:.4':''}">${done?'✓':'○'}</button><div style="flex:1;min-width:0"><div style="font-weight:600;font-size:.9rem;${done?'text-decoration:line-through;color:var(--text-dim)':''}">${t.name}</div></div><span style="color:var(--warning-dark);font-weight:bold;font-size:.75rem">${pl}</span><div style="display:flex;flex-direction:column;gap:1px">${i>0?`<button class="plan-move" data-id="${t.id}" data-d="up">▲</button>`:'<div style="height:16px"></div>'}${i<planItems.length-1?`<button class="plan-move" data-id="${t.id}" data-d="down">▼</button>`:'<div style="height:16px"></div>'}</div><button class="plan-rm ibtn" data-id="${t.id}" style="font-size:.7rem;color:var(--danger-dark)">✕</button></div>${isM?`<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);">${t.countBased?`<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><input id="imi-count" type="number" min="1" placeholder="" class="inf" style="width:70px;margin:0;text-align:center"><span class="rl">${t.countUnit||'units'}</span></div><div id="imi-preview" style="font-size:.8rem;color:var(--accent-dark);margin:6px 0;"></div>`:`<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><input id="imi-h" type="number" min="0" placeholder="" class="inf" style="width:60px;margin:0;text-align:center"><span class="rl">hours</span><input id="imi-m" type="number" min="0" max="59" placeholder="" class="inf" style="width:60px;margin:0;text-align:center"><span class="rl">minutes</span></div><div id="imi-preview" style="font-size:.8rem;color:var(--accent-dark);margin:6px 0;"></div>`}<div style="display:flex;gap:6px;flex-wrap:wrap"><button id="ims-work" data-id="${t.id}" class="btn bmut" style="padding:8px 10px;font-size:.8rem">Log</button><button id="ims-done" data-id="${t.id}" class="btn bsuc" style="padding:8px 10px;font-size:.8rem">Log + Done ✅</button><button id="imc" class="btn bmut" style="padding:8px 10px">✕</button></div></div>`:''}</div>`;
   }).join('');
 
-  // Add task picker (ordered like task page: one-time, recurring, daily, evergreen)
+  // Add task picker (ordered like task page: one-time, recurring, daily, evergreen, preserving order within type)
   const typeOrder={'one-time':0,'recurring':1,'daily':2,'evergreen':3};
-  const sortedAvailable=[...available].sort((a,b)=>(typeOrder[a.type]||9)-(typeOrder[b.type]||9));
+  const sortedAvailable=[...available].sort((a,b)=>{const td2=((typeOrder[a.type]??9)-(typeOrder[b.type]??9));if(td2!==0)return td2;return D.tasks.indexOf(a)-D.tasks.indexOf(b)});
   const opts=sortedAvailable.map(t=>`<option value="${t.id}">${t.name} (${t.type})</option>`).join('');
   const picker=`<div style="margin-bottom:16px"><select id="plan-add-select" class="inf" style="margin:0"><option value="">+ Add task to plan...</option>${opts}</select></div>`;
 
@@ -609,7 +609,7 @@ function rHistory(){
     if(ents.length){detail=ents.map(e=>{
         const timeParts=e.date.slice(11,16);const hr=parseInt(timeParts.split(':')[0]),min=timeParts.split(':')[1];
         const ampm=hr>=12?'PM':'AM';const hr12=hr%12||12;
-        const time=e.task==='🎯 Daily goal bonus'?'':(`${hr12}:${min} ${ampm}`);
+        const time=(e.task==='🎯 Daily goal bonus'||e.originalDate)?'':(`${hr12}:${min} ${ampm}`);
         const idx=D.pointsHistory.indexOf(e);
         // Grouped plan entry
         if(e.planTasks&&e.planTasks.length){
@@ -1101,8 +1101,16 @@ function showHistDetail(idx){
   const time=e.task==='🎯 Daily goal bonus'?'':`${hr12}:${min} ${ampm}`;
   const dateStr=new Date(e.date.slice(0,10)+'T12:00:00').toLocaleDateString('default',{weekday:'long',month:'short',day:'numeric',year:'numeric'});
   let details=[];
-  if(time)details.push(`<div><b>Time:</b> ${time}</div>`);
-  details.push(`<div><b>Date:</b> ${dateStr}</div>`);
+  if(e.originalDate){
+    const origParts=e.originalDate.slice(11,16);const origHr=parseInt(origParts.split(':')[0]),origMin=origParts.split(':')[1];
+    const origAmpm=origHr>=12?'PM':'AM';const origHr12=origHr%12||12;
+    const origDateStr=new Date(e.originalDate.slice(0,10)+'T12:00:00').toLocaleDateString('default',{weekday:'short',month:'short',day:'numeric'});
+    details.push(`<div><b>Logged:</b> ${origDateStr} at ${origHr12}:${origMin} ${origAmpm}</div>`);
+    details.push(`<div><b>Moved to:</b> ${dateStr}</div>`);
+  } else {
+    if(time)details.push(`<div><b>Time:</b> ${time}</div>`);
+    details.push(`<div><b>Date:</b> ${dateStr}</div>`);
+  }
   details.push(`<div><b>Points:</b> ${e.type==='earned'?'+':''}${e.points}</div>`);
   if(e.bonus)details.push(`<div><b>Completion bonus:</b> +${e.bonus}</div>`);
   if(e.rate)details.push(`<div><b>Rate:</b> ${e.rate}</div>`);
@@ -1330,7 +1338,7 @@ function bindAll(){
     const idx=parseInt(b.dataset.idx),e=D.pointsHistory[idx];if(!e)return;
     const dateVal=e.date.slice(0,10);
     modal(`<h2 style="color:var(--accent-dark);margin-bottom:12px">Edit Entry</h2><p style="margin-bottom:8px;font-size:.9rem">${e.task}</p><label class="rl">Points</label><input id="hep" type="number" value="${e.points}" class="inf"><label class="rl">Date</label><input id="hed" type="date" value="${dateVal}" class="inf"><button id="hes" class="btn bpri" style="width:100%;margin-top:8px">Save</button><button data-close class="btn bmut" style="width:100%;margin-top:8px">Cancel</button>`);
-    document.getElementById('hes')?.addEventListener('click',()=>{const v=parseInt(document.getElementById('hep').value);if(!Number.isInteger(v))return;const newDate=document.getElementById('hed').value;const oldDay=dateVal;if(newDate&&newDate!==dateVal){const timePart=e.date.slice(10);e.date=newDate+timePart}editHistEntry(idx,v);if(e.taskId){const task=D.tasks.find(t=>t.id===e.taskId);if(task&&(task.type==='recurring'||task.type==='daily')){const entries=D.pointsHistory.filter(h=>h.taskId===e.taskId&&h.type==='earned');if(entries.length>0){task.lastCompleted=entries.reduce((latest,h)=>h.date>latest?h.date:latest,entries[0].date)}else{task.lastCompleted=null}save()}}closeM();checkGoalForDay(oldDay);if(newDate&&newDate!==oldDay)checkGoalForDay(newDate)});
+    document.getElementById('hes')?.addEventListener('click',()=>{const v=parseInt(document.getElementById('hep').value);if(!Number.isInteger(v))return;const newDate=document.getElementById('hed').value;const oldDay=dateVal;if(newDate&&newDate!==dateVal){if(!e.originalDate)e.originalDate=e.date;const timePart=e.date.slice(10);e.date=newDate+timePart;if(e.originalDate&&newDate===e.originalDate.slice(0,10)){e.date=e.originalDate;delete e.originalDate}}editHistEntry(idx,v);if(e.taskId){const task=D.tasks.find(t=>t.id===e.taskId);if(task&&(task.type==='recurring'||task.type==='daily')){const entries=D.pointsHistory.filter(h=>h.taskId===e.taskId&&h.type==='earned');if(entries.length>0){task.lastCompleted=entries.reduce((latest,h)=>h.date>latest?h.date:latest,entries[0].date)}else{task.lastCompleted=null}save()}}closeM();checkGoalForDay(oldDay);if(newDate&&newDate!==oldDay)checkGoalForDay(newDate)});
   }));
   // Plan
   document.getElementById('plan-add-select')?.addEventListener('change',e=>{if(!e.target.value)return;if(!D.plan)D.plan=[];D.plan.push(e.target.value);save();render()});
