@@ -25,7 +25,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-seri
 if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
 
 // ===== DATA =====
-const APP_VERSION='3.3.7';
+const APP_VERSION='3.3.8';
 const DEFAULT_DATA={tasks:[],points:0,pointsHistory:[],rewards:[],techniques:[],metrics:[],settings:{gistId:'',token:'',dailyGoal:0},dailyGoalLog:{},streak:0,fractional:0,groupOrder:[],plan:[],savedPlans:[]};
 let D=JSON.parse(JSON.stringify(DEFAULT_DATA));
 let view='tasks',toolsView='menu',expandedTech=null,inlineMinId=null,categoryFilter='all',recurSort='custom';
@@ -48,7 +48,7 @@ function debouncedPush(){if(pushTimeout)clearTimeout(pushTimeout);pushTimeout=se
 let pullInProgress=false;
 async function gistPull(){const{gistId:g,token:t}=D.settings;if(!g||!t)return false;if(pullInProgress)return false;pullInProgress=true;try{const r=await fetch(`https://api.github.com/gists/${g}`,{headers:{'Authorization':`token ${t}`,'Accept':'application/vnd.github.v3+json'}});if(!r.ok){pullInProgress=false;return false}const j=await r.json();const c=j.files['productivity_data.json']?.content;if(c){const remote=JSON.parse(c);if(remote._lastModified&&D._lastModified&&remote._lastModified<=D._lastModified){pullInProgress=false;return true}const ls=D.settings;D={...JSON.parse(JSON.stringify(DEFAULT_DATA)),...remote,settings:ls};saveL();pullInProgress=false;return true}pullInProgress=false}catch(e){pullInProgress=false}return false}
 let syncInterval=null;
-function startAutoSync(){if(syncInterval)return;syncInterval=setInterval(()=>{if(document.visibilityState==='visible')gistPull().then(ok=>{if(ok)render()})},30000)}
+function startAutoSync(){if(syncInterval)return;syncInterval=setInterval(()=>{if(document.visibilityState==='visible'&&!document.querySelector('.modal-bg')&&!document.getElementById('afc')?.innerHTML)gistPull().then(ok=>{if(ok)render()})},30000)}
 function save(){
   // Defensive: remove corrupted plan entries before saving
   if(D.plan)D.plan=D.plan.filter(item=>item.type!=='task'||typeof item.id==='string');
@@ -2313,7 +2313,7 @@ function showStartupModals(){
   showGoodMorning();
 }
 // Sync when app is backgrounded or foregrounded
-document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='hidden'){saveL();gistPush()}else if(document.visibilityState==='visible'){gistPull().then(ok=>{if(ok){updateStreak();render()}})}});
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='hidden'){saveL();gistPush()}else if(document.visibilityState==='visible'&&!document.querySelector('.modal-bg')&&!document.getElementById('afc')?.innerHTML){gistPull().then(ok=>{if(ok){updateStreak();render()}})}});
 window.addEventListener('pagehide',()=>{saveL();gistPush()});
 </script>
 <style>
