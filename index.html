@@ -25,7 +25,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-seri
 if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
 
 // ===== DATA =====
-const APP_VERSION='3.3.8';
+const APP_VERSION='3.3.9';
 const DEFAULT_DATA={tasks:[],points:0,pointsHistory:[],rewards:[],techniques:[],metrics:[],settings:{gistId:'',token:'',dailyGoal:0},dailyGoalLog:{},streak:0,fractional:0,groupOrder:[],plan:[],savedPlans:[]};
 let D=JSON.parse(JSON.stringify(DEFAULT_DATA));
 let view='tasks',toolsView='menu',expandedTech=null,inlineMinId=null,categoryFilter='all',recurSort='custom';
@@ -1357,10 +1357,11 @@ function taskViz(task,hist){
   if(!hist.length)return '<p style="font-size:.8rem;color:var(--text-dim);margin-bottom:14px;font-style:italic">No history yet.</p>';
   const mnName=new Date(vizYear,vizMonth).toLocaleString('default',{month:'long',year:'numeric'});
   const nav=`<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px"><button id="viz-prev" class="ibtn">◀</button><span style="font-size:.8rem;color:var(--text-dim)">${mnName}</span><button id="viz-next" class="ibtn">▶</button></div>`;
-  if(task.timeBased||task.countBased){
-    // Bar graph: minutes or counts per day for the selected month
+  const useBarGraph=task.timeBased||task.countBased||(!task.timeBased&&!task.countBased&&task.goal&&(task.goal.period==='hourly'||(task.goal.period==='daily'&&task.goal.target>1)));
+  if(useBarGraph){
+    // Bar graph: minutes, counts, or completions per day for the selected month
     const dim=new Date(vizYear,vizMonth+1,0).getDate();
-    const bars=[];for(let d=1;d<=dim;d++){const ds=`${vizYear}-${String(vizMonth+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;bars.push(hist.filter(h=>h.date.slice(0,10)===ds).reduce((s,h)=>s+(task.timeBased?(h.minutes||0):(h.count||0)),0))}
+    const bars=[];for(let d=1;d<=dim;d++){const ds=`${vizYear}-${String(vizMonth+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;bars.push(hist.filter(h=>h.date.slice(0,10)===ds).reduce((s,h)=>s+(task.timeBased?(h.minutes||0):task.countBased?(h.count||0):1),0))}
     const goalTarget=(task.goal&&task.goal.period==='daily')?task.goal.target:0;
     const weeklyTarget=(task.goal&&task.goal.period==='weekly')?task.goal.target:0;
     const monthlyTarget=(task.goal&&task.goal.period==='monthly')?task.goal.target:0;
@@ -1415,7 +1416,7 @@ function taskViz(task,hist){
       const mColor=mSum>=monthlyTarget?'var(--success-dark)':'var(--warning-dark)';
       cumOverlay=`<polyline points="${pts.join(' ')}" fill="none" stroke="${mColor}" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" opacity="0.8"/>`;
     }
-    const unit=task.timeBased?'m':(task.countUnit||'');
+    const unit=task.timeBased?'m':task.countBased?(task.countUnit||''):'×';
     function fmtAxis(val){if(!task.timeBased)return val+unit;if(val>=60){const hr=Math.floor(val/60),mn=val%60;return mn>0?hr+'h'+mn+'m':hr+'h'}return val+'m'}
     const yTop=fmtAxis(maxVal);
     const midVal=Math.round(maxVal/2);
