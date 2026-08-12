@@ -22,7 +22,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-seri
 <div id="modal-container"></div>
 <script>
 // ===== DATA =====
-const APP_VERSION='3.3.0';
+const APP_VERSION='3.3.1';
 const DEFAULT_DATA={tasks:[],points:0,pointsHistory:[],rewards:[],techniques:[],metrics:[],settings:{gistId:'',token:'',dailyGoal:0},dailyGoalLog:{},streak:0,fractional:0,groupOrder:[],plan:[],savedPlans:[]};
 let D=JSON.parse(JSON.stringify(DEFAULT_DATA));
 let view='tasks',toolsView='menu',expandedTech=null,inlineMinId=null,categoryFilter='all',recurSort='custom';
@@ -1423,15 +1423,16 @@ function bindAll(){
     const newView=b.dataset.v;
     // Save current scroll position
     scrollPos[view]=window.scrollY;scrollTime[view]=Date.now();
-    // If tapping same tab, reset scroll and reset tools view
-    if(newView===view){if(view==='tools')toolsView='menu';window.scrollTo(0,0);render();return}
+    // If tapping same tab, reset scroll and reset tools/history view
+    if(newView===view){if(view==='tools')toolsView='menu';if(view==='history'){selDay=today();hM=new Date().getMonth();hY=new Date().getFullYear()}window.scrollTo(0,0);render();return}
     view=newView;
     if(view==='tools'){const elapsed=Date.now()-(scrollTime['tools']||0);if(elapsed>=SCROLL_TIMEOUT)toolsView='menu'}
-    if(view==='history'){selDay=today();hM=new Date().getMonth();hY=new Date().getFullYear()}
-    render();
-    // Restore scroll if within timeout
+    if(view==='history'){const elapsed=Date.now()-(scrollTime['history']||0);if(elapsed>=SCROLL_TIMEOUT||!scrollTime['history']){selDay=today();hM=new Date().getMonth();hY=new Date().getFullYear()}}
+    // Restore scroll: set position before render to avoid flash
     const saved=scrollPos[view],savedTime=scrollTime[view];
-    if(saved&&savedTime&&(Date.now()-savedTime)<SCROLL_TIMEOUT){setTimeout(()=>window.scrollTo(0,saved),0)}else{window.scrollTo(0,0)}
+    const restoreScroll=saved&&savedTime&&(Date.now()-savedTime)<SCROLL_TIMEOUT;
+    render();
+    window.scrollTo(0,restoreScroll?saved:0);
   }));
   document.getElementById('info-btn')?.addEventListener('click',showInfoModal);
   document.getElementById('set-btn')?.addEventListener('click',showSettings);
