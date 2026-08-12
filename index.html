@@ -22,7 +22,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-seri
 <div id="modal-container"></div>
 <script>
 // ===== DATA =====
-const APP_VERSION='3.1.1';
+const APP_VERSION='3.1.2';
 const DEFAULT_DATA={tasks:[],points:0,pointsHistory:[],rewards:[],techniques:[],metrics:[],settings:{gistId:'',token:'',dailyGoal:0},dailyGoalLog:{},streak:0,fractional:0,groupOrder:[],plan:[]};
 let D=JSON.parse(JSON.stringify(DEFAULT_DATA));
 let view='tasks',toolsView='menu',expandedTech=null,inlineMinId=null,categoryFilter='all',recurSort='custom';
@@ -499,42 +499,64 @@ function rTasks(){
 function rBucket(title,tasks,sortable){
   const sortBtn=sortable?`<button id="rsort" class="ibtn" style="font-size:.75rem;margin-left:6px">${recurSort==='custom'?'↕️ by due':'↕️ custom'}</button>`:'';
   if(!tasks.length)return `<div style="margin-bottom:18px"><h2 style="font-size:1rem;color:var(--accent-dark);margin-bottom:8px;display:inline">${title}</h2>${sortBtn}<p style="color:var(--text-dim);font-size:.85rem;font-style:italic;margin-top:8px">Nothing here ✨</p></div>`;
-  // Group tasks visually
-  const grouped=[];const ungrouped=[];
-  const groupOrder=[];
-  tasks.forEach(t=>{if(t.group){if(!groupOrder.includes(t.group))groupOrder.push(t.group);grouped.push(t)}else ungrouped.push(t)});
-  // Sort groups by stored order if available
-  if(D.groupOrder&&D.groupOrder.length){groupOrder.sort((a,b)=>{const ai=D.groupOrder.indexOf(a),bi=D.groupOrder.indexOf(b);return(ai<0?999:ai)-(bi<0?999:bi)})}
+  // Render in D.tasks order: when we encounter a grouped task, render its whole group (once), ungrouped tasks render individually
   const td=today();
   const grpColors=['#fce4ec','#fff3e0','#e8eaf6','#efebe9','#e0f2f1','#fbe9e7'];
+  const renderedGroups=new Set();
+  // Get group order
+  const groupOrder=[];
+  tasks.forEach(t=>{if(t.group&&!groupOrder.includes(t.group))groupOrder.push(t.group)});
+  if(D.groupOrder&&D.groupOrder.length){groupOrder.sort((a,b)=>{const ai=D.groupOrder.indexOf(a),bi=D.groupOrder.indexOf(b);return(ai<0?999:ai)-(bi<0?999:bi)})}
+  // Build flat render order: iterate tasks, insert group block at first occurrence
   let cards='';
-  groupOrder.forEach((g,gi)=>{
-    const gTasks=grouped.filter(t=>t.group===g);
-    const collapsed=collapsedGroups.has(g);
-    const gColor=grpColors[gi%grpColors.length];
-    // Progress: how many done today
-    const doneToday=gTasks.filter(t=>{
-      if(t.type==='daily')return D.pointsHistory.some(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td&&h.task.includes('✅'));
-      if(t.type==='one-time')return t.completed;
-      return false;
-    }).length;
-    const skippedAll=gTasks.every(t=>t.goalSkips&&t.goalSkips.includes(td));
-    // Points: earned today for this group
-    const grpPtsToday=D.pointsHistory.filter(h=>h.date.slice(0,10)===td&&h.type==='earned'&&gTasks.some(t=>t.id===h.taskId)).reduce((s,h)=>s+h.points,0);
-    const progressText=`${doneToday}/${gTasks.length}`;
-    const ptsText=grpPtsToday>0?` · ${grpPtsToday}pts`:'';
-    const moveUp=gi>0?`<button class="grp-move ibtn" data-grp="${g}" data-d="up" style="font-size:.65rem;padding:2px 4px">▲</button>`:'';
-    const moveDown=gi<groupOrder.length-1?`<button class="grp-move ibtn" data-grp="${g}" data-d="down" style="font-size:.65rem;padding:2px 4px">▼</button>`:'';
-    const hiddenAll=gTasks.every(t=>t.hiddenToday&&t.hiddenToday.includes(td));
-    cards+=`<div class="grp-hdr" data-grp="${g}" style="margin:10px 0 4px;font-size:.8rem;color:var(--accent-dark);font-weight:600;padding:8px 10px;background:${gColor};border-radius:8px;cursor:pointer"><div style="display:flex;justify-content:space-between;align-items:center"><span>${collapsed?'▶':'▼'} 📁 ${g}</span><span style="font-size:.7rem;color:var(--text-dim);font-weight:normal">${progressText}${ptsText}</span></div></div>`;
-    if(!collapsed){
-      cards+=`<div style="padding-left:10px;border-left:3px solid ${gColor};margin-left:4px">`;
-      cards+=gTasks.map((t,i)=>rCard(t,i,gTasks.length)).join('');
-      cards+=`<div style="display:flex;gap:6px;margin:4px 0 8px;flex-wrap:wrap" onclick="event.stopPropagation()"><button class="grp-done btn bsuc" data-grp="${g}" style="font-size:.7rem;padding:4px 8px">✓ All</button><button class="grp-skip btn ${skippedAll?'bwar':'bmut'}" data-grp="${g}" style="font-size:.7rem;padding:4px 8px">⏭️ Skip</button><button class="grp-hide btn ${hiddenAll?'bdan':'bmut'}" data-grp="${g}" style="font-size:.7rem;padding:4px 8px">🚫 Not today</button><div style="flex:1"></div>${moveUp}${moveDown}</div>`;
-      cards+=`</div>`;
+  let ungroupedIdx=0;const ungrouped=tasks.filter(t=>!t.group);
+  // Interleave: go through tasks in order, render group or ungrouped
+  const renderOrder=[];
+  tasks.forEach(t=>{
+    if(t.group){if(!renderedGroups.has(t.group)){renderedGroups.add(t.group);renderOrder.push({type:'group',group:t.group})}}
+    else{renderOrder.push({type:'task',task:t})}
+  });
+  // Now sort groups within renderOrder by groupOrder
+  const groupItems=renderOrder.filter(r=>r.type==='group');
+  const taskItems=renderOrder.filter(r=>r.type==='task');
+  // Rebuild: place groups in groupOrder sequence at their first natural position, tasks stay in order
+  const finalOrder=[];let gi=0,ti=0;
+  renderOrder.forEach(r=>{
+    if(r.type==='group'){finalOrder.push({type:'group',group:groupOrder[gi]||r.group});gi++}
+    else{finalOrder.push(r)}
+  });
+  finalOrder.forEach((item,fi)=>{
+    if(item.type==='group'){
+      const g=item.group;
+      const gTasks=tasks.filter(t=>t.group===g);
+      const gIdx=groupOrder.indexOf(g);
+      const collapsed=collapsedGroups.has(g);
+      const gColor=grpColors[gIdx%grpColors.length];
+      const doneToday=gTasks.filter(t=>{
+        if(t.type==='daily')return D.pointsHistory.some(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td&&h.task.includes('✅'));
+        if(t.type==='one-time')return t.completed;
+        return false;
+      }).length;
+      const skippedAll=gTasks.every(t=>t.goalSkips&&t.goalSkips.includes(td));
+      const hiddenAll=gTasks.every(t=>t.hiddenToday&&t.hiddenToday.includes(td));
+      const grpPtsToday=D.pointsHistory.filter(h=>h.date.slice(0,10)===td&&h.type==='earned'&&gTasks.some(t=>t.id===h.taskId)).reduce((s,h)=>s+h.points,0);
+      const progressText=`${doneToday}/${gTasks.length}`;
+      const ptsText=grpPtsToday>0?` · ${grpPtsToday}pts`:'';
+      const moveUp=gIdx>0?`<button class="grp-move ibtn" data-grp="${g}" data-d="up" style="font-size:.65rem;padding:2px 4px">▲</button>`:'';
+      const moveDown=gIdx<groupOrder.length-1?`<button class="grp-move ibtn" data-grp="${g}" data-d="down" style="font-size:.65rem;padding:2px 4px">▼</button>`:'';
+      cards+=`<div class="grp-hdr" data-grp="${g}" style="margin:10px 0 4px;font-size:.8rem;color:var(--accent-dark);font-weight:600;padding:8px 10px;background:${gColor};border-radius:8px;cursor:pointer"><div style="display:flex;justify-content:space-between;align-items:center"><span>${collapsed?'▶':'▼'} 📁 ${g}</span><span style="font-size:.7rem;color:var(--text-dim);font-weight:normal">${progressText}${ptsText}</span></div></div>`;
+      if(!collapsed){
+        cards+=`<div style="padding-left:10px;border-left:3px solid ${gColor};margin-left:4px">`;
+        cards+=gTasks.map((t,i)=>rCard(t,i,gTasks.length)).join('');
+        cards+=`<div style="display:flex;gap:6px;margin:4px 0 8px;flex-wrap:wrap" onclick="event.stopPropagation()"><button class="grp-done btn bsuc" data-grp="${g}" style="font-size:.7rem;padding:4px 8px">✓ All</button><button class="grp-skip btn ${skippedAll?'bwar':'bmut'}" data-grp="${g}" style="font-size:.7rem;padding:4px 8px">⏭️ Skip</button><button class="grp-hide btn ${hiddenAll?'bdan':'bmut'}" data-grp="${g}" style="font-size:.7rem;padding:4px 8px">🚫 Not today</button><div style="flex:1"></div>${moveUp}${moveDown}</div>`;
+        cards+=`</div>`;
+      }
+    } else {
+      const t=item.task;
+      const tIdx=ungrouped.indexOf(t);
+      cards+=rCard(t,tIdx,ungrouped.length);
     }
   });
-  if(ungrouped.length){cards+=ungrouped.map((t,i)=>rCard(t,i,ungrouped.length)).join('')}
   return `<div style="margin-bottom:18px"><h2 style="font-size:1rem;color:var(--accent-dark);margin-bottom:8px;display:inline">${title}</h2>${sortBtn}<div style="margin-top:8px">${cards}</div></div>`}
 function rCard(t,i,n){
   const isM=inlineMinId===t.id,pl=t.timeBased?`${t.ptsAmount} pts / ${t.ptsPerMinutes} min`:t.countBased?`${t.ptsAmount} pts / ${t.ptsPerCount} ${t.countUnit}`:`+${t.points}`;
