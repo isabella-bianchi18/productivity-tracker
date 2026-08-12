@@ -22,7 +22,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-seri
 <div id="modal-container"></div>
 <script>
 // ===== DATA =====
-const APP_VERSION='3.3.1';
+const APP_VERSION='3.3.2';
 const DEFAULT_DATA={tasks:[],points:0,pointsHistory:[],rewards:[],techniques:[],metrics:[],settings:{gistId:'',token:'',dailyGoal:0},dailyGoalLog:{},streak:0,fractional:0,groupOrder:[],plan:[],savedPlans:[]};
 let D=JSON.parse(JSON.stringify(DEFAULT_DATA));
 let view='tasks',toolsView='menu',expandedTech=null,inlineMinId=null,categoryFilter='all',recurSort='custom';
@@ -80,7 +80,7 @@ function getGoalProgress(task){
     const psStr=periodStart.toISOString().slice(0,task.goal.period==='hourly'?13:10);
     entries=D.pointsHistory.filter(h=>h.taskId===task.id&&h.type==='earned'&&h.date.slice(0,psStr.length)>=psStr);
   }
-  const current=task.timeBased?entries.reduce((s,h)=>s+(h.minutes||0),0):task.countBased?entries.reduce((s,h)=>s+(h.count||0),0):entries.length;
+  const current=task.timeBased?entries.reduce((s,h)=>s+(h.minutes||0),0)+(T.planMode?Math.floor((T.planTimes?.[task.id]||0)/60):0):task.countBased?entries.reduce((s,h)=>s+(h.count||0),0)+(T.planMode?(T.planCounts?.[task.id]||0):0):entries.length+(T.planFlatDone?.[task.id]||0);
   return{current,target:task.goal.target,pct:Math.min(100,Math.round(current/task.goal.target*100)),period:task.goal.period};
 }
 
@@ -273,12 +273,35 @@ function deleteHistEntry(idx){
       if(!hasCompletion){task.completed=false;task.completedAt=null}
     }
   }
-  // If this was a grouped plan entry, revert each sub-task's completion
+  // If this was a grouped plan entry, revert each sub-task's completion and remove tracking entries
   if(e.planTasks&&e.planTasks.length){
+    const planDate=e.date.slice(0,10);
+    const planTime=new Date(e.date).getTime();
     e.planTasks.forEach(st=>{
-      if(!st.completed)return;
+      // Remove 0-point tracking entries for time/count tasks (created within 5s of grouped entry)
+      if(st.timeBased||st.countBased){
+        for(let i=D.pointsHistory.length-1;i>=0;i--){
+          const h=D.pointsHistory[i];
+          if(h.taskId===st.taskId&&h.type==='earned'&&h.points===0&&h.date.slice(0,10)===planDate){
+            const hTime=new Date(h.date).getTime();
+            if(Math.abs(hTime-planTime)<5000){D.pointsHistory.splice(i,1)}
+          }
+        }
+      }
+      // Remove 0-point ✅ markers pushed by stopSW/stopPM for evergreen/daily tasks
+      for(let i=D.pointsHistory.length-1;i>=0;i--){
+        const h=D.pointsHistory[i];
+        if(h.taskId===st.taskId&&h.type==='earned'&&h.points===0&&h.task.includes('✅')&&h.date.slice(0,10)===planDate){
+          const hTime=new Date(h.date).getTime();
+          if(Math.abs(hTime-planTime)<5000){D.pointsHistory.splice(i,1);break}
+        }
+      }
+      // Reset task completion state
       const task=D.tasks.find(t=>t.id===st.taskId);if(!task)return;
-      if(task.type==='one-time'){task.completed=false;task.completedAt=null}
+      if(task.type==='one-time'){
+        const remaining=D.pointsHistory.filter(h=>h.taskId===st.taskId&&h.type==='earned'&&h.task.includes('✅'));
+        if(remaining.length===0){task.completed=false;task.completedAt=null}
+      }
       else if(task.type==='recurring'||task.type==='daily'){
         const remaining=D.pointsHistory.filter(h=>h.taskId===st.taskId&&h.type==='earned');
         if(remaining.length>0){task.lastCompleted=remaining[remaining.length-1].date}
@@ -401,7 +424,7 @@ function showSurpriseModal(){
 
 // ===== RENDER =====
 function render(){document.getElementById('app').innerHTML=rHeader()+(view==='tasks'?rTasks():'')+(view==='plan'?rPlan():'')+(view==='history'?rHistory():'')+(view==='tools'?rTools():'')+rNav();bindAll()}
-function tickRender(){const el=document.getElementById('tld'),pl=document.getElementById('tlp');if(!el){render();return}const e=elapsed();if(T.mode==='sw'){const m=Math.floor(e/60),s=e%60;el.textContent=`${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;if(pl){const p=Math.floor(e*T.pts/(T.per*60));pl.textContent=`${p} point${p!==1?'s':''} earned so far`}}else if(T.mode==='pm'){const tgt=(T.phase==='work'?T.workDur:T.breakDur)*60;if(T.awaitingAck){const over=e-tgt;const m=Math.floor(over/60),s=over%60;el.textContent=`+${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;if(pl)pl.textContent=T.phase==='work'?'☕ Break time! Tap to start':'💪 Ready? Tap to start'}else{const rem=Math.max(0,tgt-e),m=Math.floor(rem/60),s=rem%60;el.textContent=`${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;if(pl&&T.phase==='work'){const p=Math.floor(e*T.pts/(T.per*60));pl.textContent=`${p} point${p!==1?'s':''} this session`}}}}
+function tickRender(){const el=document.getElementById('tld'),pl=document.getElementById('tlp');if(!el){render();return}const e=elapsed();if(T.mode==='sw'){const m=Math.floor(e/60),s=e%60;el.textContent=`${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;if(pl){if(T.planMode){let planPts=0;const liveCurId=T.planQueue[0];const liveCurExtra=T.running?Math.floor((Date.now()-T.planCurrentStart)/1000):0;T.planQueue.forEach(tid=>{const t=D.tasks.find(x=>x.id===tid);if(!t)return;const secs=(T.planTimes[tid]||0)+(tid===liveCurId?liveCurExtra:0);if(t.timeBased){planPts+=Math.floor((secs/60)*t.ptsAmount/t.ptsPerMinutes)}else if(t.countBased){planPts+=Math.floor((T.planCounts?.[tid]||0)*t.ptsAmount/t.ptsPerCount)}else if(T.planFlatDone?.[tid]){planPts+=(T.planFlatDone[tid]*(t.points||0))}});pl.textContent=planPts+` Point${planPts!==1?'s':''} Earned`}else{const p=Math.floor(e*T.pts/(T.per*60));pl.textContent=`${p} Point${p!==1?'s':''} Earned so far`}}}else if(T.mode==='pm'){const tgt=(T.phase==='work'?T.workDur:T.breakDur)*60;if(T.awaitingAck){const over=e-tgt;const m=Math.floor(over/60),s=over%60;el.textContent=`+${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;if(pl)pl.textContent=T.phase==='work'?'☕ Break time! Tap to start':'💪 Ready? Tap to start'}else{const rem=Math.max(0,tgt-e),m=Math.floor(rem/60),s=rem%60;el.textContent=`${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;if(pl&&T.phase==='work'){if(T.planMode){let planPts=0;const liveCurId=T.planQueue[0];const liveCurExtra=T.running?Math.floor((Date.now()-T.planCurrentStart)/1000):0;T.planQueue.forEach(tid=>{const t=D.tasks.find(x=>x.id===tid);if(!t)return;const secs=(T.planTimes[tid]||0)+(tid===liveCurId?liveCurExtra:0);if(t.timeBased){planPts+=Math.floor((secs/60)*t.ptsAmount/t.ptsPerMinutes)}else if(t.countBased){planPts+=Math.floor((T.planCounts?.[tid]||0)*t.ptsAmount/t.ptsPerCount)}else if(T.planFlatDone?.[tid]){planPts+=(T.planFlatDone[tid]*(t.points||0))}});pl.textContent=planPts+` Point${planPts!==1?'s':''} Earned`}else{const p=Math.floor(e*T.pts/(T.per*60));pl.textContent=`${p} Point${p!==1?'s':''} this session`}}}}}
 
 function rHeader(){
   const g=D.settings.dailyGoal||0,e=ptsToday(),p=g>0?Math.min(100,Math.round(e/g*100)):0,sk=D.streak>1?`<div style="font-size:.75rem;color:var(--warning-dark);margin-top:4px;text-align:center">🔥 ${D.streak} day streak</div>`:'';
@@ -436,13 +459,20 @@ function checkPlanComplete(){
   if(!D.plan||!D.plan.length)return;
   const td=today();
   const allTasks=D.tasks.filter(t=>!t.archived);
-  const planItems=D.plan.filter(i=>i.type==='task').map(i=>allTasks.find(t=>t.id===i.id)).filter(Boolean);
+  const planTaskItems=D.plan.filter(i=>i.type==='task');
+  const planItems=planTaskItems.map(i=>({task:allTasks.find(t=>t.id===i.id),planGoal:i.planGoal||null})).filter(x=>x.task);
   if(!planItems.length)return;
-  const allDone=planItems.every(t=>{
+  const allDone=planItems.every(({task:t,planGoal:pg})=>{
+    const effectiveGoal=pg||(t.goal&&(t.goal.period==='daily'||t.goal.period==='hourly'||t.goal.period==='total')?t.goal:null);
+    if(effectiveGoal){
+      const entries=effectiveGoal.period==='total'?D.pointsHistory.filter(h=>h.taskId===t.id&&h.type==='earned'):D.pointsHistory.filter(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td);
+      const current=t.timeBased?entries.reduce((s,h)=>s+(h.minutes||0),0)+(T.planMode?Math.floor((T.planTimes?.[t.id]||0)/60):0):t.countBased?entries.reduce((s,h)=>s+(h.count||0),0)+(T.planMode?(T.planCounts?.[t.id]||0):0):entries.filter(h=>h.task.includes('✅')).length+(T.planFlatDone?.[t.id]||0);
+      return current>=effectiveGoal.target;
+    }
     if(t.type==='one-time')return t.completed;
-    if(t.type==='daily')return D.pointsHistory.some(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td&&h.task.includes('✅'));
+    if(t.type==='daily')return(t.lastCompleted&&t.lastCompleted.slice(0,10)===td)||D.pointsHistory.some(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td&&h.task.includes('✅'))||(T.planFlatDone?.[t.id]>0);
     if(t.type==='recurring')return t.lastCompleted&&(new Date()-new Date(t.lastCompleted))/864e5<t.cadenceDays;
-    if(t.type==='evergreen')return D.pointsHistory.some(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td&&h.task.includes('✅'));
+    if(t.type==='evergreen')return(t.lastCompleted&&t.lastCompleted.slice(0,10)===td)||D.pointsHistory.some(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td&&h.task.includes('✅'))||(T.planFlatDone?.[t.id]>0);
     return false;
   });
   if(allDone){
@@ -460,15 +490,16 @@ function rPlan(){
   const allTasks=D.tasks.filter(t=>!t.archived);
   function isDoneToday(t,planGoal){
     // If plan goal exists, completion = goal met
-    if(planGoal){
-      const entries=D.pointsHistory.filter(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td);
-      const current=t.timeBased?entries.reduce((s,h)=>s+(h.minutes||0),0):t.countBased?entries.reduce((s,h)=>s+(h.count||0),0):entries.filter(h=>h.task.includes('✅')).length;
-      return current>=planGoal.target;
+    const effectiveGoal=planGoal||(t.goal&&(t.goal.period==='daily'||t.goal.period==='hourly'||t.goal.period==='total')?t.goal:null);
+    if(effectiveGoal){
+      const entries=effectiveGoal.period==='total'?D.pointsHistory.filter(h=>h.taskId===t.id&&h.type==='earned'):D.pointsHistory.filter(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td);
+      const current=t.timeBased?entries.reduce((s,h)=>s+(h.minutes||0),0)+(T.planMode?Math.floor((T.planTimes?.[t.id]||0)/60):0):t.countBased?entries.reduce((s,h)=>s+(h.count||0),0)+(T.planMode?(T.planCounts?.[t.id]||0):0):entries.filter(h=>h.task.includes('✅')).length+(T.planFlatDone?.[t.id]||0);
+      return current>=effectiveGoal.target;
     }
     if(t.type==='one-time')return t.completed;
-    if(t.type==='daily')return D.pointsHistory.some(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td&&h.task.includes('✅'));
+    if(t.type==='daily')return(t.lastCompleted&&t.lastCompleted.slice(0,10)===td)||D.pointsHistory.some(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td&&h.task.includes('✅'))||(T.planFlatDone?.[t.id]>0);
     if(t.type==='recurring')return t.lastCompleted&&(new Date()-new Date(t.lastCompleted))/864e5<t.cadenceDays;
-    if(t.type==='evergreen')return D.pointsHistory.some(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td&&h.task.includes('✅'));
+    if(t.type==='evergreen')return(t.lastCompleted&&t.lastCompleted.slice(0,10)===td)||D.pointsHistory.some(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td&&h.task.includes('✅'))||(T.planFlatDone?.[t.id]>0);
     return false;
   }
   // Split plan into sections by breaks/headers
@@ -524,23 +555,25 @@ function rPlan(){
     const secItems=sec.filter(i=>i.type==='task').map(i=>({task:allTasks.find(t=>t.id===i.id),planGoal:i.planGoal||null})).filter(x=>x.task);
     if(secItems.length){
       secItems.forEach(({task:t,planGoal:pg},ti)=>{
+        const effectiveGoal=pg||(t.goal&&(t.goal.period==='daily'||t.goal.period==='hourly'||t.goal.period==='total')?t.goal:null);
         const done=isDoneToday(t,pg);
         const pl=t.timeBased?`${t.ptsAmount} pts / ${t.ptsPerMinutes} min`:t.countBased?`${t.ptsAmount} pts / ${t.ptsPerCount} ${t.countUnit}`:`+${t.points}`;
         const isM=inlineMinId===t.id;
-        const gp=t.goal&&(t.goal.period==='daily'||t.goal.period==='hourly')?getGoalProgress(t):null;
+        const gp=t.goal&&(t.goal.period==='daily'||t.goal.period==='hourly'||t.goal.period==='total')?getGoalProgress(t):null;
         // Plan goal progress
         let planGoalLine='';
-        if(pg){
+        if(effectiveGoal){
           const td2=today();
-          const entries=D.pointsHistory.filter(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td2);
+          const entries=effectiveGoal.period==='total'?D.pointsHistory.filter(h=>h.taskId===t.id&&h.type==='earned'):D.pointsHistory.filter(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td2);
           const pgCurrent=t.timeBased?entries.reduce((s,h)=>s+(h.minutes||0),0):t.countBased?entries.reduce((s,h)=>s+(h.count||0),0):entries.filter(h=>h.task.includes('✅')).length;
-          const pgPct=Math.min(100,Math.round(pgCurrent/pg.target*100));
-          planGoalLine=`<div style="font-size:.7rem;color:${pgPct>=100?'var(--success-dark)':'var(--accent-dark)'}">📋 ${pgCurrent}/${pg.target} ${pg.unit} today${pgPct>=100?' ✓':''}</div>`;
+          const pgPct=Math.min(100,Math.round(pgCurrent/effectiveGoal.target*100));
+          const pgUnit=effectiveGoal.unit||(t.timeBased?'min':t.countBased?(t.countUnit||'units'):'times');
+          planGoalLine=`<div style="font-size:.7rem;color:${pgPct>=100?'var(--success-dark)':'var(--accent-dark)'}">📋 ${pgCurrent}/${effectiveGoal.target} ${pgUnit} ${effectiveGoal.period==='total'?'total':effectiveGoal.period||'today'}${pgPct>=100?' ✓':''}</div>`;
         }
-        const goalLine=gp&&!pg?`<div style="font-size:.7rem;color:${gp.pct>=100?'var(--success-dark)':'var(--text-dim)'}">${gp.current}/${gp.target} ${t.timeBased?'min':t.countBased?(t.countUnit||'units'):'times'} ${gp.period}${gp.pct>=100?' ✓':''}</div>`:'';
+        const goalLine=gp&&!effectiveGoal?`<div style="font-size:.7rem;color:${gp.pct>=100?'var(--success-dark)':'var(--text-dim)'}">${gp.current}/${gp.target} ${t.timeBased?'min':t.countBased?(t.countUnit||'units'):'times'} ${gp.period}${gp.pct>=100?' ✓':''}</div>`:'';
         // Global index in D.plan for this task
         const globalIdx=secGlobalIndices[si]?secGlobalIndices[si][ti]:-1;
-        html+=`<div class="tcard plan-goal-tap" data-gi="${globalIdx}" style="background:${done?'var(--card-neutral)':catBg(t.category)};${done?'opacity:.6':''};cursor:pointer"><div style="display:flex;align-items:center;gap:10px"><button class="plan-done-btn cbtn-plan" data-id="${t.id}" style="${done?'opacity:.4':''}">${done?'✓':'○'}</button><div style="flex:1;min-width:0"><div style="font-weight:600;font-size:.9rem;${done?'text-decoration:line-through;color:var(--text-dim)':''}">${t.name}</div>${planGoalLine}${goalLine}</div><span style="color:var(--warning-dark);font-weight:bold;font-size:.75rem">${pl}</span><div style="display:flex;flex-direction:column;gap:1px">${globalIdx>0?`<button class="plan-move-g mbtn" data-gi="${globalIdx}" data-d="up">▲</button>`:'<div style="height:16px"></div>'}${globalIdx<D.plan.length-1?`<button class="plan-move-g mbtn" data-gi="${globalIdx}" data-d="down">▼</button>`:'<div style="height:16px"></div>'}</div><button class="plan-rm ibtn" data-gi="${globalIdx}" style="font-size:.7rem;color:var(--danger-dark)">✕</button></div>${isM?`<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);">${t.countBased?`<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><input id="imi-count" type="number" min="1" placeholder="" class="inf" style="width:70px;margin:0;text-align:center"><span class="rl">${t.countUnit||'units'}</span></div><div id="imi-preview" style="font-size:.8rem;color:var(--accent-dark);margin:6px 0;"></div>`:t.timeBased?`<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><input id="imi-h" type="number" min="0" placeholder="" class="inf" style="width:60px;margin:0;text-align:center"><span class="rl">hours</span><input id="imi-m" type="number" min="0" max="59" placeholder="" class="inf" style="width:60px;margin:0;text-align:center"><span class="rl">minutes</span></div><div id="imi-preview" style="font-size:.8rem;color:var(--accent-dark);margin:6px 0;"></div>`:''}<div style="display:flex;gap:6px;flex-wrap:wrap">${pg?`<button id="ims-work" data-id="${t.id}" class="btn bsuc" style="padding:8px 10px;font-size:.8rem">Log</button>`:`<button id="ims-work" data-id="${t.id}" class="btn bmut" style="padding:8px 10px;font-size:.8rem">Log</button><button id="ims-done" data-id="${t.id}" class="btn bsuc" style="padding:8px 10px;font-size:.8rem">Log + Done ✅</button>`}<button id="imc" class="btn bmut" style="padding:8px 10px">✕</button></div></div>`:''}</div>`;
+        html+=`<div class="tcard plan-goal-tap" data-gi="${globalIdx}" style="background:${done?'var(--card-neutral)':catBg(t.category)};${done?'opacity:.6':''};cursor:pointer"><div style="display:flex;align-items:center;gap:10px"><button class="plan-done-btn cbtn-plan" data-id="${t.id}" style="${done?'opacity:.4':''}">${done?'✓':'○'}</button><div style="flex:1;min-width:0"><div style="font-weight:600;font-size:.9rem;${done?'text-decoration:line-through;color:var(--text-dim)':''}">${t.name}</div>${planGoalLine}${goalLine}</div><span style="color:var(--warning-dark);font-weight:bold;font-size:.75rem">${pl}</span><div style="display:flex;flex-direction:column;gap:1px">${globalIdx>0?`<button class="plan-move-g mbtn" data-gi="${globalIdx}" data-d="up">▲</button>`:'<div style="height:16px"></div>'}${globalIdx<D.plan.length-1?`<button class="plan-move-g mbtn" data-gi="${globalIdx}" data-d="down">▼</button>`:'<div style="height:16px"></div>'}</div><button class="plan-rm ibtn" data-gi="${globalIdx}" style="font-size:.7rem;color:var(--danger-dark)">✕</button></div>${isM?`<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);">${t.countBased?`<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><input id="imi-count" type="number" min="1" placeholder="" class="inf" style="width:70px;margin:0;text-align:center"><span class="rl">${t.countUnit||'units'}</span></div><div id="imi-preview" style="font-size:.8rem;color:var(--accent-dark);margin:6px 0;"></div>`:t.timeBased?`<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><input id="imi-h" type="number" min="0" placeholder="" class="inf" style="width:60px;margin:0;text-align:center"><span class="rl">hours</span><input id="imi-m" type="number" min="0" max="59" placeholder="" class="inf" style="width:60px;margin:0;text-align:center"><span class="rl">minutes</span></div><div id="imi-preview" style="font-size:.8rem;color:var(--accent-dark);margin:6px 0;"></div>`:''}<div style="display:flex;gap:6px;flex-wrap:wrap">${effectiveGoal?`<button id="ims-work" data-id="${t.id}" class="btn bsuc" style="padding:8px 10px;font-size:.8rem">Log</button>`:`<button id="ims-work" data-id="${t.id}" class="btn bmut" style="padding:8px 10px;font-size:.8rem">Log</button><button id="ims-done" data-id="${t.id}" class="btn bsuc" style="padding:8px 10px;font-size:.8rem">Log + Done ✅</button>`}<button id="imc" class="btn bmut" style="padding:8px 10px">✕</button></div></div>`:''}</div>`;
       });
     } else if(sections.length===1){
       html+=`<p style="color:var(--text-dim);font-style:italic;font-size:.85rem;margin-bottom:8px">No tasks planned yet. Add some above!</p>`;
@@ -656,10 +689,10 @@ function rCard(t,i,n){
   let ageBadge='';
   const hasStreak=t.goal?getGoalStreak(t)>0:(t.type==='daily'?getDailyStreak(t)>0:false);
   if(!hasStreak){
-    if(t.type==='one-time'){const yd=new Date();yd.setDate(yd.getDate()-1);const created=t.createdAt||yd.toISOString();const days=Math.floor((new Date()-new Date(created))/864e5);if(days>=1)ageBadge=`<div style="font-size:.65rem;color:var(--text-dim)">added ${days}d ago</div>`; else ageBadge=`<div style="font-size:.65rem;color:var(--text-dim)">added today</div>`}
-    if(t.type==='recurring'){if(!t.lastCompleted){ageBadge=`<div style="font-size:.65rem;color:var(--danger-dark)">never completed</div>`}else{const overdue=Math.floor((new Date()-new Date(t.lastCompleted))/864e5)-t.cadenceDays;if(overdue>0)ageBadge=`<div style="font-size:.65rem;color:var(--danger-dark)">${overdue}d overdue</div>`}}
-    if(t.type==='daily'){const lastEntry=D.pointsHistory.filter(h=>h.taskId===t.id&&h.type==='earned'&&h.task.includes('✅')).pop();if(!lastEntry){ageBadge=`<div style="font-size:.65rem;color:var(--text-dim)">never completed</div>`}else{const daysAgo=Math.floor((new Date()-new Date(lastEntry.date))/864e5);if(daysAgo>0)ageBadge=`<div style="font-size:.65rem;color:var(--text-dim)">last: ${daysAgo}d ago</div>`}}
-    if(t.type==='evergreen'){const lastEntry=D.pointsHistory.filter(h=>h.taskId===t.id&&h.type==='earned'&&h.task.includes('✅')).pop();if(!lastEntry){ageBadge=`<div style="font-size:.65rem;color:var(--text-dim)">never completed</div>`}else{const daysAgo=Math.floor((new Date()-new Date(lastEntry.date))/864e5);if(daysAgo>0)ageBadge=`<div style="font-size:.65rem;color:var(--text-dim)">last: ${daysAgo}d ago</div>`}}
+    if(t.type==='one-time'){if(t.goal){const lastEntry=D.pointsHistory.filter(h=>h.taskId===t.id&&h.type==='earned').pop();if(lastEntry){const daysAgo=Math.floor((new Date()-new Date(lastEntry.date))/864e5);ageBadge=`<div style="font-size:.65rem;color:var(--text-dim)">last: ${daysAgo===0?'today':daysAgo+'d ago'}</div>`}else{const created=t.createdAt||new Date().toISOString();const days=Math.floor((new Date()-new Date(created))/864e5);ageBadge=`<div style="font-size:.65rem;color:var(--text-dim)">added ${days>=1?days+'d ago':'today'}</div>`}}else{const created=t.createdAt||new Date().toISOString();const days=Math.floor((new Date()-new Date(created))/864e5);ageBadge=`<div style="font-size:.65rem;color:var(--text-dim)">added ${days>=1?days+'d ago':'today'}</div>`}}
+    if(t.type==='recurring'){if(!t.lastCompleted){const lastAny=D.pointsHistory.filter(h=>h.taskId===t.id&&h.type==='earned').pop();if(!lastAny){ageBadge=`<div style="font-size:.65rem;color:var(--danger-dark)">never completed</div>`}else{const daysAgo=Math.floor((new Date()-new Date(lastAny.date))/864e5);ageBadge=`<div style="font-size:.65rem;color:var(--text-dim)">last: ${daysAgo===0?'today':daysAgo+'d ago'}</div>`}}else{const overdue=Math.floor((new Date()-new Date(t.lastCompleted))/864e5)-t.cadenceDays;if(overdue>0)ageBadge=`<div style="font-size:.65rem;color:var(--danger-dark)">${overdue}d overdue</div>`}}
+    if(t.type==='daily'){const lastEntry=D.pointsHistory.filter(h=>h.taskId===t.id&&h.type==='earned').pop();if(!lastEntry){ageBadge=`<div style="font-size:.65rem;color:var(--text-dim)">never completed</div>`}else{const daysAgo=Math.floor((new Date()-new Date(lastEntry.date))/864e5);ageBadge=`<div style="font-size:.65rem;color:var(--text-dim)">last: ${daysAgo===0?'today':daysAgo+'d ago'}</div>`}}
+    if(t.type==='evergreen'){const lastEntry=D.pointsHistory.filter(h=>h.taskId===t.id&&h.type==='earned').pop();if(!lastEntry){ageBadge=`<div style="font-size:.65rem;color:var(--text-dim)">never completed</div>`}else{const daysAgo=Math.floor((new Date()-new Date(lastEntry.date))/864e5);ageBadge=`<div style="font-size:.65rem;color:var(--text-dim)">last: ${daysAgo===0?'today':daysAgo+'d ago'}</div>`}}
   }
   // Time invested for time-based incomplete tasks
   let investedBadge='';
@@ -724,7 +757,7 @@ function rHistory(){
     const dayMins=ents.reduce((s,h)=>s+(h.minutes||0),0);
     const dayTimeStr=dayMins>=60?`${Math.floor(dayMins/60)}h ${dayMins%60}m`:`${dayMins}m`;
     daySummary=ents.length?`<div style="display:flex;justify-content:space-between;font-size:.8rem;color:var(--text-dim);margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid var(--border)"><span>✨ ${dayPts} pts earned</span><span>⏱ ${dayTimeStr} logged</span></div>`:'';
-    if(ents.length){detail=ents.map(e=>{
+    if(ents.length){detail=ents.filter(e=>!(e.points===0&&!e.planTasks&&(e.task.startsWith('⏱️')||e.task.startsWith('🍅')))).map(e=>{
         const timeParts=e.date.slice(11,16);const hr=parseInt(timeParts.split(':')[0]),min=timeParts.split(':')[1];
         const ampm=hr>=12?'PM':'AM';const hr12=hr%12||12;
         const time=(e.task==='🎯 Daily goal bonus'||e.originalDate)?'':(`${hr12}:${min} ${ampm}`);
@@ -738,6 +771,7 @@ function rHistory(){
             let durInfo='';
             if(st.timeBased&&st.seconds>0)durInfo=sm+'m '+ss+'s';
             else if(st.countBased&&st.count)durInfo=st.count+' '+st.countUnit;
+            else if(st.flatDone>1)durInfo=st.flatDone+'× completed';
             else if(st.seconds>0)durInfo=sm+'m '+ss+'s';
             const icon=st.completed?'✅ ':'⏱️ ';
             return `<div style="display:flex;align-items:center;padding:3px 0"><div style="flex:1"><div style="font-size:.8rem;font-weight:500;color:var(--text-dim)">${icon}${st.name}</div>${durInfo?`<div style="font-size:.7rem;color:var(--text-dim);opacity:.7">${durInfo}</div>`:''}</div><span style="font-size:.75rem;font-weight:bold;color:var(--text-dim)">+${st.points}</span></div>`;
@@ -761,7 +795,10 @@ function rToolsMenu(){const a=T.running||T.paused,m=T.mode;return `<div class="v
 
 function rSW(){
   const opts=visibleTasks().map(t=>`<option value="${t.id}">${t.name}</option>`).join('');
-  const td=today();const firstSecIds=getPlanFirstSection();const planIncomplete=firstSecIds.filter(tid=>{const t=D.tasks.find(x=>x.id===tid);if(!t||t.archived)return false;if(t.type==='one-time')return!t.completed;if(t.type==='daily')return!D.pointsHistory.some(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td&&h.task.includes('✅'));if(t.type==='recurring')return!(t.lastCompleted&&(new Date()-new Date(t.lastCompleted))/864e5<t.cadenceDays);if(t.type==='evergreen')return!D.pointsHistory.some(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td&&h.task.includes('✅'));return true}).length;
+  const td=today();const firstSecIds=getPlanFirstSection();const planIncomplete=firstSecIds.filter(tid=>{const t=D.tasks.find(x=>x.id===tid);if(!t||t.archived)return false;
+    const pi=D.plan.find(i=>i.type==='task'&&i.id===tid);const eg=pi?.planGoal||(t.goal&&(t.goal.period==='daily'||t.goal.period==='hourly'||t.goal.period==='total')?t.goal:null);
+    if(eg){const entries=eg.period==='total'?D.pointsHistory.filter(h=>h.taskId===t.id&&h.type==='earned'):D.pointsHistory.filter(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td);const cur=t.timeBased?entries.reduce((s,h)=>s+(h.minutes||0),0):t.countBased?entries.reduce((s,h)=>s+(h.count||0),0):entries.filter(h=>h.task.includes('✅')).length;return cur<eg.target}
+    if(t.type==='one-time')return!t.completed;if(t.type==='daily')return!D.pointsHistory.some(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td&&h.task.includes('✅'));if(t.type==='recurring')return!(t.lastCompleted&&(new Date()-new Date(t.lastCompleted))/864e5<t.cadenceDays);if(t.type==='evergreen')return!D.pointsHistory.some(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td&&h.task.includes('✅'));return true}).length;
   const planOpt=planIncomplete>0?`<option value="__plan__">📋 Plan (${planIncomplete} tasks)</option>`:'';
   const e=elapsed(),m=Math.floor(e/60),s=e%60,a=T.running||T.paused;
   const pts=a&&!T.planMode?Math.floor(e*T.pts/(T.per*60)):0;
@@ -776,7 +813,7 @@ function rSW(){
       const secs=(T.planTimes[tid]||0)+(tid===liveCurId?liveCurExtra:0);
       if(t.timeBased){planTotalPts+=Math.floor((secs/60)*t.ptsAmount/t.ptsPerMinutes)}
       else if(t.countBased){planTotalPts+=Math.floor((T.planCounts?.[tid]||0)*t.ptsAmount/t.ptsPerCount)}
-      else if(T.planCompleted?.includes(tid)){planTotalPts+=t.points||0}
+      else if(T.planFlatDone?.[tid]){planTotalPts+=(T.planFlatDone[tid]*(t.points||0))}
     });
   }
   // Plan mode running display
@@ -788,9 +825,11 @@ function rSW(){
     const curM=Math.floor(curSecs/60),curS=curSecs%60;
     // Points info for current task
     let curPtsInfo='';
-    if(curTask?.timeBased){const p=Math.floor((curSecs/60)*curTask.ptsAmount/curTask.ptsPerMinutes);curPtsInfo=`<div style="font-size:.75rem;color:var(--success-dark)">${p} pts (${curTask.ptsAmount}/${curTask.ptsPerMinutes}m)</div>`}
-    else if(curTask?.countBased){curPtsInfo=`<div style="font-size:.75rem;color:var(--text-dim)">${curTask.ptsAmount} pts/${curTask.ptsPerCount} ${curTask.countUnit}</div>`}
-    else if(curTask){curPtsInfo=`<div style="font-size:.75rem;color:var(--text-dim)">+${curTask.points||0} pts on complete</div>`}
+    if(curTask?.timeBased){const p=Math.floor((curSecs/60)*curTask.ptsAmount/curTask.ptsPerMinutes);curPtsInfo=`<div style="font-size:.75rem;color:var(--success-dark)">${p} pts (${curTask.ptsAmount} pts / ${curTask.ptsPerMinutes} min)</div>`}
+    else if(curTask?.countBased){curPtsInfo=`<div style="font-size:.75rem;color:var(--text-dim)">${curTask.ptsAmount} pts / ${curTask.ptsPerCount} ${curTask.countUnit}</div>`}
+    else if(curTask){curPtsInfo=`<div style="font-size:.75rem;color:var(--text-dim)">+${curTask.points||0} pts on complete${T.planFlatDone?.[curId]?' · '+T.planFlatDone[curId]+'× done':''}</div>`}
+    // Goal info for current task
+    if(curTask){const cpi=D.plan.find(i=>i.type==='task'&&i.id===curId);const ceg=cpi?.planGoal||curTask.goal||null;if(ceg&&ceg.target){const td2=today();const ge=ceg.period==='total'?D.pointsHistory.filter(h=>h.taskId===curId&&h.type==='earned'):ceg.period==='hourly'?D.pointsHistory.filter(h=>h.taskId===curId&&h.type==='earned'&&h.date.slice(0,13)>=new Date().toISOString().slice(0,13)):D.pointsHistory.filter(h=>h.taskId===curId&&h.type==='earned'&&h.date.slice(0,10)===td2);const gc=curTask.timeBased?ge.reduce((s,h)=>s+(h.minutes||0),0)+Math.floor(curSecs/60):curTask.countBased?ge.reduce((s,h)=>s+(h.count||0),0)+(T.planCounts?.[curId]||0):ge.filter(h=>h.task.includes('✅')).length+(T.planFlatDone?.[curId]||0);const gu=curTask.timeBased?'min':curTask.countBased?(curTask.countUnit||'units'):'times';curPtsInfo+=`<div style="font-size:.7rem;color:${gc>=ceg.target?'var(--success-dark)':'var(--accent-dark)'}">🎯 ${gc}/${ceg.target} ${gu}${ceg.period!=='total'?' ('+ceg.period+')':''}${gc>=ceg.target?' ✓':''}</div>`}}
     // On deck with time/points info
     const onDeck=T.planQueue.slice(1).map(pid=>D.tasks.find(t=>t.id===pid)).filter(Boolean);
     const incompleteCount=T.planQueue.filter(tid=>!T.planCompleted?.includes(tid)).length;
@@ -801,18 +840,30 @@ function rSW(){
       let info='';
       if(t.timeBased&&tSecs>0){const p=Math.floor((tSecs/60)*t.ptsAmount/t.ptsPerMinutes);info=`<span style="font-size:.7rem;color:var(--text-dim)">${tM}:${String(tS).padStart(2,'0')} · ${p}pts</span>`}
       else if(t.countBased&&T.planCounts?.[pid]){const p=Math.floor(T.planCounts[pid]*t.ptsAmount/t.ptsPerCount);info=`<span style="font-size:.7rem;color:var(--text-dim)">${T.planCounts[pid]} ${t.countUnit} · ${p}pts</span>`}
+      else if(T.planFlatDone?.[pid]){info=`<span style="font-size:.7rem;color:var(--text-dim)">${T.planFlatDone[pid]}× · ${(T.planFlatDone[pid]*(t.points||0))}pts</span>`}
       else if(tSecs>0){info=`<span style="font-size:.7rem;color:var(--text-dim)">${tM}:${String(tS).padStart(2,'0')}</span>`}
       if(completed)info=`<span style="font-size:.7rem;color:var(--success-dark)">✅</span>${info?' '+info:''}`;
-      return `<div style="display:flex;align-items:center;gap:8px;padding:6px 8px;background:var(--card-neutral);border-radius:8px;margin-bottom:4px;${completed?'opacity:.6':''}"><span style="flex:1;font-size:.85rem;${completed?'text-decoration:line-through':''}">${t.name}</span>${info}<div style="display:flex;gap:2px">${!completed?`<button class="plan-q-move mbtn" data-idx="${i+1}" data-d="up">▲</button>${i<onDeck.length-1?`<button class="plan-q-move mbtn" data-idx="${i+1}" data-d="down">▼</button>`:''}`:''}</div></div>`;
+      // Goal info for on-deck task
+      const opi=D.plan.find(x=>x.type==='task'&&x.id===pid);const oeg=opi?.planGoal||(t.goal&&(t.goal.period==='daily'||t.goal.period==='hourly'||t.goal.period==='total')?t.goal:null);
+      let goalBadge='';
+      if(oeg&&!completed){const td2=today();const oe=oeg.period==='total'?D.pointsHistory.filter(h=>h.taskId===pid&&h.type==='earned'):D.pointsHistory.filter(h=>h.taskId===pid&&h.type==='earned'&&h.date.slice(0,10)===td2);const oc=t.timeBased?oe.reduce((s,h)=>s+(h.minutes||0),0)+Math.floor(tSecs/60):t.countBased?oe.reduce((s,h)=>s+(h.count||0),0)+(T.planCounts?.[pid]||0):oe.filter(h=>h.task.includes('✅')).length+(T.planFlatDone?.[pid]||0);const ou=t.timeBased?'min':t.countBased?(t.countUnit||'units'):'times';goalBadge=`<div style="font-size:.65rem;color:var(--accent-dark)">📋 ${oc}/${oeg.target} ${ou}</div>`}
+      return `<div style="display:flex;align-items:center;gap:8px;padding:6px 8px;background:var(--card-neutral);border-radius:8px;margin-bottom:4px;${completed?'opacity:.6':''}"><div style="flex:1"><span style="font-size:.85rem;${completed?'text-decoration:line-through':''}">${t.name}</span>${goalBadge}</div>${info}<div style="display:flex;gap:2px">${!completed?`<button class="plan-q-move mbtn" data-idx="${i+1}" data-d="up">▲</button>${i<onDeck.length-1?`<button class="plan-q-move mbtn" data-idx="${i+1}" data-d="down">▼</button>`:''}`:''}</div></div>`;
     }).join('');
     const showSkip=incompleteCount>1;
-    planDisplay=`<div style="text-align:left;margin-top:16px;border-top:1px solid var(--border);padding-top:12px"><div style="margin-bottom:12px"><div style="font-size:.75rem;color:var(--text-dim);margin-bottom:4px">CURRENT</div><div style="background:var(--card-task);border-radius:var(--radius);padding:10px 12px"><div style="display:flex;justify-content:space-between;align-items:center"><span style="font-weight:600;font-size:.9rem">${curTask?.name||'—'}</span><span style="font-size:.8rem;color:var(--accent-dark);font-weight:bold" data-plan-cur-time>${String(curM).padStart(2,'0')}:${String(curS).padStart(2,'0')}</span></div>${curPtsInfo}</div><div style="display:flex;gap:6px;margin-top:8px"><button id="plan-complete" class="btn bsuc" style="flex:1;font-size:.85rem">✓ Done</button>${showSkip?`<button id="plan-skip" class="btn bmut" style="flex:1;font-size:.85rem">⏭️ Skip</button>`:''}</div></div>${onDeck.length?`<div style="margin-top:12px"><div style="font-size:.75rem;color:var(--text-dim);margin-bottom:4px">ON DECK</div>${onDeckCards}</div>`:''}</div>`;
+    // Determine button visibility: time-based with goal only shows Skip until goal met
+    let showDone=true,showSkipBtn=showSkip;
+    if(curTask?.timeBased){const cpi2=D.plan.find(i=>i.type==='task'&&i.id===curId);const tGoal=cpi2?.planGoal||curTask.goal||null;if(tGoal&&tGoal.target){const td3=today();const tge=tGoal.period==='total'?D.pointsHistory.filter(h=>h.taskId===curId&&h.type==='earned'):D.pointsHistory.filter(h=>h.taskId===curId&&h.type==='earned'&&h.date.slice(0,10)===td3);const tCur=tge.reduce((s,h)=>s+(h.minutes||0),0)+Math.floor(curSecs/60);if(tCur<tGoal.target){showDone=false;showSkipBtn=true}}}
+    const planBtns=`<div style="display:flex;gap:6px;margin-top:8px">${showDone?`<button id="plan-complete" class="btn bsuc" style="flex:1;font-size:.85rem">✓ Done</button>`:''}${showSkipBtn?`<button id="plan-skip" class="btn bmut" style="flex:1;font-size:.85rem">⏭️ Skip</button>`:''}</div>`;
+    planDisplay=`<div style="text-align:left;margin-top:16px;border-top:1px solid var(--border);padding-top:12px"><div style="margin-bottom:12px"><div style="font-size:.75rem;color:var(--text-dim);margin-bottom:4px">CURRENT</div><div style="background:var(--card-task);border-radius:var(--radius);padding:10px 12px"><div style="display:flex;justify-content:space-between;align-items:center"><span style="font-weight:600;font-size:.9rem">${curTask?.name||'—'}</span><span style="font-size:.8rem;color:var(--accent-dark);font-weight:bold" data-plan-cur-time>${String(curM).padStart(2,'0')}:${String(curS).padStart(2,'0')}</span></div>${curPtsInfo}</div>${planBtns}</div>${onDeck.length?`<div style="margin-top:12px"><div style="font-size:.75rem;color:var(--text-dim);margin-bottom:4px">ON DECK</div>${onDeckCards}</div>`:''}</div>`;
   }
-  return `<div class="vc" style="text-align:center"><button class="tback">← Back</button><h2 style="color:var(--accent-dark);margin:12px 0">⏱️ Stopwatch</h2><div id="tld" class="tdis">${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}</div>${a?`<div id="tlp" style="font-size:.9rem;color:var(--success-dark);margin-bottom:8px">${T.planMode?planTotalPts+' pts earned':pts+' point'+(pts!==1?'s':'')+' earned so far'}</div>${!T.planMode?`<div style="font-size:.85rem;color:var(--text-dim);margin-bottom:16px">Working on: <b>${label||'—'}</b></div>`:''}<div style="display:flex;gap:10px;justify-content:center">${T.running?`<button id="swpa" class="btn bwar btn-lg">Pause</button>`:`<button id="swre" class="btn bsuc btn-lg">Resume</button>`}<button id="swst" class="btn bdan btn-lg">Stop</button></div>${planDisplay}`:`<select id="swt" class="inf" style="text-align:left"><option value="">-- Select a task --</option>${planOpt}${opts}</select><input id="swn" type="text" placeholder="Or type what you're working on" class="inf" style="text-align:left"><div id="sw-rate-row" style="display:flex;gap:6px;align-items:center;justify-content:center;margin-bottom:16px"><input id="swp" type="number" min="1" class="inf" style="width:70px;margin:0;text-align:center"><span class="rl">pts per</span><input id="swr" type="number" min="1" class="inf" style="width:70px;margin:0;text-align:center"><span class="rl">min</span></div><button id="sws" class="btn bsuc btn-lg" disabled style="opacity:.5">Start</button><div id="swe" style="margin-top:8px;font-size:.8rem;color:var(--danger-dark)"></div>`}</div>`}
+  return `<div class="vc" style="text-align:center"><button class="tback">← Back</button><h2 style="color:var(--accent-dark);margin:12px 0">⏱️ Stopwatch</h2><div id="tld" class="tdis">${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}</div>${a?`<div id="tlp" style="font-size:.9rem;color:var(--success-dark);margin-bottom:8px">${T.planMode?planTotalPts+` Point${planTotalPts!==1?'s':''} Earned`:pts+' Point'+(pts!==1?'s':'')+' Earned so far'}</div>${!T.planMode?`<div style="font-size:.85rem;color:var(--text-dim);margin-bottom:16px">Working on: <b>${label||'—'}</b></div>`:''}<div style="display:flex;gap:10px;justify-content:center">${T.running?`<button id="swpa" class="btn bwar btn-lg">Pause</button>`:`<button id="swre" class="btn bsuc btn-lg">Resume</button>`}<button id="swst" class="btn bdan btn-lg">Stop</button></div>${planDisplay}`:`<select id="swt" class="inf" style="text-align:left"><option value="">-- Select a task --</option>${planOpt}${opts}</select><input id="swn" type="text" placeholder="Or type what you're working on" class="inf" style="text-align:left"><div id="sw-rate-row" style="display:flex;gap:6px;align-items:center;justify-content:center;margin-bottom:16px"><input id="swp" type="number" min="1" class="inf" style="width:70px;margin:0;text-align:center"><span class="rl">pts per</span><input id="swr" type="number" min="1" class="inf" style="width:70px;margin:0;text-align:center"><span class="rl">min</span></div><button id="sws" class="btn bsuc btn-lg" disabled style="opacity:.5">Start</button><div id="swe" style="margin-top:8px;font-size:.8rem;color:var(--danger-dark)"></div>`}</div>`}
 
 function rPM(){
   const opts=visibleTasks().map(t=>`<option value="${t.id}">${t.name}</option>`).join('');
-  const td=today();const firstSecIds=getPlanFirstSection();const planIncomplete=firstSecIds.filter(tid=>{const t=D.tasks.find(x=>x.id===tid);if(!t||t.archived)return false;if(t.type==='one-time')return!t.completed;if(t.type==='daily')return!D.pointsHistory.some(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td&&h.task.includes('✅'));if(t.type==='recurring')return!(t.lastCompleted&&(new Date()-new Date(t.lastCompleted))/864e5<t.cadenceDays);if(t.type==='evergreen')return!D.pointsHistory.some(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td&&h.task.includes('✅'));return true}).length;
+  const td=today();const firstSecIds=getPlanFirstSection();const planIncomplete=firstSecIds.filter(tid=>{const t=D.tasks.find(x=>x.id===tid);if(!t||t.archived)return false;
+    const pi=D.plan.find(i=>i.type==='task'&&i.id===tid);const eg=pi?.planGoal||(t.goal&&(t.goal.period==='daily'||t.goal.period==='hourly'||t.goal.period==='total')?t.goal:null);
+    if(eg){const entries=eg.period==='total'?D.pointsHistory.filter(h=>h.taskId===t.id&&h.type==='earned'):D.pointsHistory.filter(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td);const cur=t.timeBased?entries.reduce((s,h)=>s+(h.minutes||0),0):t.countBased?entries.reduce((s,h)=>s+(h.count||0),0):entries.filter(h=>h.task.includes('✅')).length;return cur<eg.target}
+    if(t.type==='one-time')return!t.completed;if(t.type==='daily')return!D.pointsHistory.some(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td&&h.task.includes('✅'));if(t.type==='recurring')return!(t.lastCompleted&&(new Date()-new Date(t.lastCompleted))/864e5<t.cadenceDays);if(t.type==='evergreen')return!D.pointsHistory.some(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td&&h.task.includes('✅'));return true}).length;
   const planOpt=planIncomplete>0?`<option value="__plan__">📋 Plan (${planIncomplete} tasks)</option>`:'';
   const e=elapsed(),a=T.running||T.paused;
   const tgt=(T.phase==='work'?T.workDur:T.breakDur)*60,rem=a?Math.max(0,tgt-e):(T.workDur||25)*60;
@@ -828,9 +879,10 @@ function rPM(){
     const curSecs=(T.planTimes[curId]||0)+(T.running?Math.floor((Date.now()-T.planCurrentStart)/1000):0);
     const curM=Math.floor(curSecs/60),curS=curSecs%60;
     let curPtsInfo='';
-    if(curTask?.timeBased){const p=Math.floor((curSecs/60)*curTask.ptsAmount/curTask.ptsPerMinutes);curPtsInfo=`<div style="font-size:.75rem;color:var(--success-dark)">${p} pts (${curTask.ptsAmount}/${curTask.ptsPerMinutes}m)</div>`}
-    else if(curTask?.countBased){curPtsInfo=`<div style="font-size:.75rem;color:var(--text-dim)">${curTask.ptsAmount} pts/${curTask.ptsPerCount} ${curTask.countUnit}</div>`}
-    else if(curTask){curPtsInfo=`<div style="font-size:.75rem;color:var(--text-dim)">+${curTask.points||0} pts on complete</div>`}
+    if(curTask?.timeBased){const p=Math.floor((curSecs/60)*curTask.ptsAmount/curTask.ptsPerMinutes);curPtsInfo=`<div style="font-size:.75rem;color:var(--success-dark)">${p} pts (${curTask.ptsAmount} pts / ${curTask.ptsPerMinutes} min)</div>`}
+    else if(curTask?.countBased){curPtsInfo=`<div style="font-size:.75rem;color:var(--text-dim)">${curTask.ptsAmount} pts / ${curTask.ptsPerCount} ${curTask.countUnit}</div>`}
+    else if(curTask){curPtsInfo=`<div style="font-size:.75rem;color:var(--text-dim)">+${curTask.points||0} pts on complete${T.planFlatDone?.[curId]?' · '+T.planFlatDone[curId]+'× done':''}</div>`}
+    if(curTask){const cpi=D.plan.find(i=>i.type==='task'&&i.id===curId);const ceg=cpi?.planGoal||curTask.goal||null;if(ceg&&ceg.target){const td2=today();const ge=ceg.period==='total'?D.pointsHistory.filter(h=>h.taskId===curId&&h.type==='earned'):ceg.period==='hourly'?D.pointsHistory.filter(h=>h.taskId===curId&&h.type==='earned'&&h.date.slice(0,13)>=new Date().toISOString().slice(0,13)):D.pointsHistory.filter(h=>h.taskId===curId&&h.type==='earned'&&h.date.slice(0,10)===td2);const gc=curTask.timeBased?ge.reduce((s,h)=>s+(h.minutes||0),0)+Math.floor(curSecs/60):curTask.countBased?ge.reduce((s,h)=>s+(h.count||0),0)+(T.planCounts?.[curId]||0):ge.filter(h=>h.task.includes('✅')).length+(T.planFlatDone?.[curId]||0);const gu=curTask.timeBased?'min':curTask.countBased?(curTask.countUnit||'units'):'times';curPtsInfo+=`<div style="font-size:.7rem;color:${gc>=ceg.target?'var(--success-dark)':'var(--accent-dark)'}">🎯 ${gc}/${ceg.target} ${gu}${ceg.period!=='total'?' ('+ceg.period+')':''}${gc>=ceg.target?' ✓':''}</div>`}}
     const onDeck=T.planQueue.slice(1).map(pid=>D.tasks.find(t=>t.id===pid)).filter(Boolean);
     const incompleteCount=T.planQueue.filter(tid=>!T.planCompleted?.includes(tid)).length;
     const onDeckCards=onDeck.map((t,i)=>{
@@ -840,12 +892,21 @@ function rPM(){
       let info='';
       if(t.timeBased&&tSecs>0){const p=Math.floor((tSecs/60)*t.ptsAmount/t.ptsPerMinutes);info=`<span style="font-size:.7rem;color:var(--text-dim)">${tM}:${String(tS).padStart(2,'0')} · ${p}pts</span>`}
       else if(t.countBased&&T.planCounts?.[pid]){const p=Math.floor(T.planCounts[pid]*t.ptsAmount/t.ptsPerCount);info=`<span style="font-size:.7rem;color:var(--text-dim)">${T.planCounts[pid]} ${t.countUnit} · ${p}pts</span>`}
+      else if(T.planFlatDone?.[pid]){info=`<span style="font-size:.7rem;color:var(--text-dim)">${T.planFlatDone[pid]}× · ${(T.planFlatDone[pid]*(t.points||0))}pts</span>`}
       else if(tSecs>0){info=`<span style="font-size:.7rem;color:var(--text-dim)">${tM}:${String(tS).padStart(2,'0')}</span>`}
       if(completed)info=`<span style="font-size:.7rem;color:var(--success-dark)">✅</span>${info?' '+info:''}`;
-      return `<div style="display:flex;align-items:center;gap:8px;padding:6px 8px;background:var(--card-neutral);border-radius:8px;margin-bottom:4px;${completed?'opacity:.6':''}"><span style="flex:1;font-size:.85rem;${completed?'text-decoration:line-through':''}">${t.name}</span>${info}<div style="display:flex;gap:2px">${!completed?`<button class="plan-q-move mbtn" data-idx="${i+1}" data-d="up">▲</button>${i<onDeck.length-1?`<button class="plan-q-move mbtn" data-idx="${i+1}" data-d="down">▼</button>`:''}`:''}</div></div>`;
+      // Goal info for on-deck task
+      const opi=D.plan.find(x=>x.type==='task'&&x.id===pid);const oeg=opi?.planGoal||(t.goal&&(t.goal.period==='daily'||t.goal.period==='hourly'||t.goal.period==='total')?t.goal:null);
+      let goalBadge='';
+      if(oeg&&!completed){const td2=today();const oe=oeg.period==='total'?D.pointsHistory.filter(h=>h.taskId===pid&&h.type==='earned'):D.pointsHistory.filter(h=>h.taskId===pid&&h.type==='earned'&&h.date.slice(0,10)===td2);const oc=t.timeBased?oe.reduce((s,h)=>s+(h.minutes||0),0)+Math.floor(tSecs/60):t.countBased?oe.reduce((s,h)=>s+(h.count||0),0)+(T.planCounts?.[pid]||0):oe.filter(h=>h.task.includes('✅')).length+(T.planFlatDone?.[pid]||0);const ou=t.timeBased?'min':t.countBased?(t.countUnit||'units'):'times';goalBadge=`<div style="font-size:.65rem;color:var(--accent-dark)">📋 ${oc}/${oeg.target} ${ou}</div>`}
+      return `<div style="display:flex;align-items:center;gap:8px;padding:6px 8px;background:var(--card-neutral);border-radius:8px;margin-bottom:4px;${completed?'opacity:.6':''}"><div style="flex:1"><span style="font-size:.85rem;${completed?'text-decoration:line-through':''}">${t.name}</span>${goalBadge}</div>${info}<div style="display:flex;gap:2px">${!completed?`<button class="plan-q-move mbtn" data-idx="${i+1}" data-d="up">▲</button>${i<onDeck.length-1?`<button class="plan-q-move mbtn" data-idx="${i+1}" data-d="down">▼</button>`:''}`:''}</div></div>`;
     }).join('');
     const showSkip=incompleteCount>1;
-    planDisplay=`<div style="text-align:left;margin-top:16px;border-top:1px solid var(--border);padding-top:12px"><div style="margin-bottom:12px"><div style="font-size:.75rem;color:var(--text-dim);margin-bottom:4px">CURRENT</div><div style="background:var(--card-task);border-radius:var(--radius);padding:10px 12px"><div style="display:flex;justify-content:space-between;align-items:center"><span style="font-weight:600;font-size:.9rem">${curTask?.name||'—'}</span><span style="font-size:.8rem;color:var(--accent-dark);font-weight:bold" data-plan-cur-time>${String(curM).padStart(2,'0')}:${String(curS).padStart(2,'0')}</span></div>${curPtsInfo}</div><div style="display:flex;gap:6px;margin-top:8px"><button id="plan-complete" class="btn bsuc" style="flex:1;font-size:.85rem">✓ Done</button>${showSkip?`<button id="plan-skip" class="btn bmut" style="flex:1;font-size:.85rem">⏭️ Skip</button>`:''}</div></div>${onDeck.length?`<div style="margin-top:12px"><div style="font-size:.75rem;color:var(--text-dim);margin-bottom:4px">ON DECK</div>${onDeckCards}</div>`:''}</div>`;
+    // Determine button visibility: time-based with goal only shows Skip until goal met
+    let showDone=true,showSkipBtn=showSkip;
+    if(curTask?.timeBased){const cpi2=D.plan.find(i=>i.type==='task'&&i.id===curId);const tGoal=cpi2?.planGoal||curTask.goal||null;if(tGoal&&tGoal.target){const td3=today();const tge=tGoal.period==='total'?D.pointsHistory.filter(h=>h.taskId===curId&&h.type==='earned'):D.pointsHistory.filter(h=>h.taskId===curId&&h.type==='earned'&&h.date.slice(0,10)===td3);const tCur=tge.reduce((s,h)=>s+(h.minutes||0),0)+Math.floor(curSecs/60);if(tCur<tGoal.target){showDone=false;showSkipBtn=true}}}
+    const planBtns=`<div style="display:flex;gap:6px;margin-top:8px">${showDone?`<button id="plan-complete" class="btn bsuc" style="flex:1;font-size:.85rem">✓ Done</button>`:''}${showSkipBtn?`<button id="plan-skip" class="btn bmut" style="flex:1;font-size:.85rem">⏭️ Skip</button>`:''}</div>`;
+    planDisplay=`<div style="text-align:left;margin-top:16px;border-top:1px solid var(--border);padding-top:12px"><div style="margin-bottom:12px"><div style="font-size:.75rem;color:var(--text-dim);margin-bottom:4px">CURRENT</div><div style="background:var(--card-task);border-radius:var(--radius);padding:10px 12px"><div style="display:flex;justify-content:space-between;align-items:center"><span style="font-weight:600;font-size:.9rem">${curTask?.name||'—'}</span><span style="font-size:.8rem;color:var(--accent-dark);font-weight:bold" data-plan-cur-time>${String(curM).padStart(2,'0')}:${String(curS).padStart(2,'0')}</span></div>${curPtsInfo}</div>${planBtns}</div>${onDeck.length?`<div style="margin-top:12px"><div style="font-size:.75rem;color:var(--text-dim);margin-bottom:4px">ON DECK</div>${onDeckCards}</div>`:''}</div>`;
   }
   // Plan mode total pts for pomodoro
   let pmPlanTotalPts=0;
@@ -857,10 +918,10 @@ function rPM(){
       const secs=(T.planTimes[tid]||0)+(tid===liveCurId?liveCurExtra:0);
       if(t.timeBased){pmPlanTotalPts+=Math.floor((secs/60)*t.ptsAmount/t.ptsPerMinutes)}
       else if(t.countBased){pmPlanTotalPts+=Math.floor((T.planCounts?.[tid]||0)*t.ptsAmount/t.ptsPerCount)}
-      else if(T.planCompleted?.includes(tid)){pmPlanTotalPts+=t.points||0}
+      else if(T.planFlatDone?.[tid]){pmPlanTotalPts+=(T.planFlatDone[tid]*(t.points||0))}
     });
   }
-  return `<div class="vc" style="text-align:center"><button class="tback">← Back</button><h2 style="color:var(--accent-dark);margin:12px 0">🍅 Pomodoro</h2>${a?`<div style="font-size:.9rem;color:var(--text-dim);margin-bottom:4px">${phase}</div>`:''}<div id="tld" class="tdis">${String(rM).padStart(2,'0')}:${String(rS).padStart(2,'0')}</div>${a&&T.phase==='work'?`<div id="tlp" style="font-size:.9rem;color:var(--success-dark);margin-bottom:8px">${T.planMode?pmPlanTotalPts+' pts earned':pts+' point'+(pts!==1?'s':'')+' this session'}</div>`:''} ${a?`${!T.planMode?`<div style="font-size:.85rem;color:var(--text-dim);margin-bottom:16px">Working on: <b>${label||'—'}</b></div>`:''}<div style="display:flex;gap:10px;justify-content:center">${T.running?`<button id="pmpa" class="btn bwar btn-lg">Pause</button>`:`<button id="pmre" class="btn bsuc btn-lg">Resume</button>`}<button id="pmst" class="btn bdan btn-lg">Stop</button></div>${planDisplay}`:`<div style="display:flex;gap:8px;margin-bottom:10px;justify-content:center"><div><label class="rl">Work (min)</label><input id="pmw" type="number" min="1" placeholder="25" class="inf" style="width:70px;margin:4px 0 0;text-align:center"></div><div><label class="rl">Break (min)</label><input id="pmb" type="number" min="1" placeholder="5" class="inf" style="width:70px;margin:4px 0 0;text-align:center"></div></div><select id="pmt" class="inf" style="text-align:left"><option value="">-- Select a task --</option>${planOpt}${opts}</select><input id="pmn" type="text" placeholder="Or type what you're working on" class="inf" style="text-align:left"><div id="pm-rate-row" style="display:flex;gap:6px;align-items:center;justify-content:center;margin-bottom:16px"><input id="pmp" type="number" min="1" class="inf" style="width:70px;margin:0;text-align:center"><span class="rl">pts per</span><input id="pmr" type="number" min="1" class="inf" style="width:70px;margin:0;text-align:center"><span class="rl">min</span></div><button id="pms" class="btn bsuc btn-lg" disabled style="opacity:.5">Start</button><div id="pme" style="margin-top:8px;font-size:.8rem;color:var(--danger-dark)"></div>`}</div>`}
+  return `<div class="vc" style="text-align:center"><button class="tback">← Back</button><h2 style="color:var(--accent-dark);margin:12px 0">🍅 Pomodoro</h2>${a?`<div style="font-size:.9rem;color:var(--text-dim);margin-bottom:4px">${phase}</div>`:''}<div id="tld" class="tdis">${String(rM).padStart(2,'0')}:${String(rS).padStart(2,'0')}</div>${a&&T.phase==='work'?`<div id="tlp" style="font-size:.9rem;color:var(--success-dark);margin-bottom:8px">${T.planMode?pmPlanTotalPts+` Point${pmPlanTotalPts!==1?'s':''} Earned`:pts+' Point'+(pts!==1?'s':'')+' this session'}</div>`:''} ${a?`${!T.planMode?`<div style="font-size:.85rem;color:var(--text-dim);margin-bottom:16px">Working on: <b>${label||'—'}</b></div>`:''}<div style="display:flex;gap:10px;justify-content:center">${T.running?`<button id="pmpa" class="btn bwar btn-lg">Pause</button>`:`<button id="pmre" class="btn bsuc btn-lg">Resume</button>`}<button id="pmst" class="btn bdan btn-lg">Stop</button></div><div style="margin-top:8px"><button id="pm-skip-phase" class="btn bmut" style="font-size:.8rem">${T.phase==='work'?'☕ Skip to Break':'💪 Skip Break'}</button></div>${planDisplay}`:`<div style="display:flex;gap:8px;margin-bottom:10px;justify-content:center"><div><label class="rl">Work (min)</label><input id="pmw" type="number" min="1" placeholder="25" class="inf" style="width:70px;margin:4px 0 0;text-align:center"></div><div><label class="rl">Break (min)</label><input id="pmb" type="number" min="1" placeholder="5" class="inf" style="width:70px;margin:4px 0 0;text-align:center"></div></div><select id="pmt" class="inf" style="text-align:left"><option value="">-- Select a task --</option>${planOpt}${opts}</select><input id="pmn" type="text" placeholder="Or type what you're working on" class="inf" style="text-align:left"><div id="pm-rate-row" style="display:flex;gap:6px;align-items:center;justify-content:center;margin-bottom:16px"><input id="pmp" type="number" min="1" class="inf" style="width:70px;margin:0;text-align:center"><span class="rl">pts per</span><input id="pmr" type="number" min="1" class="inf" style="width:70px;margin:0;text-align:center"><span class="rl">min</span></div><button id="pms" class="btn bsuc btn-lg" disabled style="opacity:.5">Start</button><div id="pme" style="margin-top:8px;font-size:.8rem;color:var(--danger-dark)"></div>`}</div>`}
 
 // ===== TECHNIQUES =====
 function rTech(){
@@ -1525,10 +1586,10 @@ function bindAll(){
   document.querySelectorAll('.plan-done-btn').forEach(b=>b.addEventListener('click',e=>{e.stopPropagation();const t=D.tasks.find(x=>x.id===b.dataset.id);if(!t)return;
     const td=today();
     const planItem=D.plan.find(i=>i.type==='task'&&i.id===t.id&&i.planGoal);
-    const pg=planItem?.planGoal;
+    const pg=planItem?.planGoal||(t.goal&&(t.goal.period==='daily'||t.goal.period==='hourly'||t.goal.period==='total')?t.goal:null);
     let alreadyDone=false;
     if(pg){
-      const entries=D.pointsHistory.filter(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td);
+      const entries=pg.period==='total'?D.pointsHistory.filter(h=>h.taskId===t.id&&h.type==='earned'):D.pointsHistory.filter(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td);
       const current=t.timeBased?entries.reduce((s,h)=>s+(h.minutes||0),0):t.countBased?entries.reduce((s,h)=>s+(h.count||0),0):entries.filter(h=>h.task.includes('✅')).length;
       alreadyDone=current>=pg.target;
     } else {
@@ -1551,6 +1612,7 @@ function bindAll(){
       return;
     }
     if(t.timeBased||t.countBased){inlineMinId=t.id;render()}
+    else if(pg||(t.goal&&(t.goal.period==='daily'||t.goal.period==='hourly'||t.goal.period==='total'))){completeTask(t.id);if(view==='plan')checkPlanComplete()}
     else{completeTask(t.id);if(view==='plan')checkPlanComplete()}}));
   document.querySelectorAll('.plan-move-g').forEach(b=>b.addEventListener('click',e=>{e.stopPropagation();const gi=parseInt(b.dataset.gi),dir=b.dataset.d;const si=dir==='up'?gi-1:gi+1;if(si<0||si>=D.plan.length)return;
     // If swapping across a break, check for duplicates in destination section
@@ -1655,24 +1717,44 @@ function bindAll(){
   document.getElementById('swn')?.addEventListener('input',e=>{if(e.target.value.trim()){document.getElementById('swt').value='';document.getElementById('swt').style.display='none'}else{document.getElementById('swt').style.display=''}valSW()});
   // Plan queue controls (while timer running in plan mode)
   document.querySelectorAll('.plan-q-move').forEach(b=>b.addEventListener('click',e=>{e.stopPropagation();const idx=parseInt(b.dataset.idx),dir=b.dataset.d;const si=dir==='up'?idx-1:idx+1;if(si<0||si>=T.planQueue.length)return;if(idx===0||si===0){const curId=T.planQueue[0];const curExtra=T.running?Math.floor((Date.now()-T.planCurrentStart)/1000):0;T.planTimes[curId]=(T.planTimes[curId]||0)+curExtra;T.planCurrentStart=Date.now()}[T.planQueue[idx],T.planQueue[si]]=[T.planQueue[si],T.planQueue[idx]];if(si===0||idx===0){T.taskId=T.planQueue[0];T.planCurrentStart=Date.now()}render()}));
-  document.getElementById('plan-skip')?.addEventListener('click',()=>{if(!T.planMode||T.planQueue.length<1)return;const curId=T.planQueue[0];const curTask=D.tasks.find(x=>x.id===curId);const curExtra=T.running?Math.floor((Date.now()-T.planCurrentStart)/1000):0;T.planTimes[curId]=(T.planTimes[curId]||0)+curExtra;
-    if(curTask&&curTask.countBased){
-      modal(`<div style="text-align:center"><p style="margin-bottom:12px">How many <b>${curTask.countUnit||'units'}</b> did you complete on <b>${curTask.name}</b>?</p><input id="pskip-count" type="number" min="0" placeholder="0" class="inf" style="text-align:center"><div style="display:flex;gap:8px;margin-top:12px"><button id="pskip-ok" class="btn bpri" style="flex:1">Save</button><button id="pskip-none" class="btn bmut" style="flex:1">None</button></div></div>`);
-      const doSkip=()=>{planAdvanceToNext();closeM();render()};
-      document.getElementById('pskip-ok')?.addEventListener('click',()=>{const cnt=parseInt(document.getElementById('pskip-count')?.value)||0;if(cnt>0){if(!T.planCounts)T.planCounts={};T.planCounts[curId]=(T.planCounts[curId]||0)+cnt}doSkip()});
-      document.getElementById('pskip-none')?.addEventListener('click',doSkip);
-    } else {planAdvanceToNext();render()}});
+  document.getElementById('plan-skip')?.addEventListener('click',()=>{if(!T.planMode||T.planQueue.length<1)return;const curId=T.planQueue[0];const curExtra=(T.running&&T.phase!=='break')?Math.floor((Date.now()-T.planCurrentStart)/1000):0;T.planTimes[curId]=(T.planTimes[curId]||0)+curExtra;
+    planAdvanceToNext();T.planCurrentStart=Date.now();render()});
   document.getElementById('plan-complete')?.addEventListener('click',()=>{if(!T.planMode||T.planQueue.length<1)return;const curId=T.planQueue[0];const curTask=D.tasks.find(x=>x.id===curId);const curExtra=T.running?Math.floor((Date.now()-T.planCurrentStart)/1000):0;T.planTimes[curId]=(T.planTimes[curId]||0)+curExtra;
+    const pi=D.plan.find(i=>i.type==='task'&&i.id===curId);
+    const eg=pi?.planGoal||(curTask?.goal&&(curTask.goal.period==='daily'||curTask.goal.period==='hourly'||curTask.goal.period==='total')?curTask.goal:null);
+    function markDoneIfGoalMet(){
+      // For flat tasks (not time/count), track the completion for this session (don't call completeTask — stopSW/stopPM handles history)
+      if(!curTask.timeBased&&!curTask.countBased){if(!T.planFlatDone)T.planFlatDone={};T.planFlatDone[curId]=(T.planFlatDone[curId]||0)+1}
+      if(eg){
+        // Check if goal is now met (including time just accumulated)
+        const td2=today();
+        const entries=eg.period==='total'?D.pointsHistory.filter(h=>h.taskId===curId&&h.type==='earned'):D.pointsHistory.filter(h=>h.taskId===curId&&h.type==='earned'&&h.date.slice(0,10)===td2);
+        const timeSoFar=(T.planTimes[curId]||0);const countSoFar=(T.planCounts?.[curId]||0);
+        const cur=curTask.timeBased?entries.reduce((s,h)=>s+(h.minutes||0),0)+Math.floor(timeSoFar/60):curTask.countBased?entries.reduce((s,h)=>s+(h.count||0),0)+countSoFar:entries.filter(h=>h.task.includes('✅')).length+(T.planFlatDone?.[curId]||0);
+        if(cur>=eg.target){if(!T.planCompleted)T.planCompleted=[];T.planCompleted.push(curId)}
+      } else {if(!T.planCompleted)T.planCompleted=[];T.planCompleted.push(curId)}
+      planAdvanceToNext();if(planAllDone()){T.mode==='pm'?stopPM():stopSW()}else{render()}
+    }
     if(curTask&&curTask.countBased){
-      modal(`<div style="text-align:center"><p style="margin-bottom:12px">How many <b>${curTask.countUnit||'units'}</b> did you complete on <b>${curTask.name}</b>?</p><input id="pcmp-count" type="number" min="0" placeholder="0" class="inf" style="text-align:center"><div style="display:flex;gap:8px;margin-top:12px"><button id="pcmp-ok" class="btn bsuc" style="flex:1">Done!</button><button id="pcmp-cancel" class="btn bmut" style="flex:1">Cancel</button></div></div>`);
-      document.getElementById('pcmp-ok')?.addEventListener('click',()=>{const cnt=parseInt(document.getElementById('pcmp-count')?.value)||0;if(cnt>0){if(!T.planCounts)T.planCounts={};T.planCounts[curId]=(T.planCounts[curId]||0)+cnt}if(!T.planCompleted)T.planCompleted=[];T.planCompleted.push(curId);closeM();planAdvanceToNext();if(planAllDone()){T.mode==='pm'?stopPM():stopSW()}else{render()}});
+      modal(`<div style="text-align:center"><p style="margin-bottom:12px">How many <b>${curTask.countUnit||'units'}</b> did you complete on <b>${curTask.name}</b>?</p><input id="pcmp-count" type="number" min="0" placeholder="" class="inf" style="text-align:center"><div style="display:flex;gap:8px;margin-top:12px"><button id="pcmp-ok" class="btn bsuc" style="flex:1">Done!</button><button id="pcmp-cancel" class="btn bmut" style="flex:1">Cancel</button></div></div>`);
+      document.getElementById('pcmp-ok')?.addEventListener('click',()=>{const cnt=parseInt(document.getElementById('pcmp-count')?.value)||0;if(cnt>0){if(!T.planCounts)T.planCounts={};T.planCounts[curId]=(T.planCounts[curId]||0)+cnt}closeM();markDoneIfGoalMet()});
       document.getElementById('pcmp-cancel')?.addEventListener('click',closeM);
-    } else {if(!T.planCompleted)T.planCompleted=[];T.planCompleted.push(curId);planAdvanceToNext();if(planAllDone()){T.mode==='pm'?stopPM():stopSW()}else{render()}}});
+    } else {markDoneIfGoalMet()}});
   // Pomodoro
   document.getElementById('pms')?.addEventListener('click',startPM);
   document.getElementById('pmpa')?.addEventListener('click',pause);
   document.getElementById('pmre')?.addEventListener('click',resume);
   document.getElementById('pmst')?.addEventListener('click',stopPM);
+  document.getElementById('pm-skip-phase')?.addEventListener('click',()=>{
+    if(!T.running&&!T.paused)return;
+    if(T.phase==='work'){
+      // Save plan task time before switching to break
+      if(T.planMode&&T.planQueue.length>0){const curId=T.planQueue[0];const curExtra=T.running?Math.floor((Date.now()-T.planCurrentStart)/1000):0;T.planTimes[curId]=(T.planTimes[curId]||0)+curExtra;T.planCurrentStart=Date.now()}
+      T.totalWork+=elapsed();T.phase='break';T.elapsed=0;T.start=Date.now();render();
+    } else {
+      T.totalBreak+=elapsed();T.phase='work';T.elapsed=0;T.start=Date.now();if(T.planMode)T.planCurrentStart=Date.now();render();
+    }
+  });
   ['pmt','pmn','pmp','pmr'].forEach(x=>{document.getElementById(x)?.addEventListener('input',valPM);document.getElementById(x)?.addEventListener('change',valPM)});
   document.getElementById('pmt')?.addEventListener('change',e=>{if(e.target.value==='__plan__'){document.getElementById('pmn').value='';document.getElementById('pmn').style.display='none';const rr=document.getElementById('pm-rate-row');if(rr)rr.style.display='none';valPM()}else if(e.target.value){document.getElementById('pmn').value='';document.getElementById('pmn').style.display='none';const rr=document.getElementById('pm-rate-row');if(rr)rr.style.display='';const t=D.tasks.find(x=>x.id===e.target.value);if(t&&t.timeBased){document.getElementById('pmp').value=t.ptsAmount;document.getElementById('pmr').value=t.ptsPerMinutes}}else{document.getElementById('pmn').style.display='';const rr=document.getElementById('pm-rate-row');if(rr)rr.style.display=''}valPM()});
   document.getElementById('pmn')?.addEventListener('input',e=>{if(e.target.value.trim()){document.getElementById('pmt').value='';document.getElementById('pmt').style.display='none'}else{document.getElementById('pmt').style.display=''}valPM()});
@@ -1800,7 +1882,11 @@ function startSW(){
   const selTask=document.getElementById('swt')?.value||'';
   const isPlan=selTask==='__plan__';
   const p=isPlan?1:parseInt(document.getElementById('swp').value),r=isPlan?1:parseInt(document.getElementById('swr').value);
-  const planQueue=isPlan?getPlanFirstSection().filter(tid=>{const t=D.tasks.find(x=>x.id===tid);if(!t)return false;const td=today();if(t.type==='one-time')return!t.completed;if(t.type==='daily')return!D.pointsHistory.some(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td&&h.task.includes('✅'));if(t.type==='recurring')return!(t.lastCompleted&&(new Date()-new Date(t.lastCompleted))/864e5<t.cadenceDays);if(t.type==='evergreen')return!D.pointsHistory.some(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td&&h.task.includes('✅'));return true}):[];
+  const planQueue=isPlan?getPlanFirstSection().filter(tid=>{const t=D.tasks.find(x=>x.id===tid);if(!t)return false;const td=today();
+    const pi=D.plan.find(i=>i.type==='task'&&i.id===tid);
+    const eg=pi?.planGoal||(t.goal&&(t.goal.period==='daily'||t.goal.period==='hourly'||t.goal.period==='total')?t.goal:null);
+    if(eg){const entries=eg.period==='total'?D.pointsHistory.filter(h=>h.taskId===t.id&&h.type==='earned'):D.pointsHistory.filter(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td);const cur=t.timeBased?entries.reduce((s,h)=>s+(h.minutes||0),0):t.countBased?entries.reduce((s,h)=>s+(h.count||0),0):entries.filter(h=>h.task.includes('✅')).length;return cur<eg.target}
+    if(t.type==='one-time')return!t.completed;if(t.type==='daily')return!D.pointsHistory.some(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td&&h.task.includes('✅'));if(t.type==='recurring')return!(t.lastCompleted&&(new Date()-new Date(t.lastCompleted))/864e5<t.cadenceDays);if(t.type==='evergreen')return!D.pointsHistory.some(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td&&h.task.includes('✅'));return true}):[];
   T={running:true,paused:false,mode:'sw',start:Date.now(),elapsed:0,workDur:25,breakDur:5,phase:'work',
     note:isPlan?'':document.getElementById('swn')?.value||'',taskId:isPlan?(planQueue[0]||''):selTask,pts:p,per:r,
     planMode:isPlan,planQueue:planQueue,planTimes:isPlan?{}:{},planCurrentStart:isPlan?Date.now():0,planCompleted:[],planCounts:{}};
@@ -1810,7 +1896,11 @@ function startPM(){
   const selTask=document.getElementById('pmt')?.value||'';
   const isPlan=selTask==='__plan__';
   const p=isPlan?1:parseInt(document.getElementById('pmp').value),r=isPlan?1:parseInt(document.getElementById('pmr').value);
-  const planQueue=isPlan?getPlanFirstSection().filter(tid=>{const t=D.tasks.find(x=>x.id===tid);if(!t)return false;const td=today();if(t.type==='one-time')return!t.completed;if(t.type==='daily')return!D.pointsHistory.some(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td&&h.task.includes('✅'));if(t.type==='recurring')return!(t.lastCompleted&&(new Date()-new Date(t.lastCompleted))/864e5<t.cadenceDays);if(t.type==='evergreen')return!D.pointsHistory.some(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td&&h.task.includes('✅'));return true}):[];
+  const planQueue=isPlan?getPlanFirstSection().filter(tid=>{const t=D.tasks.find(x=>x.id===tid);if(!t)return false;const td=today();
+    const pi=D.plan.find(i=>i.type==='task'&&i.id===tid);
+    const eg=pi?.planGoal||(t.goal&&(t.goal.period==='daily'||t.goal.period==='hourly'||t.goal.period==='total')?t.goal:null);
+    if(eg){const entries=eg.period==='total'?D.pointsHistory.filter(h=>h.taskId===t.id&&h.type==='earned'):D.pointsHistory.filter(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td);const cur=t.timeBased?entries.reduce((s,h)=>s+(h.minutes||0),0):t.countBased?entries.reduce((s,h)=>s+(h.count||0),0):entries.filter(h=>h.task.includes('✅')).length;return cur<eg.target}
+    if(t.type==='one-time')return!t.completed;if(t.type==='daily')return!D.pointsHistory.some(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td&&h.task.includes('✅'));if(t.type==='recurring')return!(t.lastCompleted&&(new Date()-new Date(t.lastCompleted))/864e5<t.cadenceDays);if(t.type==='evergreen')return!D.pointsHistory.some(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td&&h.task.includes('✅'));return true}):[];
   T={running:true,paused:false,mode:'pm',start:Date.now(),elapsed:0,workDur:w,breakDur:b,phase:'work',
     note:isPlan?'':document.getElementById('pmn')?.value||'',taskId:isPlan?(planQueue[0]||''):selTask,pts:p,per:r,
     planMode:isPlan,planQueue:planQueue,planTimes:isPlan?{}:{},planCurrentStart:isPlan?Date.now():0,planCompleted:[],planCounts:{},totalWork:0,totalBreak:0,awaitingAck:false};
@@ -1848,7 +1938,10 @@ function startTick(){
       if(T.phase==='work'){const ptsEl=document.getElementById('pm-ack-pts');if(ptsEl){const e2=elapsed(),tgt2=T.workDur*60,over=Math.max(0,e2-tgt2);const overPts=Math.floor(over*T.pts/(T.per*60));ptsEl.textContent=overPts>0?`+${overPts} pts overtime`:''}}
     }
     // Only update timer display
-    if(view==='tools'&&(toolsView==='sw'||toolsView==='pm')){tickRender();if(T.planMode&&T.running&&!(T.awaitingAck&&T.phase==='break')){const curEl=document.querySelector('[data-plan-cur-time]');if(curEl&&T.planQueue[0]){const curId=T.planQueue[0];const curSecs=(T.planTimes[curId]||0)+Math.floor((Date.now()-T.planCurrentStart)/1000);const cm=Math.floor(curSecs/60),cs=curSecs%60;curEl.textContent=`${String(cm).padStart(2,'0')}:${String(cs).padStart(2,'0')}`}}}
+    if(view==='tools'&&(toolsView==='sw'||toolsView==='pm')){tickRender();if(T.planMode&&T.running&&T.phase!=='break'){const curEl=document.querySelector('[data-plan-cur-time]');if(curEl&&T.planQueue[0]){const curId=T.planQueue[0];const curSecs=(T.planTimes[curId]||0)+Math.floor((Date.now()-T.planCurrentStart)/1000);const cm=Math.floor(curSecs/60),cs=curSecs%60;curEl.textContent=`${String(cm).padStart(2,'0')}:${String(cs).padStart(2,'0')}`;
+      // Check if time-based goal just met — show Done button
+      const curTask=D.tasks.find(x=>x.id===curId);if(curTask?.timeBased){const cpi=D.plan.find(i=>i.type==='task'&&i.id===curId);const tG=cpi?.planGoal||curTask.goal||null;if(tG&&tG.target){const td4=today();const tge=tG.period==='total'?D.pointsHistory.filter(h=>h.taskId===curId&&h.type==='earned'):D.pointsHistory.filter(h=>h.taskId===curId&&h.type==='earned'&&h.date.slice(0,10)===td4);const tCur=tge.reduce((s,h)=>s+(h.minutes||0),0)+Math.floor(curSecs/60);if(tCur>=tG.target&&!document.getElementById('plan-complete')){render();return}}}
+      }}}
   },1000)}
 
 function stopSW(){
@@ -1859,7 +1952,7 @@ function stopSW(){
   // In plan mode, save current task's accumulated time
   if(wasPlanMode&&T.planQueue.length>0){
     const curId=T.planQueue[0];
-    const curExtra=T.running?Math.floor((Date.now()-T.planCurrentStart)/1000):0;
+    const curExtra=(T.running&&T.phase!=='break')?Math.floor((Date.now()-T.planCurrentStart)/1000):0;
     T.planTimes[curId]=(T.planTimes[curId]||0)+curExtra;
   }
   const planTimes=wasPlanMode?{...T.planTimes}:{};
@@ -1884,22 +1977,27 @@ function stopSW(){
         pts=Math.floor((taskSecs/60)*t.ptsAmount/t.ptsPerMinutes);
       } else if(t.countBased&&count>0){
         pts=Math.floor(count*t.ptsAmount/t.ptsPerCount);
-      } else if(completed){
-        pts=t.points||0;
+      } else if(completed||T.planFlatDone?.[tid]){
+        pts=(T.planFlatDone?.[tid]||0)*(t.points||0);
       }
-      if(pts>0){D.points+=pts;totalPlanPts+=pts}
+      // Add points to D.points for all task types
+      if(pts>0)D.points+=pts;
+      totalPlanPts+=pts;
       // Mark task complete in the actual task data
-      if(completed){
+      if(completed||T.planFlatDone?.[tid]){
         if(t.type==='one-time'){t.completed=true;t.completedAt=localISO()}
         else if(t.type==='recurring'||t.type==='daily'){t.lastCompleted=localISO()}
-        // For evergreen and daily, push a ✅ marker so isDoneToday detects it
-        if(t.type==='evergreen'||t.type==='daily'){
+        // For flat evergreen/daily tasks, push a ✅ marker so isDoneToday detects it
+        if(!t.timeBased&&!t.countBased&&(t.type==='evergreen'||t.type==='daily')){
           D.pointsHistory.push({date:localISO(),task:t.name+' ✅',taskId:tid,points:0,type:'earned'});
         }
       }
-      if(taskSecs>0||count>0||completed){
-        planTaskDetails.push({taskId:tid,name:t.name,minutes:taskMins,seconds:taskSecs,points:pts,completed,count,countUnit:t.countUnit||'',timeBased:!!t.timeBased,countBased:!!t.countBased,ptsAmount:t.ptsAmount,ptsPerMinutes:t.ptsPerMinutes,ptsPerCount:t.ptsPerCount,flatPoints:t.points});
-        planSummary.push({name:t.name,secs:taskSecs,pts,completed,count,countUnit:t.countUnit||'',timeBased:t.timeBased,countBased:t.countBased,ptsAmount:t.ptsAmount,ptsPerMinutes:t.ptsPerMinutes,ptsPerCount:t.ptsPerCount,points:t.points});
+      if(taskSecs>0||count>0||completed||T.planFlatDone?.[tid]){
+        // Push individual tracking entry for goal progress (0 pts to avoid double-counting)
+        if(t.timeBased&&taskSecs>0){D.pointsHistory.push({date:localISO(),task:'⏱️ '+t.name,taskId:tid,points:0,type:'earned',minutes:taskMins,seconds:taskSecs})}
+        else if(t.countBased&&count>0){D.pointsHistory.push({date:localISO(),task:'⏱️ '+t.name,taskId:tid,points:0,type:'earned',count,countUnit:t.countUnit})}
+        planTaskDetails.push({taskId:tid,name:t.name,minutes:taskMins,seconds:taskSecs,points:pts,completed,count,countUnit:t.countUnit||'',timeBased:!!t.timeBased,countBased:!!t.countBased,ptsAmount:t.ptsAmount,ptsPerMinutes:t.ptsPerMinutes,ptsPerCount:t.ptsPerCount,flatPoints:t.points,flatDone:T.planFlatDone?.[tid]||0});
+        planSummary.push({name:t.name,secs:taskSecs,pts,completed,count,countUnit:t.countUnit||'',timeBased:t.timeBased,countBased:t.countBased,ptsAmount:t.ptsAmount,ptsPerMinutes:t.ptsPerMinutes,ptsPerCount:t.ptsPerCount,points:t.points,flatDone:T.planFlatDone?.[tid]||0});
       }
     });
     // Log single grouped entry
@@ -1907,6 +2005,25 @@ function stopSW(){
     if(totalPlanPts>0)checkGoal();
     saveL();debouncedPush();
   } else {
+    const theTask=taskId?D.tasks.find(x=>x.id===taskId):null;
+    if(theTask&&theTask.countBased){
+      // Ask for count before logging
+      const savedE=e,savedMins=mins,savedLabel=label,savedTaskId=taskId;
+      T={running:false,paused:false,mode:null,start:null,elapsed:0,workDur:T.workDur,breakDur:T.breakDur,phase:'work',note:'',taskId:'',pts:1,per:15,planMode:false,planQueue:[],planTimes:{},planCurrentStart:0,planCompleted:[],planCounts:{},totalWork:0,totalBreak:0,awaitingAck:false};
+      modal(`<div style="text-align:center"><p style="margin-bottom:12px">How many <b>${theTask.countUnit||'units'}</b> did you complete on <b>${theTask.name}</b>?</p><input id="sw-stop-count" type="number" min="0" placeholder="0" class="inf" style="text-align:center"><div style="display:flex;gap:8px;margin-top:12px"><button id="sw-stop-count-ok" class="btn bsuc" style="flex:1">Save</button><button id="sw-stop-count-none" class="btn bmut" style="flex:1">None</button></div></div>`);
+      const finishCount=(cnt)=>{
+        const pts=cnt>0?Math.floor(cnt*theTask.ptsAmount/theTask.ptsPerCount):0;
+        if(pts>0){D.points+=pts;checkGoal()}
+        const h={date:localISO(),task:'⏱️ '+savedLabel,taskId:savedTaskId,points:pts,type:'earned',minutes:savedMins,seconds:savedE,count:cnt,countUnit:theTask.countUnit};
+        D.pointsHistory.push(h);saveL();debouncedPush();closeM();render();confetti();
+        const timeStr=savedMins>=60?`${Math.floor(savedMins/60)}h ${savedMins%60}m`:`${savedMins}m`;
+        modal(`<div style="text-align:center"><div style="font-size:2rem;margin-bottom:8px">🎉</div><h2 style="color:var(--accent-dark);margin-bottom:8px">Session Complete!</h2><p style="font-size:.85rem;margin-bottom:4px">Time: ${timeStr}</p>${cnt>0?`<p style="font-size:.85rem;margin-bottom:4px">${cnt} ${theTask.countUnit||'units'}</p>`:''}<p style="font-size:1rem;font-weight:bold;color:var(--success-dark)">+${pts} points</p><button id="sw-sum-ok" class="btn bpri" style="margin-top:12px;width:100%">Nice!</button></div>`);
+        document.getElementById('sw-sum-ok')?.addEventListener('click',closeM);
+      };
+      document.getElementById('sw-stop-count-ok')?.addEventListener('click',()=>{const cnt=parseInt(document.getElementById('sw-stop-count')?.value)||0;finishCount(cnt)});
+      document.getElementById('sw-stop-count-none')?.addEventListener('click',()=>finishCount(0));
+      return;
+    }
     const exactPts=e*T.pts/(T.per*60),pts=awardTimerPts(exactPts);
     if(pts>0){D.points+=pts;checkGoal()}
     D.pointsHistory.push({date:localISO(),task:'⏱️ '+label,taskId:taskId||null,points:pts,type:'earned',minutes:mins,seconds:e,rate:`${T.pts} points per ${T.per} minute${T.per>1?'s':''}`});
@@ -1926,8 +2043,8 @@ function stopSW(){
         let detail=s.completed?'✅ Completed':'';
         if(s.timeBased){detail+=` · ${timeStr} · ${s.ptsAmount} pts / ${s.ptsPerMinutes} min`}
         else if(s.countBased&&s.count){detail+=` · ${s.count} ${s.countUnit} · ${s.ptsAmount} pts / ${s.ptsPerCount} ${s.countUnit}`}
+        else if(s.flatDone>1){detail+=` · ${s.flatDone}× completed`}
         else if(s.secs>0)detail+=` · ${timeStr}`;
-        else if(!s.timeBased&&!s.countBased&&s.points)detail+=` · +${s.points} pts flat`;
         return `<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--border)"><div><div style="font-size:.85rem;font-weight:500">${s.name}</div><div style="font-size:.7rem;color:var(--text-dim)">${detail}</div></div><span style="font-weight:bold;color:var(--success-dark);font-size:.85rem">+${s.pts}</span></div>`;
       }).join('');
       modal(`<div style="text-align:center"><div style="font-size:2rem;margin-bottom:8px">🎉</div><h2 style="color:var(--accent-dark);margin-bottom:4px">Session complete!</h2><p style="font-size:.85rem;color:var(--text-dim);margin-bottom:16px">${totalTime} total · ${totalPlanPts} points earned</p></div><div style="text-align:left">${rows}</div><button data-close class="btn bpri" style="width:100%;margin-top:16px">Nice!</button>`);
@@ -1964,7 +2081,7 @@ function stopPM(){
   // Save current task time in plan mode
   if(wasPlanMode&&T.planQueue.length>0){
     const curId=T.planQueue[0];
-    const curExtra=T.running?Math.floor((Date.now()-T.planCurrentStart)/1000):0;
+    const curExtra=(T.running&&T.phase!=='break')?Math.floor((Date.now()-T.planCurrentStart)/1000):0;
     T.planTimes[curId]=(T.planTimes[curId]||0)+curExtra;
   }
   const planTimes=wasPlanMode?{...T.planTimes}:{};
@@ -1986,17 +2103,23 @@ function stopPM(){
       let p=0;
       if(t.timeBased&&taskSecs>0){p=Math.floor((taskSecs/60)*t.ptsAmount/t.ptsPerMinutes)}
       else if(t.countBased&&count>0){p=Math.floor(count*t.ptsAmount/t.ptsPerCount)}
-      else if(completed){p=t.points||0}
-      if(p>0){D.points+=p;totalPlanPts+=p}
-      if(completed){
+      else if(completed||T.planFlatDone?.[tid]){p=(T.planFlatDone?.[tid]||0)*(t.points||0)}
+      // Add points to D.points for all task types
+      if(p>0)D.points+=p;
+      totalPlanPts+=p;
+      if(completed||T.planFlatDone?.[tid]){
         if(t.type==='one-time'){t.completed=true;t.completedAt=localISO()}
         else if(t.type==='recurring'||t.type==='daily'){t.lastCompleted=localISO()}
-        if(t.type==='evergreen'||t.type==='daily'){
+        // For flat evergreen/daily tasks, push a ✅ marker so isDoneToday detects it
+        if(!t.timeBased&&!t.countBased&&(t.type==='evergreen'||t.type==='daily')){
           D.pointsHistory.push({date:localISO(),task:t.name+' ✅',taskId:tid,points:0,type:'earned'});
         }
       }
-      if(taskSecs>0||count>0||completed){
-        planTaskDetails.push({taskId:tid,name:t.name,minutes:taskMins,seconds:taskSecs,points:p,completed,count,countUnit:t.countUnit||'',timeBased:!!t.timeBased,countBased:!!t.countBased,ptsAmount:t.ptsAmount,ptsPerMinutes:t.ptsPerMinutes,ptsPerCount:t.ptsPerCount,flatPoints:t.points});
+      if(taskSecs>0||count>0||completed||T.planFlatDone?.[tid]){
+        // Push individual tracking entry for goal progress (0 pts to avoid double-counting)
+        if(t.timeBased&&taskSecs>0){D.pointsHistory.push({date:localISO(),task:'🍅 '+t.name,taskId:tid,points:0,type:'earned',minutes:taskMins,seconds:taskSecs})}
+        else if(t.countBased&&count>0){D.pointsHistory.push({date:localISO(),task:'🍅 '+t.name,taskId:tid,points:0,type:'earned',count,countUnit:t.countUnit})}
+        planTaskDetails.push({taskId:tid,name:t.name,minutes:taskMins,seconds:taskSecs,points:p,completed,count,countUnit:t.countUnit||'',timeBased:!!t.timeBased,countBased:!!t.countBased,ptsAmount:t.ptsAmount,ptsPerMinutes:t.ptsPerMinutes,ptsPerCount:t.ptsPerCount,flatPoints:t.points,flatDone:T.planFlatDone?.[tid]||0});
       }
     });
     D.pointsHistory.push({date:localISO(),task:'🍅 Plan',points:totalPlanPts,type:'earned',minutes:mins,seconds:e,pomo:`${T.workDur}/${T.breakDur}`,planTasks:planTaskDetails,workSeconds:T.totalWork+(T.phase==='work'?e:0),breakSeconds:T.totalBreak+(T.phase==='break'?e:0)});
@@ -2006,6 +2129,24 @@ function stopPM(){
   } else if(T.phase==='work'||T.totalWork>0){
     const workSecs=T.totalWork+(T.phase==='work'?e:0);const breakSecs=T.totalBreak+(T.phase==='break'?e:0);
     mins=Math.floor(workSecs/60);
+    const theTask=taskId?D.tasks.find(x=>x.id===taskId):null;
+    if(theTask&&theTask.countBased){
+      const savedWorkSecs=workSecs,savedBreakSecs=breakSecs,savedMins=mins,savedLabel=label,savedTaskId=taskId;
+      T={running:false,paused:false,mode:null,start:null,elapsed:0,workDur:T.workDur,breakDur:T.breakDur,phase:'work',note:'',taskId:'',pts:1,per:15,planMode:false,planQueue:[],planTimes:{},planCurrentStart:0,planCompleted:[],planCounts:{},totalWork:0,totalBreak:0,awaitingAck:false};
+      modal(`<div style="text-align:center"><p style="margin-bottom:12px">How many <b>${theTask.countUnit||'units'}</b> did you complete on <b>${theTask.name}</b>?</p><input id="pm-stop-count" type="number" min="0" placeholder="0" class="inf" style="text-align:center"><div style="display:flex;gap:8px;margin-top:12px"><button id="pm-stop-count-ok" class="btn bsuc" style="flex:1">Save</button><button id="pm-stop-count-none" class="btn bmut" style="flex:1">None</button></div></div>`);
+      const finishCount=(cnt)=>{
+        const pts=cnt>0?Math.floor(cnt*theTask.ptsAmount/theTask.ptsPerCount):0;
+        if(pts>0){D.points+=pts;checkGoal()}
+        D.pointsHistory.push({date:localISO(),task:'🍅 '+savedLabel,taskId:savedTaskId,points:pts,type:'earned',minutes:savedMins,seconds:savedWorkSecs,pomo:`${T.workDur||25}/${T.breakDur||5}`,count:cnt,countUnit:theTask.countUnit,workSeconds:savedWorkSecs,breakSeconds:savedBreakSecs});
+        saveL();debouncedPush();closeM();render();confetti();
+        const timeStr=savedMins>=60?`${Math.floor(savedMins/60)}h ${savedMins%60}m`:`${savedMins}m`;
+        modal(`<div style="text-align:center"><div style="font-size:2rem;margin-bottom:8px">🎉</div><h2 style="color:var(--accent-dark);margin-bottom:8px">Session Complete!</h2><p style="font-size:.85rem;margin-bottom:4px">Work: ${timeStr}</p>${cnt>0?`<p style="font-size:.85rem;margin-bottom:4px">${cnt} ${theTask.countUnit||'units'}</p>`:''}<p style="font-size:1rem;font-weight:bold;color:var(--success-dark)">+${pts} points</p><button id="pm-sum-ok" class="btn bpri" style="margin-top:12px;width:100%">Nice!</button></div>`);
+        document.getElementById('pm-sum-ok')?.addEventListener('click',closeM);
+      };
+      document.getElementById('pm-stop-count-ok')?.addEventListener('click',()=>{const cnt=parseInt(document.getElementById('pm-stop-count')?.value)||0;finishCount(cnt)});
+      document.getElementById('pm-stop-count-none')?.addEventListener('click',()=>finishCount(0));
+      return;
+    }
     if(!T.planMode){const exactPts=workSecs*T.pts/(T.per*60);pts=awardTimerPts(exactPts);if(pts>0){D.points+=pts;checkGoal()}}
     D.pointsHistory.push({date:localISO(),task:'🍅 '+label,taskId:taskId||null,points:pts,type:'earned',minutes:mins,seconds:workSecs,pomo:`${T.workDur}/${T.breakDur}`,rate:`${T.pts} points per ${T.per} minute${T.per>1?'s':''}`,workSeconds:workSecs,breakSeconds:breakSecs});
     saveL();debouncedPush();
@@ -2026,8 +2167,8 @@ function stopPM(){
         let detail=s.completed?'✅ Completed':'';
         if(s.timeBased){detail+=` · ${timeStr} · ${s.ptsAmount} pts / ${s.ptsPerMinutes} min`}
         else if(s.countBased&&s.count){detail+=` · ${s.count} ${s.countUnit} · ${s.ptsAmount} pts / ${s.ptsPerCount} ${s.countUnit}`}
+        else if(s.flatDone>1){detail+=` · ${s.flatDone}× completed`}
         else if(s.seconds>0)detail+=` · ${timeStr}`;
-        else if(!s.timeBased&&!s.countBased&&s.flatPoints)detail+=` · +${s.flatPoints} pts flat`;
         return `<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--border)"><div><div style="font-size:.85rem;font-weight:500">${s.name}</div><div style="font-size:.7rem;color:var(--text-dim)">${detail}</div></div><span style="font-weight:bold;color:var(--success-dark);font-size:.85rem">+${s.points}</span></div>`;
       }).join('');
       const workTimeStr=sessionWorkSecs>=3600?`${Math.floor(sessionWorkSecs/3600)}h ${Math.floor((sessionWorkSecs%3600)/60)}m`:`${Math.floor(sessionWorkSecs/60)}m`;
@@ -2137,6 +2278,14 @@ if(!D._lastLevel){D._lastLevel=getLevel().level;saveL()}
 if(D.settings.gistId&&D.settings.token)gistPull().then(()=>{updateStreak();render();showStartupModals()});
 else{render();showStartupModals()}
 function showStartupModals(){
+  // Version update popup
+  const lastVersion=localStorage.getItem('pt_lastVersion');
+  if(lastVersion&&lastVersion!==APP_VERSION){
+    localStorage.setItem('pt_lastVersion',APP_VERSION);
+    modal(`<div style="text-align:center"><div style="font-size:2rem;margin-bottom:8px">🆕</div><h2 style="color:var(--accent-dark);margin-bottom:8px">Updated to v${APP_VERSION}</h2><p style="font-size:.85rem;color:var(--text-dim);margin-bottom:16px">The app has been updated!</p><button data-close class="btn bpri" style="width:100%">Got it</button></div>`);
+    return;
+  }
+  localStorage.setItem('pt_lastVersion',APP_VERSION);
   // Reset daily goal each new day
   const t=today();
   if(D._lastDay!==t){D.settings.dailyGoal=0;D._lastDay=t;saveL()}
