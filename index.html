@@ -8,7 +8,7 @@
 <link rel="apple-touch-icon" sizes="180x180" href="appicon.png">
 <link rel="icon" type="image/png" href="appicon.png">
 <link rel="manifest" href="manifest.json">
-<title>Productivity Tracker</title>
+<title>Done!</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 :root{--bg:#f9fafb;--surface:#fff;--card-task:#ede9fe;--card-reward:#dbeafe;--card-sleep:#f3e8ff;--card-neutral:#f3f4f6;--border:#e5e7eb;--accent:#a78bfa;--accent-dark:#7c3aed;--accent2:#7dd3fc;--success:#86efac;--success-dark:#22c55e;--warning:#fcd34d;--warning-dark:#f59e0b;--danger:#fca5a5;--danger-dark:#ef4444;--text:#1f2937;--text-dim:#6b7280;--radius:14px;--shadow:0 1px 4px rgba(0,0,0,0.05)}
@@ -25,7 +25,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-seri
 if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
 
 // ===== DATA =====
-const APP_VERSION='3.3.3';
+const APP_VERSION='3.3.4';
 const DEFAULT_DATA={tasks:[],points:0,pointsHistory:[],rewards:[],techniques:[],metrics:[],settings:{gistId:'',token:'',dailyGoal:0},dailyGoalLog:{},streak:0,fractional:0,groupOrder:[],plan:[],savedPlans:[]};
 let D=JSON.parse(JSON.stringify(DEFAULT_DATA));
 let view='tasks',toolsView='menu',expandedTech=null,inlineMinId=null,categoryFilter='all',recurSort='custom';
