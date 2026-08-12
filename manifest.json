@@ -1,6 +1,6 @@
 {
   "name": "Productivity Tracker",
-  "short_name": "Done!",
+  "short_name": "Tracker",
   "start_url": ".",
   "display": "standalone",
   "background_color": "#f9fafb",
@@ -10,6 +10,18 @@
       "src": "appicon.png",
       "sizes": "180x180",
       "type": "image/png"
+    },
+    {
+      "src": "appicon.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "appicon.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
     }
   ]
 }
