@@ -25,7 +25,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-seri
 if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
 
 // ===== DATA =====
-const APP_VERSION='4.2.1';
+const APP_VERSION='4.2.2';
 const DEFAULT_DATA={tasks:[],points:0,pointsHistory:[],rewards:[],techniques:[],metrics:[],settings:{gistId:'',token:'',dailyGoal:0},dailyGoalLog:{},streak:0,fractional:0,groupOrder:[],plan:[],savedPlans:[],planSectionRewards:{},groceries:[],recipes:[]};
 let D=JSON.parse(JSON.stringify(DEFAULT_DATA));
 let view='tasks',toolsView='menu',expandedTech=null,inlineMinId=null,categoryFilter='all',recurSort='custom';
@@ -435,14 +435,11 @@ function dragEnd(){
   document.body.style.userSelect='';
   document.body.style.webkitUserSelect='';
   if(clone&&clone.parentNode)clone.remove();
-  // Calculate new index among all matching items + placeholder (including hidden dragged item)
   const children=[...container.children].filter(el=>(el.matches&&el.matches(itemSelector))||el.classList.contains('drag-placeholder'));
   let newIdx=children.indexOf(placeholder);
   if(placeholder&&placeholder.parentNode)placeholder.remove();
   item.style.display='';
   if(newIdx<0||newIdx===itemIdx)return;
-  // Adjust: if moved down, account for removal shifting indices
-  if(newIdx>itemIdx)newIdx--;
   onReorder(itemIdx,newIdx);
 }
 document.addEventListener('touchmove',dragMove,{passive:false});
@@ -1716,7 +1713,7 @@ function bindAll(){
       // Build order from current items
       const order=items.map(el=>el.dataset.grp?{type:'group',grp:el.dataset.grp}:{type:'task',id:el.dataset.id});
       const moved=order.splice(fromIdx,1)[0];
-      const insertAt=toIdx>order.length?order.length:toIdx;
+      const insertAt=toIdx>fromIdx?Math.min(toIdx-1,order.length):Math.min(toIdx,order.length);
       order.splice(insertAt,0,moved);
       // Rebuild D.tasks for this type based on new order
       // Determine the type from any task in this bucket
