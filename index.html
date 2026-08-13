@@ -25,7 +25,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-seri
 if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
 
 // ===== DATA =====
-const APP_VERSION='4.0.2';
+const APP_VERSION='4.0.4';
 const DEFAULT_DATA={tasks:[],points:0,pointsHistory:[],rewards:[],techniques:[],metrics:[],settings:{gistId:'',token:'',dailyGoal:0},dailyGoalLog:{},streak:0,fractional:0,groupOrder:[],plan:[],savedPlans:[],planSectionRewards:{},groceries:[],recipes:[]};
 let D=JSON.parse(JSON.stringify(DEFAULT_DATA));
 let view='tasks',toolsView='menu',expandedTech=null,inlineMinId=null,categoryFilter='all',recurSort='custom';
@@ -40,19 +40,20 @@ const SK='pt_v3';
 function saveL(){localStorage.setItem(SK,JSON.stringify(D))}
 function loadL(){const s=localStorage.getItem(SK);if(s)D={...JSON.parse(JSON.stringify(DEFAULT_DATA)),...JSON.parse(s)}}
 let pushTimeout=null;
+let localDirty=false;
 async function gistPush(){const{gistId:g,token:t}=D.settings;if(!g||!t)return false;
-  D._lastModified=Date.now();saveL();
+  D._lastModified=Date.now();saveL();localDirty=false;
   const pushData=JSON.parse(JSON.stringify(D));delete pushData.settings.token;delete pushData.settings.gistId;
   try{const r=await fetch(`https://api.github.com/gists/${g}`,{method:'PATCH',headers:{'Authorization':`token ${t}`,'Content-Type':'application/json','Accept':'application/vnd.github.v3+json'},body:JSON.stringify({files:{'productivity_data.json':{content:JSON.stringify(pushData)}}})});return r.ok}catch(e){return false}}
 function debouncedPush(){if(pushTimeout)clearTimeout(pushTimeout);pushTimeout=setTimeout(()=>{gistPush()},2000)}
 let pullInProgress=false;
 async function gistPull(){const{gistId:g,token:t}=D.settings;if(!g||!t)return false;if(pullInProgress)return false;pullInProgress=true;try{const r=await fetch(`https://api.github.com/gists/${g}`,{headers:{'Authorization':`token ${t}`,'Accept':'application/vnd.github.v3+json'}});if(!r.ok){pullInProgress=false;return false}const j=await r.json();const c=j.files['productivity_data.json']?.content;if(c){const remote=JSON.parse(c);if(remote._lastModified&&D._lastModified&&remote._lastModified<=D._lastModified){pullInProgress=false;return true}const ls=D.settings;D={...JSON.parse(JSON.stringify(DEFAULT_DATA)),...remote,settings:ls};saveL();pullInProgress=false;return true}pullInProgress=false}catch(e){pullInProgress=false}return false}
 let syncInterval=null;
-function startAutoSync(){if(syncInterval)return;syncInterval=setInterval(()=>{if(document.visibilityState==='visible'&&!document.querySelector('.modal-bg')&&!document.getElementById('afc')?.innerHTML&&!document.activeElement?.matches('input,textarea,select'))gistPull().then(ok=>{if(ok)render()})},30000)}
+function startAutoSync(){if(syncInterval)return;syncInterval=setInterval(()=>{if(document.visibilityState==='visible'&&!document.querySelector('.modal-bg')&&!document.getElementById('afc')?.innerHTML&&!document.activeElement?.matches('input,textarea,select'))gistPull().then(ok=>{if(ok)render()})},3000)}
 function save(){
   // Defensive: remove corrupted plan entries before saving
   if(D.plan)D.plan=D.plan.filter(item=>item.type!=='task'||typeof item.id==='string');
-  saveL();debouncedPush()}
+  localDirty=true;saveL();debouncedPush()}
 
 // ===== UTILS =====
 function id(){return Date.now().toString(36)+Math.random().toString(36).slice(2,7)}
@@ -886,7 +887,7 @@ function rGrocery(){
   const checked=D.groceries.filter(g=>g.checked);
   const renderItem=(g,i)=>{
     const idx=D.groceries.indexOf(g);
-    return `<div class="tcard groc-item" data-idx="${idx}" style="background:${g.checked?'var(--card-neutral)':'var(--card-task)'};display:flex;align-items:flex-start;gap:10px;padding:10px 12px;cursor:pointer"><button class="groc-check cbtn" data-idx="${idx}" style="${g.checked?'opacity:.5':''}">${g.checked?'✓':'○'}</button><div style="flex:1;min-width:0"><div style="font-weight:600;font-size:.9rem;${g.checked?'text-decoration:line-through;color:var(--text-dim)':''}">${g.name}</div>${g.notes?`<div style="font-size:.8rem;color:var(--text-dim);margin-top:2px;padding-left:8px;font-style:italic">${g.notes}</div>`:''}</div><button class="groc-del ibtn" data-idx="${idx}" style="font-size:.7rem;color:var(--danger-dark)">🗑️</button></div>`;
+    return `<div class="tcard groc-item" data-idx="${idx}" style="background:${g.checked?'var(--card-neutral)':'var(--card-task)'};display:flex;align-items:flex-start;gap:10px;padding:10px 12px;cursor:pointer;user-select:none;-webkit-user-select:none"><button class="groc-check cbtn" data-idx="${idx}" style="${g.checked?'opacity:.5':''}">${g.checked?'✓':'○'}</button><div style="flex:1;min-width:0"><div style="font-weight:600;font-size:.9rem;${g.checked?'text-decoration:line-through;color:var(--text-dim)':''}">${g.name}</div>${g.notes?`<div style="font-size:.8rem;color:var(--text-dim);margin-top:2px;padding-left:8px;font-style:italic">${g.notes}</div>`:''}</div><button class="groc-del ibtn" data-idx="${idx}" style="font-size:.7rem;color:var(--danger-dark)">🗑️</button></div>`;
   };
   const uncheckedHtml=`<div id="groc-unchecked">${unchecked.map((g,i)=>renderItem(g,i)).join('')}</div>`;
   const checkedHtml=checked.length?`<div style="display:flex;align-items:center;gap:8px;margin:12px 0"><div style="flex:1;height:2px;background:var(--border)"></div><span style="font-size:.7rem;color:var(--text-dim)">— checked off —</span><div style="flex:1;height:2px;background:var(--border)"></div></div><div id="groc-checked">${checked.map((g,i)=>renderItem(g,i)).join('')}</div>`:'';
@@ -2551,8 +2552,8 @@ function showStartupModals(){
   showGoodMorning();
 }
 // Sync when app is backgrounded or foregrounded
-document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='hidden'){saveL();gistPush()}else if(document.visibilityState==='visible'&&!document.querySelector('.modal-bg')&&!document.getElementById('afc')?.innerHTML&&!document.activeElement?.matches('input,textarea,select')){gistPull().then(ok=>{if(ok){updateStreak();render()}})}});
-window.addEventListener('pagehide',()=>{saveL();gistPush()});
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='hidden'){if(localDirty){saveL();gistPush()}}else if(document.visibilityState==='visible'&&!document.querySelector('.modal-bg')&&!document.getElementById('afc')?.innerHTML&&!document.activeElement?.matches('input,textarea,select')){gistPull().then(ok=>{if(ok){updateStreak();render()}})}});
+window.addEventListener('pagehide',()=>{if(localDirty){saveL();gistPush()}});
 </script>
 <style>
 .hdr{background:var(--surface);border-radius:var(--radius);padding:14px 16px;margin-bottom:12px;box-shadow:var(--shadow);border:1px solid var(--border)}
