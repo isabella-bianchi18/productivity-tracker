@@ -25,7 +25,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-seri
 if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
 
 // ===== DATA =====
-const APP_VERSION='4.2.2';
+const APP_VERSION='4.2.3';
 const DEFAULT_DATA={tasks:[],points:0,pointsHistory:[],rewards:[],techniques:[],metrics:[],settings:{gistId:'',token:'',dailyGoal:0},dailyGoalLog:{},streak:0,fractional:0,groupOrder:[],plan:[],savedPlans:[],planSectionRewards:{},groceries:[],recipes:[]};
 let D=JSON.parse(JSON.stringify(DEFAULT_DATA));
 let view='tasks',toolsView='menu',expandedTech=null,inlineMinId=null,categoryFilter='all',recurSort='custom';
@@ -667,7 +667,8 @@ function rPlan(){
   const typeOrder={'one-time':0,'recurring':1,'daily':2,'evergreen':3};
   const sortedAvailable=[...available].sort((a,b)=>{const td2=((typeOrder[a.type]??9)-(typeOrder[b.type]??9));if(td2!==0)return td2;return D.tasks.indexOf(a)-D.tasks.indexOf(b)});
   const typeEmoji={'one-time':'🎯','recurring':'🔄','daily':'📅','evergreen':'♾️'};
-  const optsList=sortedAvailable.map(t=>`<option value="${t.id}">${typeEmoji[t.type]||''} ${t.name}</option>`).join('');
+  const catEmoji={'work':'💼','home':'🏠','growth':'🌱'};
+  const optsList=sortedAvailable.map(t=>`<option value="${t.id}">${typeEmoji[t.type]||''}${catEmoji[t.category]||''} ${t.name}</option>`).join('');
   // Overall stats
   const allPlanItems=D.plan.filter(i=>i.type==='task');
   const allPlanTasks=allPlanItems.map(i=>allTasks.find(t=>t.id===i.id)).filter(Boolean);
@@ -701,7 +702,7 @@ function rPlan(){
     const linkedIdx=sectionLinks[si];
     const linkedName=linkedIdx!=null&&D.savedPlans[linkedIdx]?D.savedPlans[linkedIdx].name:null;
     const secTaskIds=new Set(sec.filter(i=>i.type==='task').map(i=>i.id));
-    const secOpts=sortedAvailable.filter(t=>!secTaskIds.has(t.id)).map(t=>`<option value="${t.id}">${typeEmoji[t.type]||''} ${t.name}</option>`).join('');
+    const secOpts=sortedAvailable.filter(t=>!secTaskIds.has(t.id)).map(t=>`<option value="${t.id}">${typeEmoji[t.type]||''}${catEmoji[t.category]||''} ${t.name}</option>`).join('');
     // Section header with name and add
     if(linkedName){html+=`<div style="font-size:.8rem;font-weight:600;color:var(--accent-dark);margin-bottom:4px">📋 ${linkedName}</div>`}
     html+=`<div style="margin-bottom:4px"><select class="plan-sec-add inf" data-sec="${si}" style="margin:0;margin-bottom:8px"><option value="">+ Add task...</option>${secOpts}</select></div>`;
