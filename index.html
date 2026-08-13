@@ -25,7 +25,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-seri
 if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
 
 // ===== DATA =====
-const APP_VERSION='4.4.8';
+const APP_VERSION='4.4.9';
 const DEFAULT_DATA={tasks:[],points:0,pointsHistory:[],rewards:[],techniques:[],metrics:[],settings:{gistId:'',token:'',dailyGoal:0},dailyGoalLog:{},streak:0,fractional:0,groupOrder:[],plan:[],savedPlans:[],planSectionRewards:{},groceries:[],recipes:[]};
 let D=JSON.parse(JSON.stringify(DEFAULT_DATA));
 let view='tasks',toolsView='menu',expandedTech=null,inlineMinId=null,categoryFilter='all',recurSort='custom',taskSearch='';
@@ -929,10 +929,11 @@ function rHistory(){
   let detail='',daySummary='';
   if(selDay){
     const ents=D.pointsHistory.filter(h=>h.date.slice(0,10)===selDay);
-    const dayPts=ents.filter(h=>h.type==='earned').reduce((s,h)=>s+h.points,0);
-    const dayMins=ents.reduce((s,h)=>s+(h.minutes||0),0);
+    const filteredEnts=histCatFilter==='all'?ents:ents.filter(e=>{if(e.category)return e.category===histCatFilter;if(e.taskId){const t=D.tasks.find(x=>x.id===e.taskId);return t&&t.category===histCatFilter}return false});
+    const dayPts=filteredEnts.filter(h=>h.type==='earned').reduce((s,h)=>s+h.points,0);
+    const dayMins=filteredEnts.reduce((s,h)=>s+(h.minutes||0),0);
     const dayTimeStr=dayMins>=60?`${Math.floor(dayMins/60)}h ${dayMins%60}m`:`${dayMins}m`;
-    daySummary=ents.length?`<div style="display:flex;justify-content:space-between;font-size:.8rem;color:var(--text-dim);margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid var(--border)"><span>✨ ${dayPts} pts earned</span><span>⏱ ${dayTimeStr} logged</span></div>`:'';
+    daySummary=filteredEnts.length?`<div style="display:flex;justify-content:space-between;font-size:.8rem;color:var(--text-dim);margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid var(--border)"><span>✨ ${dayPts} pts earned</span><span>⏱ ${dayTimeStr} logged</span></div>`:'';
     if(ents.length){detail=ents.filter(e=>!e._tracking&&!(e.points===0&&e.task.includes('✅'))).filter(e=>{if(histCatFilter==='all')return true;if(e.category)return e.category===histCatFilter;if(e.taskId){const t=D.tasks.find(x=>x.id===e.taskId);return t&&t.category===histCatFilter}return false}).map(e=>{
         const timeParts=e.date.slice(11,16);const hr=parseInt(timeParts.split(':')[0]),min=timeParts.split(':')[1];
         const ampm=hr>=12?'PM':'AM';const hr12=hr%12||12;
