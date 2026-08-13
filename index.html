@@ -25,7 +25,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-seri
 if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
 
 // ===== DATA =====
-const APP_VERSION='4.0.5';
+const APP_VERSION='4.0.6';
 const DEFAULT_DATA={tasks:[],points:0,pointsHistory:[],rewards:[],techniques:[],metrics:[],settings:{gistId:'',token:'',dailyGoal:0},dailyGoalLog:{},streak:0,fractional:0,groupOrder:[],plan:[],savedPlans:[],planSectionRewards:{},groceries:[],recipes:[]};
 let D=JSON.parse(JSON.stringify(DEFAULT_DATA));
 let view='tasks',toolsView='menu',expandedTech=null,inlineMinId=null,categoryFilter='all',recurSort='custom';
@@ -49,7 +49,7 @@ function debouncedPush(){if(pushTimeout)clearTimeout(pushTimeout);pushTimeout=se
 let pullInProgress=false;
 async function gistPull(){const{gistId:g,token:t}=D.settings;if(!g||!t)return false;if(pullInProgress)return false;pullInProgress=true;try{const r=await fetch(`https://api.github.com/gists/${g}`,{headers:{'Authorization':`token ${t}`,'Accept':'application/vnd.github.v3+json'}});if(!r.ok){pullInProgress=false;return false}const j=await r.json();const c=j.files['productivity_data.json']?.content;if(c){const remote=JSON.parse(c);if(remote._lastModified&&D._lastModified&&remote._lastModified<=D._lastModified){pullInProgress=false;return true}const ls=D.settings;D={...JSON.parse(JSON.stringify(DEFAULT_DATA)),...remote,settings:ls};saveL();pullInProgress=false;return true}pullInProgress=false}catch(e){pullInProgress=false}return false}
 let syncInterval=null;
-function startAutoSync(){if(syncInterval)return;syncInterval=setInterval(()=>{if(document.visibilityState==='visible'&&!document.querySelector('.modal-bg')&&!document.getElementById('afc')?.innerHTML&&!document.activeElement?.matches('input,textarea,select'))gistPull().then(ok=>{if(ok)render()})},3000)}
+function startAutoSync(){if(syncInterval)return;syncInterval=setInterval(()=>{if(document.visibilityState==='visible'&&!document.querySelector('.modal-bg')&&!(document.activeElement?.matches('input,textarea,select')&&document.activeElement.value))gistPull().then(ok=>{if(ok)render()})},3000)}
 function save(){
   // Defensive: remove corrupted plan entries before saving
   if(D.plan)D.plan=D.plan.filter(item=>item.type!=='task'||typeof item.id==='string');
@@ -358,13 +358,15 @@ function initDragList(containerSelector,itemSelector,onReorder){
       const touch=e.touches?e.touches[0]:e;
       startY=touch.clientY;startX=touch.clientX;
       pressTimer=setTimeout(()=>{
+        pressTimer=null;
         if(document.querySelector('.modal-bg'))return;
         const rect=item.getBoundingClientRect();
+        if(rect.width===0||rect.height===0)return; // Guard against invisible items
         const clone=item.cloneNode(true);
         clone.style.cssText=`position:fixed;top:${rect.top}px;left:${rect.left}px;width:${rect.width}px;z-index:10000;pointer-events:none;opacity:0.9;transform:scale(1.03);box-shadow:0 8px 24px rgba(0,0,0,0.15);border-radius:14px;user-select:none`;
         document.body.appendChild(clone);
         const placeholder=document.createElement('div');
-        placeholder.style.cssText=`height:${rect.height}px;margin:4px 0;border-radius:14px;background:var(--accent);opacity:0.15;transition:height 0.15s`;
+        placeholder.style.cssText=`height:${rect.height}px;margin:4px 0;border-radius:14px;background:var(--accent);opacity:0.15`;
         placeholder.className='drag-placeholder';
         item.style.display='none';
         item.parentNode.insertBefore(placeholder,item);
@@ -375,21 +377,21 @@ function initDragList(containerSelector,itemSelector,onReorder){
         dragState={item,itemIdx,clone,placeholder,container,itemSelector,onReorder,startY:touch.clientY};
       },400);
     }
-    function cancelPress(e){
+    item.addEventListener('touchstart',e=>{
+      if(e.target.closest('button'))return;
+      startDrag(e);
+    },{passive:true});
+    item.addEventListener('touchmove',e=>{
       if(pressTimer&&!dragState){
-        const touch=e.touches?e.touches[0]:e;
+        const touch=e.touches[0];
         if(Math.abs(touch.clientY-startY)>8||Math.abs(touch.clientX-startX)>8){clearTimeout(pressTimer);pressTimer=null}
       }
-    }
-    function endPress(){clearTimeout(pressTimer);pressTimer=null}
-    item.addEventListener('touchstart',startDrag,{passive:true});
-    item.addEventListener('touchmove',cancelPress,{passive:true});
-    item.addEventListener('touchend',endPress);
-    item.addEventListener('touchcancel',endPress);
+    },{passive:true});
+    item.addEventListener('touchend',()=>{if(pressTimer){clearTimeout(pressTimer);pressTimer=null}if(dragState)dragEnd()});
+    item.addEventListener('touchcancel',()=>{if(pressTimer){clearTimeout(pressTimer);pressTimer=null}if(dragState)dragEnd()});
     item.addEventListener('mousedown',e=>{if(!e.target.closest('button')){e.preventDefault();startDrag(e)}});
   });
 }
-// Global drag move/end handlers (one set, not per-item)
 function dragMove(e){
   if(!dragState)return;
   e.preventDefault();
@@ -416,10 +418,10 @@ function dragEnd(){
   document.body.style.overflow='';
   document.body.style.userSelect='';
   document.body.style.webkitUserSelect='';
-  clone.remove();
+  if(clone&&clone.parentNode)clone.remove();
   const children=[...container.children].filter(el=>(el.matches&&el.matches(itemSelector))||el.classList.contains('drag-placeholder'));
   const newIdx=children.indexOf(placeholder);
-  placeholder.remove();
+  if(placeholder&&placeholder.parentNode)placeholder.remove();
   item.style.display='';
   if(newIdx>=0&&newIdx!==itemIdx)onReorder(itemIdx,newIdx);
 }
@@ -2553,8 +2555,8 @@ function showStartupModals(){
   showGoodMorning();
 }
 // Sync when app is backgrounded or foregrounded
-document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='hidden'){if(localDirty){saveL();gistPush()}}else if(document.visibilityState==='visible'&&!document.querySelector('.modal-bg')&&!document.getElementById('afc')?.innerHTML&&!document.activeElement?.matches('input,textarea,select')){gistPull().then(ok=>{if(ok){updateStreak();render()}})}});
-window.addEventListener('pagehide',()=>{if(localDirty){saveL();gistPush()}});
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='hidden'){if(localDirty){D._lastModified=Date.now();saveL();gistPush()}}else if(document.visibilityState==='visible'&&!document.querySelector('.modal-bg')){gistPull().then(ok=>{if(ok){updateStreak();render()}})}});
+window.addEventListener('pagehide',()=>{if(localDirty){D._lastModified=Date.now();saveL();gistPush()}});
 </script>
 <style>
 .hdr{background:var(--surface);border-radius:var(--radius);padding:14px 16px;margin-bottom:12px;box-shadow:var(--shadow);border:1px solid var(--border)}
