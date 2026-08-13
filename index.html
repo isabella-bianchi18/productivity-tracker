@@ -25,7 +25,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-seri
 if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
 
 // ===== DATA =====
-const APP_VERSION='4.3.6';
+const APP_VERSION='4.3.7';
 const DEFAULT_DATA={tasks:[],points:0,pointsHistory:[],rewards:[],techniques:[],metrics:[],settings:{gistId:'',token:'',dailyGoal:0},dailyGoalLog:{},streak:0,fractional:0,groupOrder:[],plan:[],savedPlans:[],planSectionRewards:{},groceries:[],recipes:[]};
 let D=JSON.parse(JSON.stringify(DEFAULT_DATA));
 let view='tasks',toolsView='menu',expandedTech=null,inlineMinId=null,categoryFilter='all',recurSort='custom',taskSearch='';
@@ -968,7 +968,8 @@ function rTools(){if(toolsView==='menu')return rToolsMenu();if(toolsView==='sw')
 function rToolsMenu(){const a=T.running||T.paused,m=T.mode;return `<div class="vc"><h2 style="font-size:1.1rem;color:var(--accent-dark);margin-bottom:16px">🧰 Tools</h2><button class="tlcard${a&&m!=='sw'?' dis':''}" data-t="sw" ${a&&m!=='sw'?'disabled':''}>⏱️ <b>Stopwatch</b><br><span class="tdesc">Open-ended timer</span>${a&&m==='sw'?'<br><span style="font-size:.75rem;color:var(--success-dark)">Running...</span>':''}${a&&m!=='sw'?'<br><span style="font-size:.75rem;color:var(--danger-dark)">Stop timer first</span>':''}</button><button class="tlcard${a&&m!=='pm'?' dis':''}" data-t="pm" ${a&&m!=='pm'?'disabled':''}>🍅 <b>Pomodoro</b><br><span class="tdesc">Work/break cycles</span>${a&&m==='pm'?'<br><span style="font-size:.75rem;color:var(--success-dark)">Running...</span>':''}${a&&m!=='pm'?'<br><span style="font-size:.75rem;color:var(--danger-dark)">Stop timer first</span>':''}</button><button class="tlcard" data-t="rewards">🍭 <b>Rewards</b><br><span class="tdesc">Redeem points for treats</span></button><button class="tlcard" data-t="tech">🧠 <b>Techniques</b><br><span class="tdesc">Anti-procrastination tracker</span></button><button class="tlcard" data-t="metrics">📊 <b>Metrics</b><br><span class="tdesc">Track daily habits & feelings</span></button><button class="tlcard" data-t="insights">🔍 <b>Insights</b><br><span class="tdesc">Best days & times analysis</span></button><button class="tlcard" data-t="achieve">🏅 <b>Achievements</b><br><span class="tdesc">Milestones and badges</span></button><button class="tlcard" data-t="grocery">🛒 <b>Grocery List</b><br><span class="tdesc">Shopping list with notes</span></button></div>`}
 
 function rSW(){
-  const opts=visibleTasks().map(t=>`<option value="${t.id}">${t.name}</option>`).join('');
+  const typeE={'one-time':'🎯','recurring':'🔄','daily':'📅','evergreen':'♾️'},catE={'work':'💼','home':'🏠','growth':'🌱'};
+  const opts=visibleTasks().map(t=>`<option value="${t.id}">${typeE[t.type]||''}${catE[t.category]||''} ${t.name}</option>`).join('');
   const td=today();const firstSecIds=getPlanFirstSection();const planIncomplete=firstSecIds.filter(tid=>{const t=D.tasks.find(x=>x.id===tid);if(!t||t.archived)return false;
     const pi=D.plan.find(i=>i.type==='task'&&i.id===tid);const eg=pi?.planGoal||(t.goal&&(t.goal.period==='daily'||t.goal.period==='hourly'||t.goal.period==='total')?t.goal:null);
     if(eg){const entries=eg.period==='total'?D.pointsHistory.filter(h=>h.taskId===t.id&&h.type==='earned'):D.pointsHistory.filter(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td);const cur=t.timeBased?entries.reduce((s,h)=>s+(h.minutes||0),0):t.countBased?entries.reduce((s,h)=>s+(h.count||0),0):entries.filter(h=>h.task.includes('✅')).length;return cur<eg.target}
@@ -1033,7 +1034,8 @@ function rSW(){
   return `<div class="vc" style="text-align:center"><button class="tback">← Back</button><h2 style="color:var(--accent-dark);margin:12px 0">⏱️ Stopwatch</h2><div id="tld" class="tdis">${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}</div>${a?`<div id="tlp" style="font-size:.9rem;color:var(--success-dark);margin-bottom:8px">${T.planMode?planTotalPts+` Point${planTotalPts!==1?'s':''} Earned`:pts+' Point'+(pts!==1?'s':'')+' Earned so far'}</div>${!T.planMode?`<div style="font-size:.85rem;color:var(--text-dim);margin-bottom:16px">Working on: <b>${label||'—'}</b></div>`:''}<div style="display:flex;gap:10px;justify-content:center">${T.running?`<button id="swpa" class="btn bwar btn-lg">Pause</button>`:`<button id="swre" class="btn bsuc btn-lg">Resume</button>`}<button id="swst" class="btn bdan btn-lg">Stop</button></div>${planDisplay}`:`<select id="swt" class="inf" style="text-align:left"><option value="">-- Select a task --</option>${planOpt}${opts}</select><input id="swn" type="text" placeholder="Or type what you're working on" class="inf" style="text-align:left"><div id="sw-rate-row" style="display:flex;gap:6px;align-items:center;justify-content:center;margin-bottom:16px"><input id="swp" type="number" min="1" class="inf" style="width:70px;margin:0;text-align:center"><span class="rl">pts per</span><input id="swr" type="number" min="1" class="inf" style="width:70px;margin:0;text-align:center"><span class="rl">min</span></div><button id="sws" class="btn bsuc btn-lg" disabled style="opacity:.5">Start</button><div id="swe" style="margin-top:8px;font-size:.8rem;color:var(--danger-dark)"></div>`}</div>`}
 
 function rPM(){
-  const opts=visibleTasks().map(t=>`<option value="${t.id}">${t.name}</option>`).join('');
+  const typeE={'one-time':'🎯','recurring':'🔄','daily':'📅','evergreen':'♾️'},catE={'work':'💼','home':'🏠','growth':'🌱'};
+  const opts=visibleTasks().map(t=>`<option value="${t.id}">${typeE[t.type]||''}${catE[t.category]||''} ${t.name}</option>`).join('');
   const td=today();const firstSecIds=getPlanFirstSection();const planIncomplete=firstSecIds.filter(tid=>{const t=D.tasks.find(x=>x.id===tid);if(!t||t.archived)return false;
     const pi=D.plan.find(i=>i.type==='task'&&i.id===tid);const eg=pi?.planGoal||(t.goal&&(t.goal.period==='daily'||t.goal.period==='hourly'||t.goal.period==='total')?t.goal:null);
     if(eg){const entries=eg.period==='total'?D.pointsHistory.filter(h=>h.taskId===t.id&&h.type==='earned'):D.pointsHistory.filter(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td);const cur=t.timeBased?entries.reduce((s,h)=>s+(h.minutes||0),0):t.countBased?entries.reduce((s,h)=>s+(h.count||0),0):entries.filter(h=>h.task.includes('✅')).length;return cur<eg.target}
@@ -1605,7 +1607,7 @@ function taskViz(task,hist){
 function showTaskDetail(tid){
   vizMonth=new Date().getMonth();vizYear=new Date().getFullYear();
   const task=D.tasks.find(t=>t.id===tid);if(!task)return;
-  const hist=D.pointsHistory.filter(h=>h.taskId===tid);
+  const hist=D.pointsHistory.filter(h=>h.taskId===tid&&!h._tracking&&!(h.points===0&&h.task.includes('✅')));
   const ld=hist.length?new Date(hist[hist.length-1].date).toLocaleDateString():'Never';
   // Stats: today, this week, this month, lifetime
   const todayH=hist.filter(h=>h.date.slice(0,10)===today());
