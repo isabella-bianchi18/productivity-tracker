@@ -25,7 +25,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-seri
 if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
 
 // ===== DATA =====
-const APP_VERSION='4.4.0';
+const APP_VERSION='4.4.1';
 const DEFAULT_DATA={tasks:[],points:0,pointsHistory:[],rewards:[],techniques:[],metrics:[],settings:{gistId:'',token:'',dailyGoal:0},dailyGoalLog:{},streak:0,fractional:0,groupOrder:[],plan:[],savedPlans:[],planSectionRewards:{},groceries:[],recipes:[]};
 let D=JSON.parse(JSON.stringify(DEFAULT_DATA));
 let view='tasks',toolsView='menu',expandedTech=null,inlineMinId=null,categoryFilter='all',recurSort='custom',taskSearch='';
@@ -358,6 +358,7 @@ function initDragList(containerSelector,itemSelector,onReorder,opts){
     let pressTimer=null,startY=0,startX=0;
     function startDrag(e){
       if(e.target.closest('button'))return;
+      if(e.target.closest('input,textarea,select'))return;
       if(nestedGuard&&e.target.closest(nestedGuard))return;
       if(dragState){dragEnd();return;}
       const touch=e.touches?e.touches[0]:e;
@@ -384,6 +385,7 @@ function initDragList(containerSelector,itemSelector,onReorder,opts){
     }
     item.addEventListener('touchstart',e=>{
       if(e.target.closest('button'))return;
+      if(e.target.closest('input,textarea,select'))return;
       if(nestedGuard&&e.target.closest(nestedGuard))return;
       startDrag(e);
     },{passive:true});
@@ -395,7 +397,7 @@ function initDragList(containerSelector,itemSelector,onReorder,opts){
     },{passive:true});
     item.addEventListener('touchend',()=>{if(pressTimer){clearTimeout(pressTimer);pressTimer=null}if(dragState&&dragState.item===item)dragEnd()});
     item.addEventListener('touchcancel',()=>{if(pressTimer){clearTimeout(pressTimer);pressTimer=null}if(dragState&&dragState.item===item)dragEnd()});
-    item.addEventListener('mousedown',e=>{if(!e.target.closest('button')&&!(nestedGuard&&e.target.closest(nestedGuard))){e.preventDefault();startDrag(e)}});
+    item.addEventListener('mousedown',e=>{if(!e.target.closest('button')&&!e.target.closest('input,textarea,select')&&!(nestedGuard&&e.target.closest(nestedGuard))){e.preventDefault();startDrag(e)}});
   });
 }
 function dragMove(e){
