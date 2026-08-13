@@ -25,7 +25,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-seri
 if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
 
 // ===== DATA =====
-const APP_VERSION='3.5.0';
+const APP_VERSION='3.5.1';
 const DEFAULT_DATA={tasks:[],points:0,pointsHistory:[],rewards:[],techniques:[],metrics:[],settings:{gistId:'',token:'',dailyGoal:0},dailyGoalLog:{},streak:0,fractional:0,groupOrder:[],plan:[],savedPlans:[],planSectionRewards:{},groceries:[],recipes:[]};
 let D=JSON.parse(JSON.stringify(DEFAULT_DATA));
 let view='tasks',toolsView='menu',expandedTech=null,inlineMinId=null,categoryFilter='all',recurSort='custom';
@@ -48,7 +48,7 @@ function debouncedPush(){if(pushTimeout)clearTimeout(pushTimeout);pushTimeout=se
 let pullInProgress=false;
 async function gistPull(){const{gistId:g,token:t}=D.settings;if(!g||!t)return false;if(pullInProgress)return false;pullInProgress=true;try{const r=await fetch(`https://api.github.com/gists/${g}`,{headers:{'Authorization':`token ${t}`,'Accept':'application/vnd.github.v3+json'}});if(!r.ok){pullInProgress=false;return false}const j=await r.json();const c=j.files['productivity_data.json']?.content;if(c){const remote=JSON.parse(c);if(remote._lastModified&&D._lastModified&&remote._lastModified<=D._lastModified){pullInProgress=false;return true}const ls=D.settings;D={...JSON.parse(JSON.stringify(DEFAULT_DATA)),...remote,settings:ls};saveL();pullInProgress=false;return true}pullInProgress=false}catch(e){pullInProgress=false}return false}
 let syncInterval=null;
-function startAutoSync(){if(syncInterval)return;syncInterval=setInterval(()=>{if(document.visibilityState==='visible'&&!document.querySelector('.modal-bg')&&!document.getElementById('afc')?.innerHTML)gistPull().then(ok=>{if(ok)render()})},30000)}
+function startAutoSync(){if(syncInterval)return;syncInterval=setInterval(()=>{if(document.visibilityState==='visible'&&!document.querySelector('.modal-bg')&&!document.getElementById('afc')?.innerHTML&&!document.activeElement?.matches('input,textarea,select'))gistPull().then(ok=>{if(ok)render()})},30000)}
 function save(){
   // Defensive: remove corrupted plan entries before saving
   if(D.plan)D.plan=D.plan.filter(item=>item.type!=='task'||typeof item.id==='string');
@@ -627,10 +627,10 @@ function rPlan(){
     if(secItems.length){
       // Section reward selector
       const secRewards=(D.planSectionRewards||{})[si]||[];
-      const secRewardChips=secRewards.map(rid=>{const r=D.rewards?.find(x=>x.id===rid);return r?`<div style="display:inline-flex;align-items:center;gap:4px;padding:2px 6px;background:var(--card-neutral);border-radius:4px;font-size:.7rem"><span>🎁 ${r.name}</span><button class="plan-sec-reward-rm ibtn" data-sec="${si}" data-rid="${rid}" style="font-size:.6rem;color:var(--danger-dark)">✕</button></div>`:''}).join('');
+      const secRewardChips=secRewards.map(rid=>{const r=D.rewards?.find(x=>x.id===rid);return r?`<div style="display:inline-flex;align-items:center;gap:5px;padding:4px 10px;background:linear-gradient(135deg,#fef3c7,#fde68a);border-radius:20px;font-size:.75rem;font-weight:500"><span>🎁 ${r.name}</span><button class="plan-sec-reward-rm ibtn" data-sec="${si}" data-rid="${rid}" style="font-size:.65rem;color:var(--danger-dark);margin-left:2px">✕</button></div>`:''}).join('');
       const secAvailRewards=(D.rewards||[]).filter(r=>!secRewards.includes(r.id));
-      const secRewardSelect=secAvailRewards.length?`<select class="plan-sec-reward-add inf" data-sec="${si}" style="margin:0;font-size:.75rem;padding:4px 6px"><option value="">+ 🎁 Reward...</option>${secAvailRewards.map(r=>`<option value="${r.id}">${r.name}</option>`).join('')}</select>`:'';
-      const secRewardHtml=(secRewardChips||secRewardSelect)?`<div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:4px;align-items:center">${secRewardChips}${secRewardSelect}</div>`:'';
+      const secRewardSelect=secAvailRewards.length?`<select class="plan-sec-reward-add inf" data-sec="${si}" style="margin:0;font-size:.75rem;padding:4px 10px;border-radius:20px;background:var(--card-neutral);border:1px dashed var(--border)"><option value="">+ Add reward</option>${secAvailRewards.map(r=>`<option value="${r.id}">🎁 ${r.name}</option>`).join('')}</select>`:'';
+      const secRewardHtml=(secRewardChips||secRewardSelect)?`<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px;align-items:center">${secRewardChips}${secRewardSelect}</div>`:'';
       html+=`<div style="display:flex;gap:6px;margin:4px 0 8px;flex-wrap:wrap"><button class="plan-sec-clear btn bmut" data-sec="${si}" style="font-size:.7rem;padding:4px 8px">🗑️ Clear</button><button class="plan-sec-save btn bmut" data-sec="${si}" style="font-size:.7rem;padding:4px 8px">💾 Save</button><div style="flex:1"></div>${si>0?`<button class="plan-sec-move btn bmut" data-sec="${si}" data-d="up" style="font-size:.7rem;padding:4px 8px">▲ Section</button>`:''}${si<sections.length-1?`<button class="plan-sec-move btn bmut" data-sec="${si}" data-d="down" style="font-size:.7rem;padding:4px 8px">▼ Section</button>`:''}</div>${secRewardHtml}`}
     else if(sections.length>1){html+=`<div style="display:flex;gap:6px;margin:4px 0 8px"><button class="plan-sec-clear btn bmut" data-sec="${si}" style="font-size:.7rem;padding:4px 8px">🗑️ Delete section</button></div>`}
     // Page break between sections (not after last)
@@ -2440,7 +2440,7 @@ function showStartupModals(){
   showGoodMorning();
 }
 // Sync when app is backgrounded or foregrounded
-document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='hidden'){saveL();gistPush()}else if(document.visibilityState==='visible'&&!document.querySelector('.modal-bg')&&!document.getElementById('afc')?.innerHTML){gistPull().then(ok=>{if(ok){updateStreak();render()}})}});
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='hidden'){saveL();gistPush()}else if(document.visibilityState==='visible'&&!document.querySelector('.modal-bg')&&!document.getElementById('afc')?.innerHTML&&!document.activeElement?.matches('input,textarea,select')){gistPull().then(ok=>{if(ok){updateStreak();render()}})}});
 window.addEventListener('pagehide',()=>{saveL();gistPush()});
 </script>
 <style>
