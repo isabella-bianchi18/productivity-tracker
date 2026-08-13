@@ -25,7 +25,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-seri
 if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
 
 // ===== DATA =====
-const APP_VERSION='4.4.9';
+const APP_VERSION='4.5.1';
 const DEFAULT_DATA={tasks:[],points:0,pointsHistory:[],rewards:[],techniques:[],metrics:[],settings:{gistId:'',token:'',dailyGoal:0},dailyGoalLog:{},streak:0,fractional:0,groupOrder:[],plan:[],savedPlans:[],planSectionRewards:{},groceries:[],recipes:[]};
 let D=JSON.parse(JSON.stringify(DEFAULT_DATA));
 let view='tasks',toolsView='menu',expandedTech=null,inlineMinId=null,categoryFilter='all',recurSort='custom',taskSearch='';
@@ -452,8 +452,11 @@ document.addEventListener('touchcancel',dragEnd);
 document.addEventListener('mousemove',dragMove);
 document.addEventListener('mouseup',dragEnd);
 
+// ===== POP SOUND =====
+function popSound(){try{const ac=new(window.AudioContext||window.webkitAudioContext)();const o=ac.createOscillator();const g=ac.createGain();o.connect(g);g.connect(ac.destination);o.type='sine';o.frequency.setValueAtTime(600,ac.currentTime);o.frequency.exponentialRampToValueAtTime(1200,ac.currentTime+0.05);o.frequency.exponentialRampToValueAtTime(300,ac.currentTime+0.15);g.gain.setValueAtTime(0.3,ac.currentTime);g.gain.exponentialRampToValueAtTime(0.01,ac.currentTime+0.15);o.start(ac.currentTime);o.stop(ac.currentTime+0.15)}catch(e){}}
+
 // ===== CONFETTI =====
-function confetti(){const cv=document.getElementById('confetti-canvas'),cx=cv.getContext('2d');cv.width=innerWidth;cv.height=innerHeight;const cols=['#a78bfa','#7dd3fc','#86efac','#fcd34d','#fca5a5','#f9a8d4'];const ps=Array.from({length:50},()=>({x:Math.random()*cv.width,y:-10,vx:(Math.random()-.5)*7,vy:Math.random()*3+2,c:cols[Math.floor(Math.random()*cols.length)],s:Math.random()*7+3,r:Math.random()*360,rv:(Math.random()-.5)*10}));let f=0;(function a(){cx.clearRect(0,0,cv.width,cv.height);ps.forEach(p=>{p.x+=p.vx;p.y+=p.vy;p.vy+=.12;p.r+=p.rv;cx.save();cx.translate(p.x,p.y);cx.rotate(p.r*Math.PI/180);cx.fillStyle=p.c;cx.fillRect(-p.s/2,-p.s/3,p.s,p.s/2);cx.restore()});if(++f<70)requestAnimationFrame(a);else cx.clearRect(0,0,cv.width,cv.height)})()}
+function confetti(){popSound();const cv=document.getElementById('confetti-canvas'),cx=cv.getContext('2d');cv.width=innerWidth;cv.height=innerHeight;const cols=['#a78bfa','#7dd3fc','#86efac','#fcd34d','#fca5a5','#f9a8d4'];const ps=Array.from({length:50},()=>({x:Math.random()*cv.width,y:-10,vx:(Math.random()-.5)*7,vy:Math.random()*3+2,c:cols[Math.floor(Math.random()*cols.length)],s:Math.random()*7+3,r:Math.random()*360,rv:(Math.random()-.5)*10}));let f=0;(function a(){cx.clearRect(0,0,cv.width,cv.height);ps.forEach(p=>{p.x+=p.vx;p.y+=p.vy;p.vy+=.12;p.r+=p.rv;cx.save();cx.translate(p.x,p.y);cx.rotate(p.r*Math.PI/180);cx.fillStyle=p.c;cx.fillRect(-p.s/2,-p.s/3,p.s,p.s/2);cx.restore()});if(++f<70)requestAnimationFrame(a);else cx.clearRect(0,0,cv.width,cv.height)})()}
 
 // ===== TOAST =====
 function toast(msg){const c=document.getElementById('toast-container');c.innerHTML=`<div class="toast">${msg}</div>`;if(toastTimer)clearTimeout(toastTimer);toastTimer=setTimeout(()=>{c.innerHTML='';toastTimer=null},3500)}
@@ -1289,7 +1292,7 @@ function rInsights(){
   const cats={work:0,home:0,growth:0};
   earned.forEach(h=>{if(h.category&&cats[h.category]!==undefined)cats[h.category]+=h.points});
   const totalCatPts=Object.values(cats).reduce((s,v)=>s+v,0);
-  const catBars=totalCatPts>0?Object.entries(cats).map(([k,v])=>{const pct=Math.round(v/totalCatPts*100);const label=k==='work'?'💼 Work':k==='home'?'🏠 Home':'🌱 Growth';return `<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px"><span style="font-size:.75rem;width:60px">${label}</span><div style="flex:1;height:14px;background:var(--card-neutral);border-radius:4px;overflow:hidden"><div style="height:100%;width:${pct}%;background:var(--accent);border-radius:4px"></div></div><span style="font-size:.7rem;color:var(--text-dim);width:35px;text-align:right">${pct}%</span></div>`}).join(''):'';
+  const catBars=totalCatPts>0?Object.entries(cats).map(([k,v])=>{const pct=Math.round(v/totalCatPts*100);const label=k==='work'?'💼 Work':k==='home'?'🏠 Home':'🌱 Growth';return `<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px"><span style="font-size:.75rem;min-width:70px;white-space:nowrap">${label}</span><div style="flex:1;height:14px;background:var(--card-neutral);border-radius:4px;overflow:hidden"><div style="height:100%;width:${pct}%;background:var(--accent);border-radius:4px"></div></div><span style="font-size:.7rem;color:var(--text-dim);min-width:30px;text-align:right">${pct}%</span></div>`}).join(''):'';
   // Productivity score: rolling 7-day avg
   const last7=[];for(let i=0;i<7;i++){const d=new Date();d.setDate(d.getDate()-i);const ds=d.toISOString().slice(0,10);last7.push(ptsForDay(ds))}
   const avg7=Math.round(last7.reduce((s,v)=>s+v,0)/7);
@@ -2187,7 +2190,7 @@ function bindAll(){
 }
 
 // ===== FORM HELPERS =====
-function rQuickLog(){return `<div class="fcard" style="margin-top:12px"><h3 style="margin-bottom:12px;color:var(--accent-dark)">⚡ Quick Log</h3><input id="qln" type="text" placeholder="What did you do?" class="inf" autocapitalize="words"><input id="qlp" type="number" min="0" placeholder="Points" class="inf"><label class="chlbl"><input id="qltb" type="checkbox"> Time-based</label><label class="chlbl"><input id="qlcb" type="checkbox"> Count-based</label><div id="qltw" style="display:none"><div style="display:flex;gap:6px;align-items:center;margin-bottom:8px"><input id="qlh" type="number" min="0" class="inf" style="width:60px;margin:0;text-align:center"><span class="rl">hours</span><input id="qlm" type="number" min="0" class="inf" style="width:60px;margin:0;text-align:center"><span class="rl">minutes</span></div></div><div id="qlcw" style="display:none"><div style="display:flex;gap:6px;align-items:center;margin-bottom:8px"><input id="qlcc" type="number" min="1" class="inf" style="width:70px;margin:0;text-align:center"><input id="qlcu" type="text" placeholder="unit" class="inf" style="width:80px;margin:0"></div></div><div id="qle" class="err"></div><button id="qls" class="btn bsuc" style="width:100%;opacity:.5" disabled>Log it!</button></div>`}
+function rQuickLog(){return `<div class="fcard" style="margin-top:12px"><h3 style="margin-bottom:12px;color:var(--accent-dark)">⚡ Quick Log</h3><input id="qln" type="text" placeholder="What did you do?" class="inf" autocapitalize="words"><select id="qlcat" class="inf"><option value="work">💼 Work</option><option value="home">🏠 Home</option><option value="growth">🌱 Growth</option></select><input id="qlp" type="number" min="0" placeholder="Points" class="inf"><label class="chlbl"><input id="qltb" type="checkbox"> Time-based</label><label class="chlbl"><input id="qlcb" type="checkbox"> Count-based</label><div id="qltw" style="display:none"><div style="display:flex;gap:6px;align-items:center;margin-bottom:8px"><input id="qlh" type="number" min="0" class="inf" style="width:60px;margin:0;text-align:center"><span class="rl">hours</span><input id="qlm" type="number" min="0" class="inf" style="width:60px;margin:0;text-align:center"><span class="rl">minutes</span></div></div><div id="qlcw" style="display:none"><div style="display:flex;gap:6px;align-items:center;margin-bottom:8px"><input id="qlcc" type="number" min="1" class="inf" style="width:70px;margin:0;text-align:center"><input id="qlcu" type="text" placeholder="unit" class="inf" style="width:80px;margin:0"></div></div><div id="qle" class="err"></div><button id="qls" class="btn bsuc" style="width:100%;opacity:.5" disabled>Log it!</button></div>`}
 function bindQuickLog(){
   document.getElementById('qltb')?.addEventListener('change',e=>{document.getElementById('qltw').style.display=e.target.checked?'':'none';if(e.target.checked){document.getElementById('qlcb').checked=false;document.getElementById('qlcw').style.display='none'}valQL()});
   document.getElementById('qlcb')?.addEventListener('change',e=>{document.getElementById('qlcw').style.display=e.target.checked?'':'none';if(e.target.checked){document.getElementById('qltb').checked=false;document.getElementById('qltw').style.display='none'}valQL()});
@@ -2195,7 +2198,7 @@ function bindQuickLog(){
   document.getElementById('qls')?.addEventListener('click',()=>{
     const name=document.getElementById('qln').value.trim(),pts=parseInt(document.getElementById('qlp').value),tb=document.getElementById('qltb').checked,cb=document.getElementById('qlcb')?.checked;
     if(!name||!Number.isInteger(pts)||pts<0)return;
-    const h={date:localISO(),task:name,taskId:null,points:pts,type:'earned'};
+    const h={date:localISO(),task:name,taskId:null,points:pts,type:'earned',category:document.getElementById('qlcat')?.value||'work'};
     if(tb){const hr=parseInt(document.getElementById('qlh')?.value)||0,mn=parseInt(document.getElementById('qlm')?.value)||0;h.minutes=hr*60+mn}
     if(cb){const cc=parseInt(document.getElementById('qlcc')?.value)||0;const cu=document.getElementById('qlcu')?.value.trim()||'units';if(cc>0){h.count=cc;h.countUnit=cu}}
     D.points+=pts;D.pointsHistory.push(h);saveDirty();confetti();checkGoal();render();
