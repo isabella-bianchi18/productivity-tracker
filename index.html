@@ -25,10 +25,10 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-seri
 if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
 
 // ===== DATA =====
-const APP_VERSION='4.2.3';
+const APP_VERSION='4.3.0';
 const DEFAULT_DATA={tasks:[],points:0,pointsHistory:[],rewards:[],techniques:[],metrics:[],settings:{gistId:'',token:'',dailyGoal:0},dailyGoalLog:{},streak:0,fractional:0,groupOrder:[],plan:[],savedPlans:[],planSectionRewards:{},groceries:[],recipes:[]};
 let D=JSON.parse(JSON.stringify(DEFAULT_DATA));
-let view='tasks',toolsView='menu',expandedTech=null,inlineMinId=null,categoryFilter='all',recurSort='custom';
+let view='tasks',toolsView='menu',expandedTech=null,inlineMinId=null,categoryFilter='all',recurSort='custom',taskSearch='';
 const collapsedGroups=new Set(JSON.parse(localStorage.getItem('pt_collapsedGroups')||'[]'));
 const expandedSleep=new Set();
 let T={running:false,paused:false,mode:null,start:null,elapsed:0,workDur:25,breakDur:5,phase:'work',note:'',taskId:'',pts:1,per:15,planMode:false,planQueue:[],planTimes:{},planCurrentStart:0,planCompleted:[],planCounts:{},totalWork:0,totalBreak:0,awaitingAck:false};
@@ -210,6 +210,7 @@ function updateStreak(){
 // ===== ACTIONS =====
 function completeTask(tid,mins,finished){
   const task=D.tasks.find(t=>t.id===tid);if(!task)return;
+  if(navigator.vibrate)navigator.vibrate(15);
   const now=localISO(),prev=JSON.parse(JSON.stringify(task)),prevP=D.points;
   // Only mark complete if not time-based, or if finished=true for time-based
   const shouldComplete=(!task.timeBased&&!task.countBased)||((task.timeBased||task.countBased)&&finished!==false);
@@ -770,7 +771,7 @@ function rTasks(){
     const archCards=arch.length?arch.map((t,i)=>rCard(t,i,arch.length)).join(''):'<p style="color:var(--text-dim);font-size:.85rem;font-style:italic">No archived tasks.</p>';
     content=`<div style="margin-bottom:18px"><h2 style="font-size:1rem;color:var(--text-dim);margin-bottom:8px">📦 Archived</h2>${archCards}</div>`;
   } else {
-    const vis=visibleTasks().filter(t=>!t.archived&&(categoryFilter==='all'||t.category===categoryFilter)),ot=vis.filter(t=>t.type==='one-time'&&!t.pinned);
+    const vis=visibleTasks().filter(t=>!t.archived&&(categoryFilter==='all'||t.category===categoryFilter)&&(!taskSearch||t.name.toLowerCase().includes(taskSearch.toLowerCase()))),ot=vis.filter(t=>t.type==='one-time'&&!t.pinned);
     let rc=vis.filter(t=>t.type==='recurring'&&!t.pinned);
     if(recurSort==='due'){rc.sort((a,b)=>{const aOver=(a.lastCompleted?(new Date()-new Date(a.lastCompleted))/864e5-a.cadenceDays:999);const bOver=(b.lastCompleted?(new Date()-new Date(b.lastCompleted))/864e5-b.cadenceDays:999);return bOver-aOver})}
     const ev=vis.filter(t=>t.type==='evergreen'&&!t.pinned),dy=vis.filter(t=>t.type==='daily'&&!t.pinned),sl=sleepingTasks().filter(t=>!t.archived&&!t.pinned&&(categoryFilter==='all'||t.category===categoryFilter));
@@ -783,7 +784,7 @@ function rTasks(){
     if(D.metrics&&D.metrics.length&&(categoryFilter==='all'||categoryFilter==='growth')){const mTd=today();const allFilled=D.metrics.every(m=>m.entries.some(e=>e.date===mTd));if(!allFilled){const filled=D.metrics.filter(m=>m.entries.some(e=>e.date===mTd)).length;metricsReminder=`<div class="tcard metrics-reminder" style="background:#f3e8ff;cursor:pointer"><div style="display:flex;align-items:center;gap:10px"><span style="font-size:1.2rem">📊</span><div style="flex:1"><div style="font-weight:600;font-size:.9rem">Log today's metrics</div><div style="font-size:.7rem;color:var(--text-dim)">${filled}/${D.metrics.length} filled</div></div></div></div>`}}
     content=`<div style="display:flex;gap:8px;margin-bottom:14px"><button id="show-af" class="abtn" style="flex:1">+ Add Task</button><div style="display:flex;flex-direction:column;gap:4px"><button id="quick-log-btn" class="btn bmut" style="padding:8px 10px;border-radius:8px;font-size:.75rem;line-height:1.2;text-align:center">⚡ Quick<br>Log</button><button id="bulk-skip-btn" class="btn ${allSkipped?'bwar':'bmut'}" style="padding:8px 10px;border-radius:8px;font-size:.75rem;line-height:1.2;text-align:center">⏭️ Skip<br>All</button></div><button id="surprise-btn" class="btn bwar" style="flex-shrink:0;padding:14px 12px;border-radius:var(--radius);font-size:1rem">🎲</button></div><div id="afc"></div><div id="qlfc"></div>${pinnedSection}${rBucket('🎯 One-Time',ot)}${rBucket('🔄 Recurring',rc,true)}${slRecurring.length?rSleep(slRecurring,'💤 Recurring - Upcoming'):''}${metricsReminder}${rBucket('📅 Daily',dy)}${slDaily.length?rSleep(slDaily,'💤 Daily - Upcoming'):''}${rBucket('♾️ Evergreen',ev)}${slOther.length?rSleep(slOther,'🚫 Not Today'):''}`;
   }
-  const fb=`<div style="display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap;"><button class="cat-btn ${categoryFilter==='all'?'cat-active':''}" data-cat="all" style="background:var(--card-neutral)">All</button><button class="cat-btn ${categoryFilter==='work'?'cat-active':''}" data-cat="work" style="background:#dbeafe">💼 Work</button><button class="cat-btn ${categoryFilter==='home'?'cat-active':''}" data-cat="home" style="background:#d1fae5">🏠 Home</button><button class="cat-btn ${categoryFilter==='growth'?'cat-active':''}" data-cat="growth" style="background:#fef3c7">🌱 Growth</button><button class="cat-btn ${categoryFilter==='archived'?'cat-active':''}" data-cat="archived" style="background:#e5e7eb">📦 Archived</button></div>`;
+  const fb=`<div style="display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap;align-items:center"><button class="cat-btn ${categoryFilter==='all'?'cat-active':''}" data-cat="all" style="background:var(--card-neutral)">All</button><button class="cat-btn ${categoryFilter==='work'?'cat-active':''}" data-cat="work" style="background:#dbeafe">💼 Work</button><button class="cat-btn ${categoryFilter==='home'?'cat-active':''}" data-cat="home" style="background:#d1fae5">🏠 Home</button><button class="cat-btn ${categoryFilter==='growth'?'cat-active':''}" data-cat="growth" style="background:#fef3c7">🌱 Growth</button><button class="cat-btn ${categoryFilter==='archived'?'cat-active':''}" data-cat="archived" style="background:#e5e7eb">📦 Archived</button><button id="task-search-btn" class="cat-btn" style="background:var(--card-neutral);margin-left:auto">🔍</button></div>${taskSearch!==''?`<input id="task-search-input" type="text" value="${taskSearch}" placeholder="Search tasks..." class="inf" style="margin-bottom:12px" autocomplete="off">`:''}`;
   return `<div class="vc">${fb}${content}</div>`}
 function rBucket(title,tasks,sortable){
   const sortBtn=sortable?`<button id="rsort" class="ibtn" style="font-size:.75rem;margin-left:6px">${recurSort==='custom'?'↕️ by due':'↕️ custom'}</button>`:'';
@@ -831,7 +832,7 @@ function rBucket(title,tasks,sortable){
     } else {
       const t=item.task;
       const tIdx=ungrouped.indexOf(t);
-      cards+=`<div class="bucket-item" data-id="${t.id}" style="user-select:none;-webkit-user-select:none">${rCard(t,tIdx,ungrouped.length)}</div>`;
+      cards+=`<div class="bucket-item" data-id="${t.id}" style="user-select:none;-webkit-user-select:none;position:relative;overflow:hidden;border-radius:14px"><div class="swipe-indicator" style="position:absolute;left:0;top:0;bottom:0;width:100px;display:flex;align-items:center;justify-content:center;background:var(--accent);color:#fff;font-weight:600;font-size:.75rem;pointer-events:none">📋 Plan</div><div class="swipe-card" style="position:relative;background:var(--bg)">${rCard(t,tIdx,ungrouped.length)}</div></div>`;
     }
   });
   return `<div style="margin-bottom:18px"><h2 style="font-size:1rem;color:var(--accent-dark);margin-bottom:8px;display:inline">${title}</h2>${sortBtn}<div class="task-bucket" style="margin-top:8px">${cards}</div></div>`}
@@ -1672,7 +1673,9 @@ function bindAll(){
   document.getElementById('info-btn')?.addEventListener('click',showInfoModal);
   document.getElementById('set-btn')?.addEventListener('click',showSettings);
   document.getElementById('goal-btn')?.addEventListener('click',showGoalSettingModal);
-  document.querySelectorAll('.cat-btn').forEach(b=>b.addEventListener('click',()=>{categoryFilter=b.dataset.cat;render()}));
+  document.querySelectorAll('.cat-btn').forEach(b=>b.addEventListener('click',()=>{if(b.id==='task-search-btn')return;categoryFilter=b.dataset.cat;taskSearch='';render()}));
+  document.getElementById('task-search-btn')?.addEventListener('click',()=>{if(taskSearch!==''){taskSearch='';render()}else{taskSearch=' ';render();setTimeout(()=>{const inp=document.getElementById('task-search-input');if(inp){inp.value='';inp.focus()}},50)}});
+  document.getElementById('task-search-input')?.addEventListener('input',e=>{taskSearch=e.target.value;render();setTimeout(()=>{const inp=document.getElementById('task-search-input');if(inp){inp.focus();inp.setSelectionRange(inp.value.length,inp.value.length)}},0)});
   document.querySelector('.metrics-reminder')?.addEventListener('click',()=>{view='tools';toolsView='metrics';render()});
   document.getElementById('rsort')?.addEventListener('click',()=>{recurSort=recurSort==='custom'?'due':'custom';render()});
   // Tasks
@@ -1759,6 +1762,43 @@ function bindAll(){
       save();render();
     });
   });
+  // Swipe right to add to plan (Tasks tab only)
+  if(view==='tasks'){
+    document.querySelectorAll('.bucket-item[data-id]').forEach(el=>{
+      let sx=0,sy=0,swiping=false,translateX=0;
+      const card=el.querySelector('.swipe-card');
+      if(!card)return;
+      el.addEventListener('touchstart',e=>{
+        if(dragState||e.target.closest('button'))return;
+        const t=e.touches[0];sx=t.clientX;sy=t.clientY;swiping=false;translateX=0;
+      },{passive:true});
+      el.addEventListener('touchmove',e=>{
+        if(dragState)return;
+        const t=e.touches[0],dx=t.clientX-sx,dy=t.clientY-sy;
+        if(!swiping&&Math.abs(dx)>10&&Math.abs(dx)>Math.abs(dy)*1.5)swiping=true;
+        if(!swiping)return;
+        e.preventDefault();
+        translateX=Math.max(0,Math.min(dx,100));
+        card.style.transform=`translateX(${translateX}px)`;
+        card.style.transition='none';
+      },{passive:false});
+      el.addEventListener('touchend',()=>{
+        if(!swiping){translateX=0;return}
+        if(translateX>60){
+          const tid=el.dataset.id;
+          if(tid&&!D.plan.some(p=>p.type==='task'&&p.id===tid)){
+            if(!D.plan)D.plan=[];
+            D.plan.push({type:'task',id:tid});
+            save();toast('📋 Added to plan');
+            if(navigator.vibrate)navigator.vibrate(15);
+          } else {toast('Already in plan')}
+        }
+        card.style.transform='';card.style.transition='transform 0.2s';
+        setTimeout(()=>{card.style.transition=''},200);
+        swiping=false;translateX=0;
+      });
+    });
+  }
   document.getElementById('show-af')?.addEventListener('click',()=>{const c=document.getElementById('afc');if(c.innerHTML){c.innerHTML='';return}c.innerHTML=rAddForm();bindAddForm()});
   document.getElementById('quick-log-btn')?.addEventListener('click',()=>{const c=document.getElementById('qlfc');if(c.innerHTML){c.innerHTML='';return}c.innerHTML=rQuickLog();bindQuickLog()});
   document.getElementById('surprise-btn')?.addEventListener('click',showSurpriseModal);
