@@ -25,7 +25,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-seri
 if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
 
 // ===== DATA =====
-const APP_VERSION='4.1.7';
+const APP_VERSION='4.1.8';
 const DEFAULT_DATA={tasks:[],points:0,pointsHistory:[],rewards:[],techniques:[],metrics:[],settings:{gistId:'',token:'',dailyGoal:0},dailyGoalLog:{},streak:0,fractional:0,groupOrder:[],plan:[],savedPlans:[],planSectionRewards:{},groceries:[],recipes:[]};
 let D=JSON.parse(JSON.stringify(DEFAULT_DATA));
 let view='tasks',toolsView='menu',expandedTech=null,inlineMinId=null,categoryFilter='all',recurSort='custom';
@@ -346,15 +346,17 @@ function editHistEntry(idx,newPts){
 // ===== DRAG & DROP ENGINE =====
 let dragState=null;
 let dragJustEnded=false;
-function initDragList(containerSelector,itemSelector,onReorder){
+function initDragList(containerSelector,itemSelector,onReorder,opts){
   const container=typeof containerSelector==='string'?document.querySelector(containerSelector):containerSelector;
   if(!container)return;
   const items=[...container.querySelectorAll(itemSelector)];
   if(!items.length)return;
+  const nestedGuard=opts&&opts.nestedGuard;
   items.forEach((item,itemIdx)=>{
     let pressTimer=null,startY=0,startX=0;
     function startDrag(e){
       if(e.target.closest('button'))return;
+      if(nestedGuard&&e.target.closest(nestedGuard))return;
       if(dragState){dragEnd();return;}
       const touch=e.touches?e.touches[0]:e;
       startY=touch.clientY;startX=touch.clientX;
@@ -380,7 +382,7 @@ function initDragList(containerSelector,itemSelector,onReorder){
     }
     item.addEventListener('touchstart',e=>{
       if(e.target.closest('button'))return;
-      if(e.target.closest('.grp-content'))return; // Don't start bucket drag from inside group content
+      if(nestedGuard&&e.target.closest(nestedGuard))return;
       startDrag(e);
     },{passive:true});
     item.addEventListener('touchmove',e=>{
@@ -391,7 +393,7 @@ function initDragList(containerSelector,itemSelector,onReorder){
     },{passive:true});
     item.addEventListener('touchend',()=>{if(pressTimer){clearTimeout(pressTimer);pressTimer=null}if(dragState&&dragState.item===item)dragEnd()});
     item.addEventListener('touchcancel',()=>{if(pressTimer){clearTimeout(pressTimer);pressTimer=null}if(dragState&&dragState.item===item)dragEnd()});
-    item.addEventListener('mousedown',e=>{if(!e.target.closest('button')&&!e.target.closest('.grp-content')){e.preventDefault();startDrag(e)}});
+    item.addEventListener('mousedown',e=>{if(!e.target.closest('button')&&!(nestedGuard&&e.target.closest(nestedGuard))){e.preventDefault();startDrag(e)}});
   });
 }
 function dragMove(e){
@@ -1724,7 +1726,7 @@ function bindAll(){
       const order=items.map(el=>el.dataset.grp?{type:'group',grp:el.dataset.grp}:{type:'task',id:el.dataset.id});
       // Swap in order
       const moved=order.splice(fromIdx,1)[0];
-      order.splice(toIdx,0,moved);
+      order.splice(toIdx>order.length?order.length:toIdx,0,moved);
       // Rebuild D.groupOrder from new sequence of groups
       D.groupOrder=order.filter(o=>o.type==='group').map(o=>o.grp);
       // Reorder ungrouped tasks in D.tasks to match new sequence
@@ -1736,7 +1738,7 @@ function bindAll(){
         D.tasks=[...otherTasks,...reordered];
       }
       save();render();
-    });
+    },{nestedGuard:'.grp-content'});
   });
   // Task drag-to-reorder within each group
   document.querySelectorAll('.grp-content').forEach(grpDiv=>{
