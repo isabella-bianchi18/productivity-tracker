@@ -25,7 +25,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-seri
 if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
 
 // ===== DATA =====
-const APP_VERSION='4.0.1';
+const APP_VERSION='4.0.2';
 const DEFAULT_DATA={tasks:[],points:0,pointsHistory:[],rewards:[],techniques:[],metrics:[],settings:{gistId:'',token:'',dailyGoal:0},dailyGoalLog:{},streak:0,fractional:0,groupOrder:[],plan:[],savedPlans:[],planSectionRewards:{},groceries:[],recipes:[]};
 let D=JSON.parse(JSON.stringify(DEFAULT_DATA));
 let view='tasks',toolsView='menu',expandedTech=null,inlineMinId=null,categoryFilter='all',recurSort='custom';
@@ -349,21 +349,19 @@ function initDragList(containerSelector,itemSelector,onReorder){
   const items=[...container.querySelectorAll(itemSelector)];
   if(!items.length)return;
   items.forEach((item,itemIdx)=>{
-    let pressTimer=null,startY=0,startX=0,isDragging=false,clone=null,placeholder=null,currentIdx=itemIdx;
+    let pressTimer=null,startY=0,startX=0;
     function startDrag(e){
-      if(e.target.closest('button'))return; // Don't drag when tapping buttons
+      if(e.target.closest('button'))return;
+      if(dragState)return;
       const touch=e.touches?e.touches[0]:e;
       startY=touch.clientY;startX=touch.clientX;
       pressTimer=setTimeout(()=>{
-        if(document.querySelector('.modal-bg'))return; // Don't drag if modal opened
-        isDragging=true;currentIdx=itemIdx;
+        if(document.querySelector('.modal-bg'))return;
         const rect=item.getBoundingClientRect();
-        // Create floating clone
-        clone=item.cloneNode(true);
+        const clone=item.cloneNode(true);
         clone.style.cssText=`position:fixed;top:${rect.top}px;left:${rect.left}px;width:${rect.width}px;z-index:10000;pointer-events:none;opacity:0.9;transform:scale(1.03);box-shadow:0 8px 24px rgba(0,0,0,0.15);border-radius:14px;user-select:none`;
         document.body.appendChild(clone);
-        // Create placeholder
-        placeholder=document.createElement('div');
+        const placeholder=document.createElement('div');
         placeholder.style.cssText=`height:${rect.height}px;margin:4px 0;border-radius:14px;background:var(--accent);opacity:0.15;transition:height 0.15s`;
         placeholder.className='drag-placeholder';
         item.style.display='none';
@@ -372,59 +370,62 @@ function initDragList(containerSelector,itemSelector,onReorder){
         document.body.style.overflow='hidden';
         document.body.style.userSelect='none';
         document.body.style.webkitUserSelect='none';
+        dragState={item,itemIdx,clone,placeholder,container,itemSelector,onReorder,startY:touch.clientY};
       },400);
     }
-    function moveDrag(e){
-      if(!isDragging){
-        if(pressTimer){const touch=e.touches?e.touches[0]:e;if(Math.abs(touch.clientY-startY)>8||Math.abs(touch.clientX-startX)>8){clearTimeout(pressTimer);pressTimer=null}}
-        return;
-      }
-      e.preventDefault();
-      document.getSelection()?.removeAllRanges(); // Prevent text selection on desktop
-      const touch=e.touches?e.touches[0]:e;
-      const dy=touch.clientY-startY;
-      clone.style.top=`${parseFloat(clone.style.top)+dy}px`;
-      startY=touch.clientY;
-      // Find drop position
-      const siblings=[...container.querySelectorAll(itemSelector)].filter(el=>el!==item&&el.style.display!=='none');
-      for(let i=0;i<siblings.length;i++){
-        const r=siblings[i].getBoundingClientRect();
-        const mid=r.top+r.height/2;
-        if(touch.clientY<mid){
-          if(placeholder.nextElementSibling!==siblings[i])container.insertBefore(placeholder,siblings[i]);
-          return;
-        }
-      }
-      // Past all items — put at end
-      if(siblings.length>0){
-        const last=siblings[siblings.length-1];
-        if(placeholder!==last.nextElementSibling)container.insertBefore(placeholder,last.nextSibling);
+    function cancelPress(e){
+      if(pressTimer&&!dragState){
+        const touch=e.touches?e.touches[0]:e;
+        if(Math.abs(touch.clientY-startY)>8||Math.abs(touch.clientX-startX)>8){clearTimeout(pressTimer);pressTimer=null}
       }
     }
-    function endDrag(){
-      clearTimeout(pressTimer);pressTimer=null;
-      if(!isDragging)return;
-      isDragging=false;
-      document.body.style.overflow='';
-      document.body.style.userSelect='';
-      document.body.style.webkitUserSelect='';
-      if(clone){clone.remove();clone=null}
-      // Calculate new index from placeholder position
-      const children=[...container.children].filter(el=>(el.matches&&el.matches(itemSelector))||el.classList.contains('drag-placeholder'));
-      const newIdx=children.indexOf(placeholder);
-      if(placeholder){placeholder.remove();placeholder=null}
-      item.style.display='';
-      if(newIdx>=0&&newIdx!==itemIdx)onReorder(itemIdx,newIdx);
-    }
+    function endPress(){clearTimeout(pressTimer);pressTimer=null}
     item.addEventListener('touchstart',startDrag,{passive:true});
-    item.addEventListener('touchmove',moveDrag,{passive:false});
-    item.addEventListener('touchend',endDrag);
-    item.addEventListener('touchcancel',endDrag);
-    item.addEventListener('mousedown',startDrag);
-    document.addEventListener('mousemove',(e)=>{if(isDragging)moveDrag(e)});
-    document.addEventListener('mouseup',()=>{if(isDragging)endDrag()});
+    item.addEventListener('touchmove',cancelPress,{passive:true});
+    item.addEventListener('touchend',endPress);
+    item.addEventListener('touchcancel',endPress);
+    item.addEventListener('mousedown',e=>{if(!e.target.closest('button')){e.preventDefault();startDrag(e)}});
   });
 }
+// Global drag move/end handlers (one set, not per-item)
+function dragMove(e){
+  if(!dragState)return;
+  e.preventDefault();
+  document.getSelection()?.removeAllRanges();
+  const touch=e.touches?e.touches[0]:e;
+  const{clone,placeholder,container,itemSelector,item}=dragState;
+  const dy=touch.clientY-dragState.startY;
+  clone.style.top=`${parseFloat(clone.style.top)+dy}px`;
+  dragState.startY=touch.clientY;
+  const siblings=[...container.querySelectorAll(itemSelector)].filter(el=>el!==item&&el.style.display!=='none');
+  for(let i=0;i<siblings.length;i++){
+    const r=siblings[i].getBoundingClientRect();
+    if(touch.clientY<r.top+r.height/2){
+      if(placeholder.nextElementSibling!==siblings[i])container.insertBefore(placeholder,siblings[i]);
+      return;
+    }
+  }
+  if(siblings.length>0){const last=siblings[siblings.length-1];if(placeholder!==last.nextElementSibling)container.insertBefore(placeholder,last.nextSibling)}
+}
+function dragEnd(){
+  if(!dragState)return;
+  const{item,itemIdx,clone,placeholder,container,itemSelector,onReorder}=dragState;
+  dragState=null;
+  document.body.style.overflow='';
+  document.body.style.userSelect='';
+  document.body.style.webkitUserSelect='';
+  clone.remove();
+  const children=[...container.children].filter(el=>(el.matches&&el.matches(itemSelector))||el.classList.contains('drag-placeholder'));
+  const newIdx=children.indexOf(placeholder);
+  placeholder.remove();
+  item.style.display='';
+  if(newIdx>=0&&newIdx!==itemIdx)onReorder(itemIdx,newIdx);
+}
+document.addEventListener('touchmove',dragMove,{passive:false});
+document.addEventListener('touchend',dragEnd);
+document.addEventListener('touchcancel',dragEnd);
+document.addEventListener('mousemove',dragMove);
+document.addEventListener('mouseup',dragEnd);
 
 // ===== CONFETTI =====
 function confetti(){const cv=document.getElementById('confetti-canvas'),cx=cv.getContext('2d');cv.width=innerWidth;cv.height=innerHeight;const cols=['#a78bfa','#7dd3fc','#86efac','#fcd34d','#fca5a5','#f9a8d4'];const ps=Array.from({length:50},()=>({x:Math.random()*cv.width,y:-10,vx:(Math.random()-.5)*7,vy:Math.random()*3+2,c:cols[Math.floor(Math.random()*cols.length)],s:Math.random()*7+3,r:Math.random()*360,rv:(Math.random()-.5)*10}));let f=0;(function a(){cx.clearRect(0,0,cv.width,cv.height);ps.forEach(p=>{p.x+=p.vx;p.y+=p.vy;p.vy+=.12;p.r+=p.rv;cx.save();cx.translate(p.x,p.y);cx.rotate(p.r*Math.PI/180);cx.fillStyle=p.c;cx.fillRect(-p.s/2,-p.s/3,p.s,p.s/2);cx.restore()});if(++f<70)requestAnimationFrame(a);else cx.clearRect(0,0,cv.width,cv.height)})()}
