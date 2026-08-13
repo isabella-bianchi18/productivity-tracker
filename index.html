@@ -25,7 +25,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-seri
 if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
 
 // ===== DATA =====
-const APP_VERSION='4.3.7';
+const APP_VERSION='4.3.8';
 const DEFAULT_DATA={tasks:[],points:0,pointsHistory:[],rewards:[],techniques:[],metrics:[],settings:{gistId:'',token:'',dailyGoal:0},dailyGoalLog:{},streak:0,fractional:0,groupOrder:[],plan:[],savedPlans:[],planSectionRewards:{},groceries:[],recipes:[]};
 let D=JSON.parse(JSON.stringify(DEFAULT_DATA));
 let view='tasks',toolsView='menu',expandedTech=null,inlineMinId=null,categoryFilter='all',recurSort='custom',taskSearch='';
@@ -2021,7 +2021,7 @@ function bindAll(){
   document.getElementById('swst')?.addEventListener('click',stopSW);
   ['swt','swn','swp','swr'].forEach(x=>{document.getElementById(x)?.addEventListener('input',valSW);document.getElementById(x)?.addEventListener('change',valSW)});
   // Make task select and note mutually exclusive
-  document.getElementById('swt')?.addEventListener('change',e=>{if(e.target.value==='__plan__'){document.getElementById('swn').value='';document.getElementById('swn').style.display='none';const rr=document.getElementById('sw-rate-row');if(rr)rr.style.display='none';valSW()}else if(e.target.value){document.getElementById('swn').value='';document.getElementById('swn').style.display='none';const rr=document.getElementById('sw-rate-row');if(rr)rr.style.display='';const t=D.tasks.find(x=>x.id===e.target.value);if(t&&t.timeBased){document.getElementById('swp').value=t.ptsAmount;document.getElementById('swr').value=t.ptsPerMinutes}}else{document.getElementById('swn').style.display='';const rr=document.getElementById('sw-rate-row');if(rr)rr.style.display=''}valSW()});
+  document.getElementById('swt')?.addEventListener('change',e=>{if(e.target.value==='__plan__'){document.getElementById('swn').value='';document.getElementById('swn').style.display='none';const rr=document.getElementById('sw-rate-row');if(rr)rr.style.display='none';valSW()}else if(e.target.value){document.getElementById('swn').value='';document.getElementById('swn').style.display='none';const rr=document.getElementById('sw-rate-row');if(rr)rr.style.display='';const t=D.tasks.find(x=>x.id===e.target.value);if(t&&t.timeBased){document.getElementById('swp').value=t.ptsAmount;document.getElementById('swr').value=t.ptsPerMinutes}else{document.getElementById('swp').value='';document.getElementById('swr').value=''}}else{document.getElementById('swn').style.display='';const rr=document.getElementById('sw-rate-row');if(rr)rr.style.display=''}valSW()});
   document.getElementById('swn')?.addEventListener('input',e=>{if(e.target.value.trim()){document.getElementById('swt').value='';document.getElementById('swt').style.display='none'}else{document.getElementById('swt').style.display=''}valSW()});
   // Plan queue controls (while timer running in plan mode)
   document.querySelectorAll('.plan-q-move').forEach(b=>b.addEventListener('click',e=>{e.stopPropagation();const idx=parseInt(b.dataset.idx),dir=b.dataset.d;const si=dir==='up'?idx-1:idx+1;if(si<0||si>=T.planQueue.length)return;if(idx===0||si===0){const curId=T.planQueue[0];const curExtra=T.running?Math.floor((Date.now()-T.planCurrentStart)/1000):0;T.planTimes[curId]=(T.planTimes[curId]||0)+curExtra;T.planCurrentStart=Date.now()}[T.planQueue[idx],T.planQueue[si]]=[T.planQueue[si],T.planQueue[idx]];if(si===0||idx===0){T.taskId=T.planQueue[0];T.planCurrentStart=Date.now()}render()}));
@@ -2221,9 +2221,11 @@ function valSW(){
   const p=parseInt(document.getElementById('swp')?.value),r=parseInt(document.getElementById('swr')?.value);
   const btn=document.getElementById('sws'),err=document.getElementById('swe');if(!btn)return;
   const isPlan=t==='__plan__';
-  const ctx=t||n,rate=isPlan||( Number.isInteger(p)&&p>=1&&Number.isInteger(r)&&r>=1);
-  btn.disabled=!(ctx&&rate);btn.style.opacity=ctx&&rate?'1':'.5';
-  if(err)err.textContent=!ctx?'Select a task or describe activity':!rate?'Set valid point rate':'';
+  const ctx=t||n;
+  // Rate is optional — if filled, must be valid
+  const rateValid=isPlan||(!Number.isInteger(p)&&!Number.isInteger(r))||(Number.isInteger(p)&&p>=1&&Number.isInteger(r)&&r>=1);
+  btn.disabled=!(ctx&&rateValid);btn.style.opacity=ctx&&rateValid?'1':'.5';
+  if(err)err.textContent=!ctx?'Select a task or describe activity':!rateValid?'Both point fields required if using rate':'';
   // Hide/show rate row
   const rateRow=document.getElementById('sw-rate-row');if(rateRow)rateRow.style.display=isPlan?'none':'';
 }
@@ -2232,9 +2234,10 @@ function valPM(){
   const p=parseInt(document.getElementById('pmp')?.value),r=parseInt(document.getElementById('pmr')?.value);
   const btn=document.getElementById('pms'),err=document.getElementById('pme');if(!btn)return;
   const isPlan=t==='__plan__';
-  const ctx=t||n,rate=isPlan||(Number.isInteger(p)&&p>=1&&Number.isInteger(r)&&r>=1);
-  btn.disabled=!(ctx&&rate);btn.style.opacity=ctx&&rate?'1':'.5';
-  if(err)err.textContent=!ctx?'Select a task or describe activity':!rate?'Set valid point rate':'';
+  const ctx=t||n;
+  const rateValid=isPlan||(!Number.isInteger(p)&&!Number.isInteger(r))||(Number.isInteger(p)&&p>=1&&Number.isInteger(r)&&r>=1);
+  btn.disabled=!(ctx&&rateValid);btn.style.opacity=ctx&&rateValid?'1':'.5';
+  if(err)err.textContent=!ctx?'Select a task or describe activity':!rateValid?'Both point fields required if using rate':'';
   // Hide/show rate row
   const rateRow=document.getElementById('pm-rate-row');if(rateRow)rateRow.style.display=isPlan?'none':'';
 }
@@ -2256,7 +2259,7 @@ function planAllDone(){return T.planQueue.every(tid=>T.planCompleted?.includes(t
 function startSW(){
   const selTask=document.getElementById('swt')?.value||'';
   const isPlan=selTask==='__plan__';
-  const p=isPlan?1:parseInt(document.getElementById('swp').value),r=isPlan?1:parseInt(document.getElementById('swr').value);
+  const p=isPlan?1:(parseInt(document.getElementById('swp').value)||0),r=isPlan?1:(parseInt(document.getElementById('swr').value)||1);
   const planQueue=isPlan?getPlanFirstSection().filter(tid=>{const t=D.tasks.find(x=>x.id===tid);if(!t)return false;const td=today();
     const pi=D.plan.find(i=>i.type==='task'&&i.id===tid);
     const eg=pi?.planGoal||(t.goal&&(t.goal.period==='daily'||t.goal.period==='hourly'||t.goal.period==='total')?t.goal:null);
@@ -2270,7 +2273,7 @@ function startPM(){
   const w=parseInt(document.getElementById('pmw')?.value)||25,b=parseInt(document.getElementById('pmb')?.value)||5;
   const selTask=document.getElementById('pmt')?.value||'';
   const isPlan=selTask==='__plan__';
-  const p=isPlan?1:parseInt(document.getElementById('pmp').value),r=isPlan?1:parseInt(document.getElementById('pmr').value);
+  const p=isPlan?1:(parseInt(document.getElementById('pmp').value)||0),r=isPlan?1:(parseInt(document.getElementById('pmr').value)||1);
   const planQueue=isPlan?getPlanFirstSection().filter(tid=>{const t=D.tasks.find(x=>x.id===tid);if(!t)return false;const td=today();
     const pi=D.plan.find(i=>i.type==='task'&&i.id===tid);
     const eg=pi?.planGoal||(t.goal&&(t.goal.period==='daily'||t.goal.period==='hourly'||t.goal.period==='total')?t.goal:null);
