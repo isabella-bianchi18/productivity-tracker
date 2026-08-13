@@ -25,7 +25,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-seri
 if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
 
 // ===== DATA =====
-const APP_VERSION='4.1.6';
+const APP_VERSION='4.1.7';
 const DEFAULT_DATA={tasks:[],points:0,pointsHistory:[],rewards:[],techniques:[],metrics:[],settings:{gistId:'',token:'',dailyGoal:0},dailyGoalLog:{},streak:0,fractional:0,groupOrder:[],plan:[],savedPlans:[],planSectionRewards:{},groceries:[],recipes:[]};
 let D=JSON.parse(JSON.stringify(DEFAULT_DATA));
 let view='tasks',toolsView='menu',expandedTech=null,inlineMinId=null,categoryFilter='all',recurSort='custom';
@@ -345,6 +345,7 @@ function editHistEntry(idx,newPts){
 
 // ===== DRAG & DROP ENGINE =====
 let dragState=null;
+let dragJustEnded=false;
 function initDragList(containerSelector,itemSelector,onReorder){
   const container=typeof containerSelector==='string'?document.querySelector(containerSelector):containerSelector;
   if(!container)return;
@@ -354,7 +355,7 @@ function initDragList(containerSelector,itemSelector,onReorder){
     let pressTimer=null,startY=0,startX=0;
     function startDrag(e){
       if(e.target.closest('button'))return;
-      if(dragState)return;
+      if(dragState){dragEnd();return;}
       const touch=e.touches?e.touches[0]:e;
       startY=touch.clientY;startX=touch.clientX;
       pressTimer=setTimeout(()=>{
@@ -379,6 +380,7 @@ function initDragList(containerSelector,itemSelector,onReorder){
     }
     item.addEventListener('touchstart',e=>{
       if(e.target.closest('button'))return;
+      if(e.target.closest('.grp-content'))return; // Don't start bucket drag from inside group content
       startDrag(e);
     },{passive:true});
     item.addEventListener('touchmove',e=>{
@@ -387,9 +389,9 @@ function initDragList(containerSelector,itemSelector,onReorder){
         if(Math.abs(touch.clientY-startY)>8||Math.abs(touch.clientX-startX)>8){clearTimeout(pressTimer);pressTimer=null}
       }
     },{passive:true});
-    item.addEventListener('touchend',()=>{if(pressTimer){clearTimeout(pressTimer);pressTimer=null}if(dragState)dragEnd()});
-    item.addEventListener('touchcancel',()=>{if(pressTimer){clearTimeout(pressTimer);pressTimer=null}if(dragState)dragEnd()});
-    item.addEventListener('mousedown',e=>{if(!e.target.closest('button')){e.preventDefault();startDrag(e)}});
+    item.addEventListener('touchend',()=>{if(pressTimer){clearTimeout(pressTimer);pressTimer=null}if(dragState&&dragState.item===item)dragEnd()});
+    item.addEventListener('touchcancel',()=>{if(pressTimer){clearTimeout(pressTimer);pressTimer=null}if(dragState&&dragState.item===item)dragEnd()});
+    item.addEventListener('mousedown',e=>{if(!e.target.closest('button')&&!e.target.closest('.grp-content')){e.preventDefault();startDrag(e)}});
   });
 }
 function dragMove(e){
@@ -426,6 +428,7 @@ function dragEnd(){
   if(!dragState)return;
   const{item,itemIdx,clone,placeholder,container,itemSelector,onReorder}=dragState;
   dragState=null;
+  dragJustEnded=true;setTimeout(()=>{dragJustEnded=false},100);
   document.body.style.overflow='';
   document.body.style.userSelect='';
   document.body.style.webkitUserSelect='';
@@ -1681,7 +1684,7 @@ function bindAll(){
   document.querySelector('.metrics-reminder')?.addEventListener('click',()=>{view='tools';toolsView='metrics';render()});
   document.getElementById('rsort')?.addEventListener('click',()=>{recurSort=recurSort==='custom'?'due':'custom';render()});
   // Tasks
-  document.querySelectorAll('.grp-hdr').forEach(b=>b.addEventListener('click',()=>{const g=b.dataset.grp;if(collapsedGroups.has(g))collapsedGroups.delete(g);else collapsedGroups.add(g);localStorage.setItem('pt_collapsedGroups',JSON.stringify([...collapsedGroups]));render()}));
+  document.querySelectorAll('.grp-hdr').forEach(b=>b.addEventListener('click',()=>{if(dragJustEnded)return;const g=b.dataset.grp;if(collapsedGroups.has(g))collapsedGroups.delete(g);else collapsedGroups.add(g);localStorage.setItem('pt_collapsedGroups',JSON.stringify([...collapsedGroups]));render()}));
   document.querySelectorAll('.grp-done').forEach(b=>b.addEventListener('click',e=>{e.stopPropagation();const g=b.dataset.grp;const td=today();const gTasks=D.tasks.filter(t=>t.group===g&&!t.archived);const prevStates=gTasks.map(t=>({id:t.id,state:JSON.parse(JSON.stringify(t))}));const prevP=D.points;const prevHistLen=D.pointsHistory.length;let completed=0;gTasks.forEach(t=>{if(t.type==='evergreen'){if(t.timeBased)completeTask(t.id,t.ptsPerMinutes||1);else if(t.countBased)completeTask(t.id,1);else completeTask(t.id);completed++;return}if(t.timeBased||t.countBased)return;if(t.type==='one-time'&&!t.completed){completeTask(t.id);completed++}else if(t.type==='daily'){const doneToday=D.pointsHistory.some(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td&&h.task.includes('✅'));if(!doneToday){completeTask(t.id);completed++}}else if(t.type==='recurring'){completeTask(t.id);completed++}});if(completed>0){render();showUndo(()=>{prevStates.forEach(ps=>{const t=D.tasks.find(x=>x.id===ps.id);if(t)Object.assign(t,ps.state)});D.points=prevP;D.pointsHistory.length=prevHistLen;saveDirty();render()})}}));
   document.querySelectorAll('.grp-skip').forEach(b=>b.addEventListener('click',e=>{e.stopPropagation();const g=b.dataset.grp;const td=today();const gTasks=D.tasks.filter(t=>t.group===g&&!t.archived);const allSkipped=gTasks.every(t=>t.goalSkips&&t.goalSkips.includes(td));if(allSkipped){gTasks.forEach(t=>{if(t.goalSkips){const idx=t.goalSkips.indexOf(td);if(idx>=0)t.goalSkips.splice(idx,1)}});save();render();toast(`↩️ Unskipped ${g}`)}else{let count=0;gTasks.forEach(t=>{if(!t.goalSkips)t.goalSkips=[];if(!t.goalSkips.includes(td)){t.goalSkips.push(td);count++}});save();render();toast(`⏭️ Skipped ${g} (${count} tasks)`)}}));
   document.querySelectorAll('.grp-move').forEach(b=>b.addEventListener('click',e=>{e.stopPropagation()}));
