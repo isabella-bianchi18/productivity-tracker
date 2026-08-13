@@ -25,7 +25,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-seri
 if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
 
 // ===== DATA =====
-const APP_VERSION='4.1.8';
+const APP_VERSION='4.1.9';
 const DEFAULT_DATA={tasks:[],points:0,pointsHistory:[],rewards:[],techniques:[],metrics:[],settings:{gistId:'',token:'',dailyGoal:0},dailyGoalLog:{},streak:0,fractional:0,groupOrder:[],plan:[],savedPlans:[],planSectionRewards:{},groceries:[],recipes:[]};
 let D=JSON.parse(JSON.stringify(DEFAULT_DATA));
 let view='tasks',toolsView='menu',expandedTech=null,inlineMinId=null,categoryFilter='all',recurSort='custom';
@@ -786,32 +786,20 @@ function rTasks(){
 function rBucket(title,tasks,sortable){
   const sortBtn=sortable?`<button id="rsort" class="ibtn" style="font-size:.75rem;margin-left:6px">${recurSort==='custom'?'↕️ by due':'↕️ custom'}</button>`:'';
   if(!tasks.length)return `<div style="margin-bottom:18px"><h2 style="font-size:1rem;color:var(--accent-dark);margin-bottom:8px;display:inline">${title}</h2>${sortBtn}<p style="color:var(--text-dim);font-size:.85rem;font-style:italic;margin-top:8px">Nothing here ✨</p></div>`;
-  // Render in D.tasks order: when we encounter a grouped task, render its whole group (once), ungrouped tasks render individually
+  // Render in D.tasks order: groups appear at position of their first member
   const td=today();
   const grpColors=['#fce4ec','#fff3e0','#e8eaf6','#efebe9','#e0f2f1','#fbe9e7'];
   const renderedGroups=new Set();
-  // Get group order
   const groupOrder=[];
-  tasks.forEach(t=>{if(t.group&&!groupOrder.includes(t.group))groupOrder.push(t.group)});
-  if(D.groupOrder&&D.groupOrder.length){groupOrder.sort((a,b)=>{const ai=D.groupOrder.indexOf(a),bi=D.groupOrder.indexOf(b);return(ai<0?999:ai)-(bi<0?999:bi)})}
-  // Build flat render order: iterate tasks, insert group block at first occurrence
-  let cards='';
-  let ungroupedIdx=0;const ungrouped=tasks.filter(t=>!t.group);
-  // Interleave: go through tasks in order, render group or ungrouped
-  const renderOrder=[];
+  // Build final render order directly from D.tasks order
+  const finalOrder=[];
   tasks.forEach(t=>{
-    if(t.group){if(!renderedGroups.has(t.group)){renderedGroups.add(t.group);renderOrder.push({type:'group',group:t.group})}}
-    else{renderOrder.push({type:'task',task:t})}
+    if(t.group){
+      if(!renderedGroups.has(t.group)){renderedGroups.add(t.group);groupOrder.push(t.group);finalOrder.push({type:'group',group:t.group})}
+    } else {finalOrder.push({type:'task',task:t})}
   });
-  // Now sort groups within renderOrder by groupOrder
-  const groupItems=renderOrder.filter(r=>r.type==='group');
-  const taskItems=renderOrder.filter(r=>r.type==='task');
-  // Rebuild: place groups in groupOrder sequence at their first natural position, tasks stay in order
-  const finalOrder=[];let gi=0,ti=0;
-  renderOrder.forEach(r=>{
-    if(r.type==='group'){finalOrder.push({type:'group',group:groupOrder[gi]||r.group});gi++}
-    else{finalOrder.push(r)}
-  });
+  let cards='';
+  const ungrouped=tasks.filter(t=>!t.group);
   finalOrder.forEach((item,fi)=>{
     if(item.type==='group'){
       const g=item.group;
@@ -1720,23 +1708,29 @@ function bindAll(){
     initDragList(bucket,'.bucket-item',(fromIdx,toIdx)=>{
       const items=[...bucket.querySelectorAll('.bucket-item')];
       const fromEl=items[fromIdx];
-      const toEl=items[toIdx];
       if(!fromEl)return;
-      // Build the current visual order as group names and task IDs
+      // Build order from current items
       const order=items.map(el=>el.dataset.grp?{type:'group',grp:el.dataset.grp}:{type:'task',id:el.dataset.id});
-      // Swap in order
       const moved=order.splice(fromIdx,1)[0];
-      order.splice(toIdx>order.length?order.length:toIdx,0,moved);
-      // Rebuild D.groupOrder from new sequence of groups
-      D.groupOrder=order.filter(o=>o.type==='group').map(o=>o.grp);
-      // Reorder ungrouped tasks in D.tasks to match new sequence
-      const type=D.tasks.find(t=>bucket.querySelector(`.bucket-item[data-id="${t.id}"]`))?.type;
-      if(type){
-        const ungroupedOrder=order.filter(o=>o.type==='task').map(o=>o.id);
-        const otherTasks=D.tasks.filter(t=>t.type!==type||t.group);
-        const reordered=ungroupedOrder.map(id=>D.tasks.find(t=>t.id===id)).filter(Boolean);
-        D.tasks=[...otherTasks,...reordered];
-      }
+      const insertAt=toIdx>order.length?order.length:toIdx;
+      order.splice(insertAt,0,moved);
+      // Rebuild D.tasks for this type based on new order
+      // Determine the type from any task in this bucket
+      const sampleId=order.find(o=>o.type==='task')?.id;
+      const sampleGrp=order.find(o=>o.type==='group')?.grp;
+      const type=sampleId?D.tasks.find(t=>t.id===sampleId)?.type:sampleGrp?D.tasks.find(t=>t.group===sampleGrp)?.type:null;
+      if(!type)return;
+      // Collect all tasks of this type not in this bucket (other categories filtered out, archived, etc.)
+      const bucketTaskIds=new Set();
+      order.forEach(o=>{if(o.type==='task')bucketTaskIds.add(o.id);else{D.tasks.filter(t=>t.group===o.grp&&t.type===type).forEach(t=>bucketTaskIds.add(t.id))}});
+      const otherTasks=D.tasks.filter(t=>!bucketTaskIds.has(t.id));
+      // Build new task array for this bucket's type in the drag order
+      const reordered=[];
+      order.forEach(o=>{
+        if(o.type==='task'){const t=D.tasks.find(x=>x.id===o.id);if(t)reordered.push(t)}
+        else{D.tasks.filter(t=>t.group===o.grp&&t.type===type).forEach(t=>reordered.push(t))}
+      });
+      D.tasks=[...otherTasks,...reordered];
       save();render();
     },{nestedGuard:'.grp-content'});
   });
