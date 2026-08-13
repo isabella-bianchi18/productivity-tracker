@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -25,7 +25,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-seri
 if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
 
 // ===== DATA =====
-const APP_VERSION='4.0.4';
+const APP_VERSION='4.0.5';
 const DEFAULT_DATA={tasks:[],points:0,pointsHistory:[],rewards:[],techniques:[],metrics:[],settings:{gistId:'',token:'',dailyGoal:0},dailyGoalLog:{},streak:0,fractional:0,groupOrder:[],plan:[],savedPlans:[],planSectionRewards:{},groceries:[],recipes:[]};
 let D=JSON.parse(JSON.stringify(DEFAULT_DATA));
 let view='tasks',toolsView='menu',expandedTech=null,inlineMinId=null,categoryFilter='all',recurSort='custom';
@@ -42,7 +42,7 @@ function loadL(){const s=localStorage.getItem(SK);if(s)D={...JSON.parse(JSON.str
 let pushTimeout=null;
 let localDirty=false;
 async function gistPush(){const{gistId:g,token:t}=D.settings;if(!g||!t)return false;
-  D._lastModified=Date.now();saveL();localDirty=false;
+  localDirty=false;
   const pushData=JSON.parse(JSON.stringify(D));delete pushData.settings.token;delete pushData.settings.gistId;
   try{const r=await fetch(`https://api.github.com/gists/${g}`,{method:'PATCH',headers:{'Authorization':`token ${t}`,'Content-Type':'application/json','Accept':'application/vnd.github.v3+json'},body:JSON.stringify({files:{'productivity_data.json':{content:JSON.stringify(pushData)}}})});return r.ok}catch(e){return false}}
 function debouncedPush(){if(pushTimeout)clearTimeout(pushTimeout);pushTimeout=setTimeout(()=>{gistPush()},2000)}
@@ -53,7 +53,8 @@ function startAutoSync(){if(syncInterval)return;syncInterval=setInterval(()=>{if
 function save(){
   // Defensive: remove corrupted plan entries before saving
   if(D.plan)D.plan=D.plan.filter(item=>item.type!=='task'||typeof item.id==='string');
-  localDirty=true;saveL();debouncedPush()}
+  D._lastModified=Date.now();localDirty=true;saveL();debouncedPush()}
+function saveDirty(){D._lastModified=Date.now();localDirty=true;saveL();debouncedPush()}
 
 // ===== UTILS =====
 function id(){return Date.now().toString(36)+Math.random().toString(36).slice(2,7)}
@@ -171,16 +172,16 @@ function checkGoal(){const t=today(),g=D.settings.dailyGoal;if(!g||g<=0)return;
   if(!D.dailyGoalLog[t]||D.dailyGoalLog[t]===true)D.dailyGoalLog[t]=g;
   const alreadyEarned=D.pointsHistory.some(h=>h.date.slice(0,10)===t&&h.task==='🎯 Daily goal bonus');
   if(alreadyEarned)return;
-  if(ptsForDay(t)>=g){const b=Math.floor(g*0.25);D.points+=b;D.pointsHistory.push({date:localISO(),task:'🎯 Daily goal bonus',points:b,type:'earned'});updateStreak();saveL();debouncedPush();confetti();showGoalModal(g,b);setTimeout(checkHighScores,1500)}}
+  if(ptsForDay(t)>=g){const b=Math.floor(g*0.25);D.points+=b;D.pointsHistory.push({date:localISO(),task:'🎯 Daily goal bonus',points:b,type:'earned'});updateStreak();saveDirty();confetti();showGoalModal(g,b);setTimeout(checkHighScores,1500)}}
 
 function checkGoalForDay(day){
   const g=D.dailyGoalLog[day];if(!g||g===true)return;
   const nonBonus=D.pointsHistory.filter(h=>h.date.slice(0,10)===day&&h.type==='earned'&&h.task!=='🎯 Daily goal bonus').reduce((s,h)=>s+h.points,0);
   const bonusIdx=D.pointsHistory.findIndex(h=>h.date.slice(0,10)===day&&h.task==='🎯 Daily goal bonus');
   if(nonBonus>=g&&bonusIdx<0){
-    const b=Math.floor(g*0.25);D.points+=b;D.pointsHistory.push({date:day+'T00:00:00.000Z',task:'🎯 Daily goal bonus',points:b,type:'earned'});updateStreak();saveL();debouncedPush();render();
+    const b=Math.floor(g*0.25);D.points+=b;D.pointsHistory.push({date:day+'T00:00:00.000Z',task:'🎯 Daily goal bonus',points:b,type:'earned'});updateStreak();saveDirty();render();
   } else if(nonBonus<g&&bonusIdx>=0){
-    D.points-=D.pointsHistory[bonusIdx].points;D.pointsHistory.splice(bonusIdx,1);updateStreak();saveL();debouncedPush();render();
+    D.points-=D.pointsHistory[bonusIdx].points;D.pointsHistory.splice(bonusIdx,1);updateStreak();saveDirty();render();
   }
 }
 
@@ -244,7 +245,7 @@ function completeTask(tid,mins,finished){
   if(task.countBased){h.rate=`${task.ptsAmount} points per ${task.ptsPerCount} ${task.countUnit}`}
   const prevHistLen=D.pointsHistory.length;
   D.pointsHistory.push(h);
-  inlineMinId=null;saveL();debouncedPush();confetti();checkGoal();
+  inlineMinId=null;saveDirty();confetti();checkGoal();
   // Check if task goal was just met
   if(task.goal){const gp=getGoalProgress(task);if(gp&&gp.pct>=100){const contribution=task.timeBased?(mins||0):task.countBased?(mins||0):1;if(gp.current-contribution<task.goal.target)setTimeout(()=>{const tc=document.getElementById('toast-container');const goalToast=document.createElement('div');goalToast.className='toast';goalToast.style.cssText='bottom:auto;top:80px';goalToast.textContent='🎯 '+task.name+' goal hit!';tc.appendChild(goalToast);setTimeout(()=>goalToast.remove(),3000)},500)}
     // Auto-complete one-time tasks when total goal is met
@@ -254,7 +255,7 @@ function completeTask(tid,mins,finished){
   }
   render();
   const bonusMsg=bonus>0?` (includes +${bonus} completion bonus!)`:'';
-  showUndo(()=>{Object.assign(task,prev);D.points=prevP;D.pointsHistory.length=prevHistLen;saveL();debouncedPush();
+  showUndo(()=>{Object.assign(task,prev);D.points=prevP;D.pointsHistory.length=prevHistLen;saveDirty();
     // Clear fired section tracker if this task is in the plan
     if(D.plan&&D.plan.some(i=>i.type==='task'&&i.id===tid)){let secI=0;for(let pi=0;pi<D.plan.length;pi++){if(D.plan[pi].type==='break')secI++;if(D.plan[pi].type==='task'&&D.plan[pi].id===tid)break}const td2=today();const fired=JSON.parse(localStorage.getItem('pt_firedSec_'+td2)||'[]');const fi=fired.indexOf(secI);if(fi>=0){fired.splice(fi,1);localStorage.setItem('pt_firedSec_'+td2,JSON.stringify(fired))}}
     render()});
@@ -332,7 +333,7 @@ function deleteHistEntry(idx){
       }
     });
   }
-  saveL();debouncedPush();render();
+  saveDirty();render();
   setTimeout(()=>checkGoalForDay(day),100);
 }
 function editHistEntry(idx,newPts){
@@ -1100,7 +1101,7 @@ function showSettings(){
   document.getElementById('spu')?.addEventListener('click',async()=>{const s=document.getElementById('sst');s.textContent='Pushing...';const ok=await gistPush();s.textContent=ok?'✅ Pushed!':'❌ Failed'});
   document.getElementById('sexp')?.addEventListener('click',exportData);
   document.getElementById('simp')?.addEventListener('click',()=>document.getElementById('simp-file')?.click());
-  document.getElementById('simp-file')?.addEventListener('change',e=>{const f=e.target.files[0];if(!f)return;const r=new FileReader();r.onload=ev=>{try{const imported=JSON.parse(ev.target.result);const ls=D.settings;D={...JSON.parse(JSON.stringify(DEFAULT_DATA)),...imported,settings:ls};saveL();debouncedPush();updateStreak();closeM();render();toast('📥 Backup restored!')}catch(err){toast('❌ Invalid file')}};r.readAsText(f)});
+  document.getElementById('simp-file')?.addEventListener('change',e=>{const f=e.target.files[0];if(!f)return;const r=new FileReader();r.onload=ev=>{try{const imported=JSON.parse(ev.target.result);const ls=D.settings;D={...JSON.parse(JSON.stringify(DEFAULT_DATA)),...imported,settings:ls};saveDirty();updateStreak();closeM();render();toast('📥 Backup restored!')}catch(err){toast('❌ Invalid file')}};r.readAsText(f)});
 }
 function showGoalSettingModal(){
   const hasGoal = D.settings.dailyGoal > 0;
@@ -1138,7 +1139,7 @@ function showGoalEditModal(){
   function calc(){const h=parseFloat(document.getElementById('dg-hrs')?.value),a=parseInt(document.getElementById('dg-ann')?.value);if(h>0&&a){const pts=Math.round((h*60/15)*a);document.getElementById('dg-calc').textContent='= '+pts+' points';document.getElementById('dg-val').value=pts}else{document.getElementById('dg-calc').textContent=''}}
   document.getElementById('dg-hrs')?.addEventListener('input',calc);
   document.getElementById('dg-ann')?.addEventListener('change',calc);
-  document.getElementById('dg-save')?.addEventListener('click',()=>{const v=parseInt(document.getElementById('dg-val').value);if(!Number.isInteger(v)||v<1)return;D.settings.dailyGoal=v;D.dailyGoalLog[today()]=v;saveL();debouncedPush();closeM();render()});
+  document.getElementById('dg-save')?.addEventListener('click',()=>{const v=parseInt(document.getElementById('dg-val').value);if(!Number.isInteger(v)||v<1)return;D.settings.dailyGoal=v;D.dailyGoalLog[today()]=v;saveDirty();closeM();render()});
 }
 // ===== ACHIEVEMENTS =====
 function getDailyHighScores(){
@@ -1668,7 +1669,7 @@ function bindAll(){
   document.getElementById('rsort')?.addEventListener('click',()=>{recurSort=recurSort==='custom'?'due':'custom';render()});
   // Tasks
   document.querySelectorAll('.grp-hdr').forEach(b=>b.addEventListener('click',()=>{const g=b.dataset.grp;if(collapsedGroups.has(g))collapsedGroups.delete(g);else collapsedGroups.add(g);localStorage.setItem('pt_collapsedGroups',JSON.stringify([...collapsedGroups]));render()}));
-  document.querySelectorAll('.grp-done').forEach(b=>b.addEventListener('click',e=>{e.stopPropagation();const g=b.dataset.grp;const td=today();const gTasks=D.tasks.filter(t=>t.group===g&&!t.archived);const prevStates=gTasks.map(t=>({id:t.id,state:JSON.parse(JSON.stringify(t))}));const prevP=D.points;const prevHistLen=D.pointsHistory.length;let completed=0;gTasks.forEach(t=>{if(t.type==='evergreen'){if(t.timeBased)completeTask(t.id,t.ptsPerMinutes||1);else if(t.countBased)completeTask(t.id,1);else completeTask(t.id);completed++;return}if(t.timeBased||t.countBased)return;if(t.type==='one-time'&&!t.completed){completeTask(t.id);completed++}else if(t.type==='daily'){const doneToday=D.pointsHistory.some(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td&&h.task.includes('✅'));if(!doneToday){completeTask(t.id);completed++}}else if(t.type==='recurring'){completeTask(t.id);completed++}});if(completed>0){render();showUndo(()=>{prevStates.forEach(ps=>{const t=D.tasks.find(x=>x.id===ps.id);if(t)Object.assign(t,ps.state)});D.points=prevP;D.pointsHistory.length=prevHistLen;saveL();debouncedPush();render()})}}));
+  document.querySelectorAll('.grp-done').forEach(b=>b.addEventListener('click',e=>{e.stopPropagation();const g=b.dataset.grp;const td=today();const gTasks=D.tasks.filter(t=>t.group===g&&!t.archived);const prevStates=gTasks.map(t=>({id:t.id,state:JSON.parse(JSON.stringify(t))}));const prevP=D.points;const prevHistLen=D.pointsHistory.length;let completed=0;gTasks.forEach(t=>{if(t.type==='evergreen'){if(t.timeBased)completeTask(t.id,t.ptsPerMinutes||1);else if(t.countBased)completeTask(t.id,1);else completeTask(t.id);completed++;return}if(t.timeBased||t.countBased)return;if(t.type==='one-time'&&!t.completed){completeTask(t.id);completed++}else if(t.type==='daily'){const doneToday=D.pointsHistory.some(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td&&h.task.includes('✅'));if(!doneToday){completeTask(t.id);completed++}}else if(t.type==='recurring'){completeTask(t.id);completed++}});if(completed>0){render();showUndo(()=>{prevStates.forEach(ps=>{const t=D.tasks.find(x=>x.id===ps.id);if(t)Object.assign(t,ps.state)});D.points=prevP;D.pointsHistory.length=prevHistLen;saveDirty();render()})}}));
   document.querySelectorAll('.grp-skip').forEach(b=>b.addEventListener('click',e=>{e.stopPropagation();const g=b.dataset.grp;const td=today();const gTasks=D.tasks.filter(t=>t.group===g&&!t.archived);const allSkipped=gTasks.every(t=>t.goalSkips&&t.goalSkips.includes(td));if(allSkipped){gTasks.forEach(t=>{if(t.goalSkips){const idx=t.goalSkips.indexOf(td);if(idx>=0)t.goalSkips.splice(idx,1)}});save();render();toast(`↩️ Unskipped ${g}`)}else{let count=0;gTasks.forEach(t=>{if(!t.goalSkips)t.goalSkips=[];if(!t.goalSkips.includes(td)){t.goalSkips.push(td);count++}});save();render();toast(`⏭️ Skipped ${g} (${count} tasks)`)}}));
   document.querySelectorAll('.grp-move').forEach(b=>b.addEventListener('click',e=>{e.stopPropagation();const g=b.dataset.grp,dir=b.dataset.d;if(!D.groupOrder)D.groupOrder=getGroups();const idx=D.groupOrder.indexOf(g);if(idx<0){D.groupOrder=getGroups();const idx2=D.groupOrder.indexOf(g);if(idx2<0)return;moveInArr(D.groupOrder,idx2,dir)}else{moveInArr(D.groupOrder,idx,dir)}save();render()}));
   document.querySelectorAll('.grp-hide').forEach(b=>b.addEventListener('click',e=>{e.stopPropagation();const g=b.dataset.grp;const td=today();const gTasks=D.tasks.filter(t=>t.group===g&&!t.archived);const allHidden=gTasks.every(t=>t.hiddenToday&&t.hiddenToday.includes(td));if(allHidden){gTasks.forEach(t=>{if(t.hiddenToday){const idx=t.hiddenToday.indexOf(td);if(idx>=0)t.hiddenToday.splice(idx,1)}});save();render();toast(`↩️ Unhidden ${g}`)}else{let count=0;gTasks.forEach(t=>{if(!t.hiddenToday)t.hiddenToday=[];if(!t.hiddenToday.includes(td)){t.hiddenToday.push(td);if(t.goalSkips){const si=t.goalSkips.indexOf(td);if(si>=0)t.goalSkips.splice(si,1)}count++}});save();render();toast(`🚫 Hidden ${g} (${count} tasks)`)}}));
@@ -2053,7 +2054,7 @@ function bindQuickLog(){
     const h={date:localISO(),task:name,taskId:null,points:pts,type:'earned'};
     if(tb){const hr=parseInt(document.getElementById('qlh')?.value)||0,mn=parseInt(document.getElementById('qlm')?.value)||0;h.minutes=hr*60+mn}
     if(cb){const cc=parseInt(document.getElementById('qlcc')?.value)||0;const cu=document.getElementById('qlcu')?.value.trim()||'units';if(cc>0){h.count=cc;h.countUnit=cu}}
-    D.points+=pts;D.pointsHistory.push(h);saveL();debouncedPush();confetti();checkGoal();render();
+    D.points+=pts;D.pointsHistory.push(h);saveDirty();confetti();checkGoal();render();
   });
 }
 function valQL(){
@@ -2259,7 +2260,7 @@ function stopSW(){
     // Log single grouped entry
     D.pointsHistory.push({date:localISO(),task:'⏱️ Plan',points:totalPlanPts,type:'earned',minutes:mins,seconds:e,planTasks:planTaskDetails});
     if(totalPlanPts>0)checkGoal();
-    saveL();debouncedPush();
+    saveDirty();
   } else {
     const theTask=taskId?D.tasks.find(x=>x.id===taskId):null;
     if(theTask&&theTask.countBased){
@@ -2271,7 +2272,7 @@ function stopSW(){
         const pts=cnt>0?Math.floor(cnt*theTask.ptsAmount/theTask.ptsPerCount):0;
         if(pts>0){D.points+=pts;checkGoal()}
         const h={date:localISO(),task:'⏱️ '+savedLabel,taskId:savedTaskId,points:pts,type:'earned',minutes:savedMins,seconds:savedE,count:cnt,countUnit:theTask.countUnit};
-        D.pointsHistory.push(h);saveL();debouncedPush();closeM();render();confetti();
+        D.pointsHistory.push(h);saveDirty();closeM();render();confetti();
         const timeStr=savedMins>=60?`${Math.floor(savedMins/60)}h ${savedMins%60}m`:`${savedMins}m`;
         modal(`<div style="text-align:center"><div style="font-size:2rem;margin-bottom:8px">🎉</div><h2 style="color:var(--accent-dark);margin-bottom:8px">Session Complete!</h2><p style="font-size:.85rem;margin-bottom:4px">Time: ${timeStr}</p>${cnt>0?`<p style="font-size:.85rem;margin-bottom:4px">${cnt} ${theTask.countUnit||'units'}</p>`:''}<p style="font-size:1rem;font-weight:bold;color:var(--success-dark)">+${pts} points</p><button id="sw-sum-ok" class="btn bpri" style="margin-top:12px;width:100%">Nice!</button></div>`);
         document.getElementById('sw-sum-ok')?.addEventListener('click',closeM);
@@ -2283,7 +2284,7 @@ function stopSW(){
     const exactPts=e*T.pts/(T.per*60),pts=awardTimerPts(exactPts);
     if(pts>0){D.points+=pts;checkGoal()}
     D.pointsHistory.push({date:localISO(),task:'⏱️ '+label,taskId:taskId||null,points:pts,type:'earned',minutes:mins,seconds:e,rate:`${T.pts} points per ${T.per} minute${T.per>1?'s':''}`});
-    saveL();debouncedPush();
+    saveDirty();
     totalPlanPts=pts;
   }
   const savedPts=T.pts,savedPer=T.per;
@@ -2321,9 +2322,9 @@ function stopSW(){
           const lastEntry=D.pointsHistory[D.pointsHistory.length-1];
           if(lastEntry&&lastEntry.taskId===taskId){lastEntry.task+=' ✅';lastEntry.points+=bonus;lastEntry.bonus=bonus}
           if(linkedTask.countBased){const cnt=parseInt(document.getElementById('qc-count')?.value)||0;if(cnt>0&&lastEntry&&lastEntry.taskId===taskId){lastEntry.count=cnt;lastEntry.countUnit=linkedTask.countUnit;const countPts=Math.floor(cnt*linkedTask.ptsAmount/linkedTask.ptsPerCount);lastEntry.points+=countPts;D.points+=countPts}}
-          saveL();debouncedPush();closeM();render();setTimeout(()=>showCongratsModal(label,e,totalPlanPts),200)});
+          saveDirty();closeM();render();setTimeout(()=>showCongratsModal(label,e,totalPlanPts),200)});
         document.getElementById('qc-no')?.addEventListener('click',()=>{
-          if(linkedTask.countBased){const cnt=parseInt(document.getElementById('qc-count')?.value)||0;if(cnt>0){const lastEntry=D.pointsHistory[D.pointsHistory.length-1];if(lastEntry&&lastEntry.taskId===taskId){lastEntry.count=cnt;lastEntry.countUnit=linkedTask.countUnit;const countPts=Math.floor(cnt*linkedTask.ptsAmount/linkedTask.ptsPerCount);lastEntry.points+=countPts;D.points+=countPts;saveL();debouncedPush()}}}
+          if(linkedTask.countBased){const cnt=parseInt(document.getElementById('qc-count')?.value)||0;if(cnt>0){const lastEntry=D.pointsHistory[D.pointsHistory.length-1];if(lastEntry&&lastEntry.taskId===taskId){lastEntry.count=cnt;lastEntry.countUnit=linkedTask.countUnit;const countPts=Math.floor(cnt*linkedTask.ptsAmount/linkedTask.ptsPerCount);lastEntry.points+=countPts;D.points+=countPts;saveDirty()}}}
           closeM();render();setTimeout(()=>showCongratsModal(label,e,totalPlanPts),200)});
       } else {render();showCongratsModal(label,e,totalPlanPts)}
     },300);
@@ -2381,7 +2382,7 @@ function stopPM(){
     D.pointsHistory.push({date:localISO(),task:'🍅 Plan',points:totalPlanPts,type:'earned',minutes:mins,seconds:e,pomo:`${T.workDur}/${T.breakDur}`,planTasks:planTaskDetails,workSeconds:T.totalWork+(T.phase==='work'?e:0),breakSeconds:T.totalBreak+(T.phase==='break'?e:0)});
     if(totalPlanPts>0)checkGoal();
     pts=totalPlanPts;
-    saveL();debouncedPush();
+    saveDirty();
   } else if(T.phase==='work'||T.totalWork>0){
     const workSecs=T.totalWork+(T.phase==='work'?e:0);const breakSecs=T.totalBreak+(T.phase==='break'?e:0);
     mins=Math.floor(workSecs/60);
@@ -2394,7 +2395,7 @@ function stopPM(){
         const pts=cnt>0?Math.floor(cnt*theTask.ptsAmount/theTask.ptsPerCount):0;
         if(pts>0){D.points+=pts;checkGoal()}
         D.pointsHistory.push({date:localISO(),task:'🍅 '+savedLabel,taskId:savedTaskId,points:pts,type:'earned',minutes:savedMins,seconds:savedWorkSecs,pomo:`${T.workDur||25}/${T.breakDur||5}`,count:cnt,countUnit:theTask.countUnit,workSeconds:savedWorkSecs,breakSeconds:savedBreakSecs});
-        saveL();debouncedPush();closeM();render();confetti();
+        saveDirty();closeM();render();confetti();
         const timeStr=savedMins>=60?`${Math.floor(savedMins/60)}h ${savedMins%60}m`:`${savedMins}m`;
         modal(`<div style="text-align:center"><div style="font-size:2rem;margin-bottom:8px">🎉</div><h2 style="color:var(--accent-dark);margin-bottom:8px">Session Complete!</h2><p style="font-size:.85rem;margin-bottom:4px">Work: ${timeStr}</p>${cnt>0?`<p style="font-size:.85rem;margin-bottom:4px">${cnt} ${theTask.countUnit||'units'}</p>`:''}<p style="font-size:1rem;font-weight:bold;color:var(--success-dark)">+${pts} points</p><button id="pm-sum-ok" class="btn bpri" style="margin-top:12px;width:100%">Nice!</button></div>`);
         document.getElementById('pm-sum-ok')?.addEventListener('click',closeM);
@@ -2405,7 +2406,7 @@ function stopPM(){
     }
     if(!T.planMode){const exactPts=workSecs*T.pts/(T.per*60);pts=awardTimerPts(exactPts);if(pts>0){D.points+=pts;checkGoal()}}
     D.pointsHistory.push({date:localISO(),task:'🍅 '+label,taskId:taskId||null,points:pts,type:'earned',minutes:mins,seconds:workSecs,pomo:`${T.workDur}/${T.breakDur}`,rate:`${T.pts} points per ${T.per} minute${T.per>1?'s':''}`,workSeconds:workSecs,breakSeconds:breakSecs});
-    saveL();debouncedPush();
+    saveDirty();
   }
   const sessionWorkSecs=T.totalWork+(T.phase==='work'?e:0);
   const sessionBreakSecs=T.totalBreak+(T.phase==='break'?e:0);
@@ -2447,9 +2448,9 @@ function stopPM(){
         const lastEntry=D.pointsHistory[D.pointsHistory.length-1];
         if(lastEntry&&lastEntry.taskId===taskId){lastEntry.task+=' ✅';lastEntry.points+=bonus;lastEntry.bonus=bonus}
         if(linkedTask.countBased){const cnt=parseInt(document.getElementById('qc-count')?.value)||0;if(cnt>0&&lastEntry&&lastEntry.taskId===taskId){lastEntry.count=cnt;lastEntry.countUnit=linkedTask.countUnit;const countPts=Math.floor(cnt*linkedTask.ptsAmount/linkedTask.ptsPerCount);lastEntry.points+=countPts;D.points+=countPts}}
-        saveL();debouncedPush();closeM();render();setTimeout(()=>showCongratsModal(label,sessionWorkSecs,sessionTotalPts+bonus,sessionWorkSecs,sessionBreakSecs),200)});
+        saveDirty();closeM();render();setTimeout(()=>showCongratsModal(label,sessionWorkSecs,sessionTotalPts+bonus,sessionWorkSecs,sessionBreakSecs),200)});
       document.getElementById('qc-no')?.addEventListener('click',()=>{
-        if(linkedTask.countBased){const cnt=parseInt(document.getElementById('qc-count')?.value)||0;if(cnt>0){const lastEntry=D.pointsHistory[D.pointsHistory.length-1];if(lastEntry&&lastEntry.taskId===taskId){lastEntry.count=cnt;lastEntry.countUnit=linkedTask.countUnit;const countPts=Math.floor(cnt*linkedTask.ptsAmount/linkedTask.ptsPerCount);lastEntry.points+=countPts;D.points+=countPts;saveL();debouncedPush()}}}
+        if(linkedTask.countBased){const cnt=parseInt(document.getElementById('qc-count')?.value)||0;if(cnt>0){const lastEntry=D.pointsHistory[D.pointsHistory.length-1];if(lastEntry&&lastEntry.taskId===taskId){lastEntry.count=cnt;lastEntry.countUnit=linkedTask.countUnit;const countPts=Math.floor(cnt*linkedTask.ptsAmount/linkedTask.ptsPerCount);lastEntry.points+=countPts;D.points+=countPts;saveDirty()}}}
         closeM();render();setTimeout(()=>showCongratsModal(label,sessionWorkSecs,sessionTotalPts,sessionWorkSecs,sessionBreakSecs),200)});
     } else {render();showCongratsModal(label,sessionWorkSecs,sessionTotalPts,sessionWorkSecs,sessionBreakSecs)}
     },300);
