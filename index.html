@@ -25,7 +25,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-seri
 if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
 
 // ===== DATA =====
-const APP_VERSION='4.1.1';
+const APP_VERSION='4.1.2';
 const DEFAULT_DATA={tasks:[],points:0,pointsHistory:[],rewards:[],techniques:[],metrics:[],settings:{gistId:'',token:'',dailyGoal:0},dailyGoalLog:{},streak:0,fractional:0,groupOrder:[],plan:[],savedPlans:[],planSectionRewards:{},groceries:[],recipes:[]};
 let D=JSON.parse(JSON.stringify(DEFAULT_DATA));
 let view='tasks',toolsView='menu',expandedTech=null,inlineMinId=null,categoryFilter='all',recurSort='custom';
@@ -346,7 +346,7 @@ function editHistEntry(idx,newPts){
 // ===== DRAG & DROP ENGINE =====
 let dragState=null;
 function initDragList(containerSelector,itemSelector,onReorder){
-  const container=document.querySelector(containerSelector);
+  const container=typeof containerSelector==='string'?document.querySelector(containerSelector):containerSelector;
   if(!container)return;
   const items=[...container.querySelectorAll(itemSelector)];
   if(!items.length)return;
@@ -828,7 +828,7 @@ function rBucket(title,tasks,sortable){
       cards+=rCard(t,tIdx,ungrouped.length);
     }
   });
-  return `<div style="margin-bottom:18px"><h2 style="font-size:1rem;color:var(--accent-dark);margin-bottom:8px;display:inline">${title}</h2>${sortBtn}<div style="margin-top:8px">${cards}</div></div>`}
+  return `<div style="margin-bottom:18px"><h2 style="font-size:1rem;color:var(--accent-dark);margin-bottom:8px;display:inline">${title}</h2>${sortBtn}<div class="task-bucket" style="margin-top:8px">${cards}</div></div>`}
 function rCard(t,i,n){
   const isM=inlineMinId===t.id,pl=t.timeBased?`${t.ptsAmount} pts / ${t.ptsPerMinutes} min`:t.countBased?`${t.ptsAmount} pts / ${t.ptsPerCount} ${t.countUnit}`:`+${t.points}`;
   // Goal progress bar
@@ -846,7 +846,7 @@ function rCard(t,i,n){
   // Time invested for time-based incomplete tasks
   let investedBadge='';
   if(t.timeBased&&!(t.type==='one-time'&&t.completed)){const totalMins=D.pointsHistory.filter(h=>h.taskId===t.id&&h.type==='earned'&&!h.task.includes('✅')).reduce((s,h)=>s+(h.minutes||0),0);if(totalMins>0){const ih=Math.floor(totalMins/60),im=totalMins%60;investedBadge=` · ${ih?ih+'h ':''}${im}m invested`}}
-  return `<div class="tcard" style="background:${catBg(t.category)}"><div style="display:flex;align-items:center;gap:10px"><button class="cbtn" data-id="${t.id}">✓</button><div style="flex:1;min-width:0;cursor:pointer" class="tdet" data-id="${t.id}"><div style="font-weight:600;font-size:.9rem">${t.name}</div>${ageBadge}${t.type==='recurring'?`<div style="font-size:.7rem;color:var(--text-dim)">Every ${t.cadenceDays}d</div>`:''}${t.type==='daily'&&!t.goal&&getDailyStreak(t)>0?`<div style="font-size:.7rem;color:var(--warning-dark)">🔥 ${getDailyStreak(t)} day streak</div>`:''}${t.timeBased?`<div style="font-size:.7rem;color:var(--accent-dark)">${investedBadge?'⏱'+investedBadge:''}</div>`:''}${t.countBased?'':''}</div><span style="color:var(--warning-dark);font-weight:bold;font-size:.8rem">${pl}</span><div style="display:flex;flex-direction:column;gap:1px">${i>0?`<button class="mbtn" data-id="${t.id}" data-d="up">▲</button>`:'<div style="height:16px"></div>'}${i<n-1?`<button class="mbtn" data-id="${t.id}" data-d="down">▼</button>`:'<div style="height:16px"></div>'}</div></div>${goalBar}${isM?`<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);">${t.countBased?`<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><input id="imi-count" type="number" min="1" placeholder="" class="inf" style="width:70px;margin:0;text-align:center"><span class="rl">${t.countUnit||'units'}</span></div><div id="imi-preview" style="font-size:.8rem;color:var(--accent-dark);margin:6px 0;"></div>`:`<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><input id="imi-h" type="number" min="0" placeholder="" class="inf" style="width:60px;margin:0;text-align:center"><span class="rl">hours</span><input id="imi-m" type="number" min="0" max="59" placeholder="" class="inf" style="width:60px;margin:0;text-align:center"><span class="rl">minutes</span></div><div id="imi-preview" style="font-size:.8rem;color:var(--accent-dark);margin:6px 0;"></div>`}<div style="display:flex;gap:6px;flex-wrap:wrap">${t.type==='evergreen'||(t.type==='one-time'&&t.goal)?`<button id="ims" data-id="${t.id}" class="btn bsuc" style="padding:8px 12px;font-size:.8rem">Log</button>`:`<button id="ims-work" data-id="${t.id}" class="btn bmut" style="padding:8px 10px;font-size:.8rem">Worked on it</button><button id="ims-done" data-id="${t.id}" class="btn bsuc" style="padding:8px 10px;font-size:.8rem">Finished! 🎉</button>`}<button id="imc" class="btn bmut" style="padding:8px 10px">✕</button></div></div>`:''}</div>`}
+  return `<div class="tcard task-drag-item" data-id="${t.id}" style="background:${catBg(t.category)};user-select:none;-webkit-user-select:none"><div style="display:flex;align-items:center;gap:10px"><button class="cbtn" data-id="${t.id}">✓</button><div style="flex:1;min-width:0;cursor:pointer" class="tdet" data-id="${t.id}"><div style="font-weight:600;font-size:.9rem">${t.name}</div>${ageBadge}${t.type==='recurring'?`<div style="font-size:.7rem;color:var(--text-dim)">Every ${t.cadenceDays}d</div>`:''}${t.type==='daily'&&!t.goal&&getDailyStreak(t)>0?`<div style="font-size:.7rem;color:var(--warning-dark)">🔥 ${getDailyStreak(t)} day streak</div>`:''}${t.timeBased?`<div style="font-size:.7rem;color:var(--accent-dark)">${investedBadge?'⏱'+investedBadge:''}</div>`:''}${t.countBased?'':''}</div><span style="color:var(--warning-dark);font-weight:bold;font-size:.8rem">${pl}</span></div>${goalBar}${isM?`<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);">${t.countBased?`<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><input id="imi-count" type="number" min="1" placeholder="" class="inf" style="width:70px;margin:0;text-align:center"><span class="rl">${t.countUnit||'units'}</span></div><div id="imi-preview" style="font-size:.8rem;color:var(--accent-dark);margin:6px 0;"></div>`:`<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><input id="imi-h" type="number" min="0" placeholder="" class="inf" style="width:60px;margin:0;text-align:center"><span class="rl">hours</span><input id="imi-m" type="number" min="0" max="59" placeholder="" class="inf" style="width:60px;margin:0;text-align:center"><span class="rl">minutes</span></div><div id="imi-preview" style="font-size:.8rem;color:var(--accent-dark);margin:6px 0;"></div>`}<div style="display:flex;gap:6px;flex-wrap:wrap">${t.type==='evergreen'||(t.type==='one-time'&&t.goal)?`<button id="ims" data-id="${t.id}" class="btn bsuc" style="padding:8px 12px;font-size:.8rem">Log</button>`:`<button id="ims-work" data-id="${t.id}" class="btn bmut" style="padding:8px 10px;font-size:.8rem">Worked on it</button><button id="ims-done" data-id="${t.id}" class="btn bsuc" style="padding:8px 10px;font-size:.8rem">Finished! 🎉</button>`}<button id="imc" class="btn bmut" style="padding:8px 10px">✕</button></div></div>`:''}</div>`}
 function rSleep(tasks,title){const td=today();
   // Separate into actual upcoming (numeric days) vs skipped/hidden (string left)
   const upcoming=tasks.filter(t=>typeof t.left==='number').sort((a,b)=>a.left-b.left);
@@ -1699,6 +1699,29 @@ function bindAll(){
   document.querySelectorAll('.sldet').forEach(b=>b.addEventListener('click',()=>showTaskDetail(b.dataset.id)));
   document.querySelectorAll('.sleep-folder').forEach(b=>b.addEventListener('click',()=>{const s=b.dataset.section;if(expandedSleep.has(s))expandedSleep.delete(s);else expandedSleep.add(s);render()}));
   document.querySelectorAll('.mbtn:not(.plan-q-move)').forEach(b=>b.addEventListener('click',e=>{e.stopPropagation();moveTask(b.dataset.id,b.dataset.d)}));
+  // Task drag-to-reorder within each type bucket
+  document.querySelectorAll('.task-bucket').forEach(bucket=>{
+    initDragList(bucket,'.task-drag-item',(fromIdx,toIdx)=>{
+      const items=[...bucket.querySelectorAll('.task-drag-item')];
+      const fromId=items[fromIdx]?.dataset.id;
+      const toId=items[toIdx]?.dataset.id;
+      if(!fromId)return;
+      const fromRealIdx=D.tasks.findIndex(t=>t.id===fromId);
+      if(fromRealIdx<0)return;
+      const task=D.tasks[fromRealIdx];
+      D.tasks.splice(fromRealIdx,1);
+      if(toId){
+        const toRealIdx=D.tasks.findIndex(t=>t.id===toId);
+        D.tasks.splice(toRealIdx,0,task);
+      } else {
+        // Dropped at end — find last task of same type and insert after
+        const sameType=D.tasks.filter(t=>t.type===task.type);
+        if(sameType.length){const lastIdx=D.tasks.indexOf(sameType[sameType.length-1]);D.tasks.splice(lastIdx+1,0,task)}
+        else D.tasks.push(task);
+      }
+      save();render();
+    });
+  });
   document.getElementById('show-af')?.addEventListener('click',()=>{const c=document.getElementById('afc');if(c.innerHTML){c.innerHTML='';return}c.innerHTML=rAddForm();bindAddForm()});
   document.getElementById('quick-log-btn')?.addEventListener('click',()=>{const c=document.getElementById('qlfc');if(c.innerHTML){c.innerHTML='';return}c.innerHTML=rQuickLog();bindQuickLog()});
   document.getElementById('surprise-btn')?.addEventListener('click',showSurpriseModal);
