@@ -25,7 +25,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-seri
 if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
 
 // ===== DATA =====
-const APP_VERSION='4.1.2';
+const APP_VERSION='4.1.3';
 const DEFAULT_DATA={tasks:[],points:0,pointsHistory:[],rewards:[],techniques:[],metrics:[],settings:{gistId:'',token:'',dailyGoal:0},dailyGoalLog:{},streak:0,fractional:0,groupOrder:[],plan:[],savedPlans:[],planSectionRewards:{},groceries:[],recipes:[]};
 let D=JSON.parse(JSON.stringify(DEFAULT_DATA));
 let view='tasks',toolsView='menu',expandedTech=null,inlineMinId=null,categoryFilter='all',recurSort='custom';
@@ -409,7 +409,7 @@ function dragMove(e){
       return;
     }
   }
-  if(siblings.length>0){const last=siblings[siblings.length-1];if(placeholder!==last.nextElementSibling){container.appendChild(placeholder)}}
+  if(siblings.length>0){const last=siblings[siblings.length-1];const afterLast=last.nextSibling;if(placeholder!==afterLast&&placeholder!==last.nextElementSibling){if(afterLast)container.insertBefore(placeholder,afterLast);else container.appendChild(placeholder)}}
 }
 function dragEnd(){
   if(!dragState)return;
@@ -817,7 +817,7 @@ function rBucket(title,tasks,sortable){
       const moveDown=gIdx<groupOrder.length-1?`<button class="grp-move ibtn" data-grp="${g}" data-d="down" style="font-size:.65rem;padding:2px 4px">▼</button>`:'';
       cards+=`<div class="grp-hdr" data-grp="${g}" style="margin:10px 0 4px;font-size:.8rem;color:var(--accent-dark);font-weight:600;padding:8px 10px;background:${gColor};border-radius:8px;cursor:pointer"><div style="display:flex;justify-content:space-between;align-items:center"><span>${collapsed?'▶':'▼'} 📁 ${g}</span><span style="font-size:.7rem;color:var(--text-dim);font-weight:normal">${progressText}${ptsText}</span></div></div>`;
       if(!collapsed){
-        cards+=`<div style="padding-left:10px;border-left:3px solid ${gColor};margin-left:4px">`;
+        cards+=`<div class="grp-content" data-grp="${g}" style="padding-left:10px;border-left:3px solid ${gColor};margin-left:4px">`;
         cards+=gTasks.map((t,i)=>rCard(t,i,gTasks.length)).join('');
         cards+=`<div style="display:flex;gap:6px;margin:4px 0 8px;flex-wrap:wrap" onclick="event.stopPropagation()"><button class="grp-done btn bsuc" data-grp="${g}" style="font-size:.7rem;padding:4px 8px">✓ All</button><button class="grp-skip btn ${skippedAll?'bwar':'bmut'}" data-grp="${g}" style="font-size:.7rem;padding:4px 8px">⏭️ Skip</button><button class="grp-hide btn ${hiddenAll?'bdan':'bmut'}" data-grp="${g}" style="font-size:.7rem;padding:4px 8px">🚫 Not today</button><div style="flex:1"></div>${moveUp}${moveDown}</div>`;
         cards+=`</div>`;
@@ -825,7 +825,7 @@ function rBucket(title,tasks,sortable){
     } else {
       const t=item.task;
       const tIdx=ungrouped.indexOf(t);
-      cards+=rCard(t,tIdx,ungrouped.length);
+      cards+=`<div class="ungrouped-task-wrap">${rCard(t,tIdx,ungrouped.length)}</div>`;
     }
   });
   return `<div style="margin-bottom:18px"><h2 style="font-size:1rem;color:var(--accent-dark);margin-bottom:8px;display:inline">${title}</h2>${sortBtn}<div class="task-bucket" style="margin-top:8px">${cards}</div></div>`}
@@ -1699,10 +1699,36 @@ function bindAll(){
   document.querySelectorAll('.sldet').forEach(b=>b.addEventListener('click',()=>showTaskDetail(b.dataset.id)));
   document.querySelectorAll('.sleep-folder').forEach(b=>b.addEventListener('click',()=>{const s=b.dataset.section;if(expandedSleep.has(s))expandedSleep.delete(s);else expandedSleep.add(s);render()}));
   document.querySelectorAll('.mbtn:not(.plan-q-move)').forEach(b=>b.addEventListener('click',e=>{e.stopPropagation();moveTask(b.dataset.id,b.dataset.d)}));
-  // Task drag-to-reorder within each type bucket
+  // Task drag-to-reorder within each type bucket (ungrouped tasks only)
   document.querySelectorAll('.task-bucket').forEach(bucket=>{
-    initDragList(bucket,'.task-drag-item',(fromIdx,toIdx)=>{
-      const items=[...bucket.querySelectorAll('.task-drag-item')];
+    const directItems=[...bucket.querySelectorAll('.ungrouped-task-wrap')];
+    if(directItems.length>1){
+      initDragList(bucket,'.ungrouped-task-wrap',(fromIdx,toIdx)=>{
+        const items=[...bucket.querySelectorAll('.ungrouped-task-wrap .task-drag-item')];
+        const fromId=items[fromIdx]?.dataset.id;
+        const toId=items[toIdx]?.dataset.id;
+        if(!fromId)return;
+        const fromRealIdx=D.tasks.findIndex(t=>t.id===fromId);
+        if(fromRealIdx<0)return;
+        const task=D.tasks[fromRealIdx];
+        D.tasks.splice(fromRealIdx,1);
+        if(toId){
+          const toRealIdx=D.tasks.findIndex(t=>t.id===toId);
+          D.tasks.splice(toRealIdx,0,task);
+        } else {
+          const sameType=D.tasks.filter(t=>t.type===task.type&&!t.group);
+          if(sameType.length){const lastIdx=D.tasks.indexOf(sameType[sameType.length-1]);D.tasks.splice(lastIdx+1,0,task)}
+          else D.tasks.push(task);
+        }
+        save();render();
+      });
+    }
+  });
+  // Task drag-to-reorder within each group
+  document.querySelectorAll('.grp-content').forEach(grpDiv=>{
+    const grp=grpDiv.dataset.grp;
+    initDragList(grpDiv,'.task-drag-item',(fromIdx,toIdx)=>{
+      const items=[...grpDiv.querySelectorAll('.task-drag-item')];
       const fromId=items[fromIdx]?.dataset.id;
       const toId=items[toIdx]?.dataset.id;
       if(!fromId)return;
@@ -1714,9 +1740,8 @@ function bindAll(){
         const toRealIdx=D.tasks.findIndex(t=>t.id===toId);
         D.tasks.splice(toRealIdx,0,task);
       } else {
-        // Dropped at end — find last task of same type and insert after
-        const sameType=D.tasks.filter(t=>t.type===task.type);
-        if(sameType.length){const lastIdx=D.tasks.indexOf(sameType[sameType.length-1]);D.tasks.splice(lastIdx+1,0,task)}
+        const grpTasks=D.tasks.filter(t=>t.group===grp);
+        if(grpTasks.length){const lastIdx=D.tasks.indexOf(grpTasks[grpTasks.length-1]);D.tasks.splice(lastIdx+1,0,task)}
         else D.tasks.push(task);
       }
       save();render();
