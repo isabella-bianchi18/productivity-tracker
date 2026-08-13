@@ -25,7 +25,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-seri
 if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
 
 // ===== DATA =====
-const APP_VERSION='4.1.0';
+const APP_VERSION='4.1.1';
 const DEFAULT_DATA={tasks:[],points:0,pointsHistory:[],rewards:[],techniques:[],metrics:[],settings:{gistId:'',token:'',dailyGoal:0},dailyGoalLog:{},streak:0,fractional:0,groupOrder:[],plan:[],savedPlans:[],planSectionRewards:{},groceries:[],recipes:[]};
 let D=JSON.parse(JSON.stringify(DEFAULT_DATA));
 let view='tasks',toolsView='menu',expandedTech=null,inlineMinId=null,categoryFilter='all',recurSort='custom';
@@ -409,7 +409,7 @@ function dragMove(e){
       return;
     }
   }
-  if(siblings.length>0){const last=siblings[siblings.length-1];if(placeholder!==last.nextElementSibling)container.insertBefore(placeholder,last.nextSibling)}
+  if(siblings.length>0){const last=siblings[siblings.length-1];if(placeholder!==last.nextElementSibling){container.appendChild(placeholder)}}
 }
 function dragEnd(){
   if(!dragState)return;
