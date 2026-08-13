@@ -25,7 +25,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-seri
 if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
 
 // ===== DATA =====
-const APP_VERSION='4.3.1';
+const APP_VERSION='4.3.2';
 const DEFAULT_DATA={tasks:[],points:0,pointsHistory:[],rewards:[],techniques:[],metrics:[],settings:{gistId:'',token:'',dailyGoal:0},dailyGoalLog:{},streak:0,fractional:0,groupOrder:[],plan:[],savedPlans:[],planSectionRewards:{},groceries:[],recipes:[]};
 let D=JSON.parse(JSON.stringify(DEFAULT_DATA));
 let view='tasks',toolsView='menu',expandedTech=null,inlineMinId=null,categoryFilter='all',recurSort='custom',taskSearch='';
@@ -833,7 +833,7 @@ function rBucket(title,tasks,sortable){
     } else {
       const t=item.task;
       const tIdx=ungrouped.indexOf(t);
-      cards+=`<div class="bucket-item" data-id="${t.id}" style="user-select:none;-webkit-user-select:none;position:relative;overflow:hidden;border-radius:14px"><div class="swipe-indicator" style="position:absolute;left:0;top:0;bottom:0;width:100px;display:flex;align-items:center;justify-content:center;background:var(--accent);color:#fff;font-weight:600;font-size:.75rem;pointer-events:none;opacity:0">📋 Plan</div><div class="swipe-card" style="position:relative;background:var(--bg)">${rCard(t,tIdx,ungrouped.length)}</div></div>`;
+      cards+=`<div class="bucket-item" data-id="${t.id}" style="user-select:none;-webkit-user-select:none;position:relative"><div class="swipe-indicator" style="position:absolute;left:0;top:0;bottom:0;width:100px;display:flex;align-items:center;justify-content:center;background:var(--accent);border-radius:14px;color:#fff;font-weight:600;font-size:.75rem;pointer-events:none;opacity:0">📋 Plan</div><div class="swipe-card" style="position:relative">${rCard(t,tIdx,ungrouped.length)}</div></div>`;
     }
   });
   return `<div style="margin-bottom:18px"><h2 style="font-size:1rem;color:var(--accent-dark);margin-bottom:8px;display:inline">${title}</h2>${sortBtn}<div class="task-bucket" style="margin-top:8px">${cards}</div></div>`}
@@ -930,7 +930,7 @@ function rHistory(){
     const dayMins=ents.reduce((s,h)=>s+(h.minutes||0),0);
     const dayTimeStr=dayMins>=60?`${Math.floor(dayMins/60)}h ${dayMins%60}m`:`${dayMins}m`;
     daySummary=ents.length?`<div style="display:flex;justify-content:space-between;font-size:.8rem;color:var(--text-dim);margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid var(--border)"><span>✨ ${dayPts} pts earned</span><span>⏱ ${dayTimeStr} logged</span></div>`:'';
-    if(ents.length){detail=ents.filter(e=>!(e.points===0&&!e.planTasks&&(e.task.startsWith('⏱️')||e.task.startsWith('🍅')))).map(e=>{
+    if(ents.length){detail=ents.filter(e=>!(e.points===0&&!e.planTasks&&!e.minutes&&!e.count&&(e.task.startsWith('⏱️')||e.task.startsWith('🍅')))).map(e=>{
         const timeParts=e.date.slice(11,16);const hr=parseInt(timeParts.split(':')[0]),min=timeParts.split(':')[1];
         const ampm=hr>=12?'PM':'AM';const hr12=hr%12||12;
         const time=(e.task==='🎯 Daily goal bonus'||e.originalDate)?'':(`${hr12}:${min} ${ampm}`);
@@ -1675,7 +1675,15 @@ function bindAll(){
   document.getElementById('set-btn')?.addEventListener('click',showSettings);
   document.getElementById('goal-btn')?.addEventListener('click',showGoalSettingModal);
   document.querySelectorAll('.cat-btn').forEach(b=>b.addEventListener('click',()=>{if(b.id==='task-search-btn')return;categoryFilter=b.dataset.cat;taskSearch='';render()}));
-  document.getElementById('task-search-btn')?.addEventListener('click',()=>{if(taskSearch!==''){taskSearch='';render()}else{taskSearch='__open__';render();setTimeout(()=>{const inp=document.getElementById('task-search-input');if(inp){inp.value='';inp.focus()}},50)}});
+  document.getElementById('task-search-btn')?.addEventListener('click',()=>{
+    if(taskSearch!==''){taskSearch='';render()}
+    else{
+      // Create temp input to capture keyboard focus from user gesture (iOS requires this)
+      const tmp=document.createElement('input');tmp.style.cssText='position:absolute;opacity:0;height:0;width:0';document.body.appendChild(tmp);tmp.focus();
+      taskSearch='__open__';render();
+      setTimeout(()=>{const inp=document.getElementById('task-search-input');if(inp){inp.focus()}tmp.remove()},50);
+    }
+  });
   document.getElementById('task-search-input')?.addEventListener('input',e=>{taskSearch=e.target.value||'__open__';render();setTimeout(()=>{const inp=document.getElementById('task-search-input');if(inp){inp.focus();inp.setSelectionRange(inp.value.length,inp.value.length)}},0)});
   document.querySelector('.metrics-reminder')?.addEventListener('click',()=>{view='tools';toolsView='metrics';render()});
   document.getElementById('rsort')?.addEventListener('click',()=>{recurSort=recurSort==='custom'?'due':'custom';render()});
