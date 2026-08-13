@@ -25,7 +25,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-seri
 if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
 
 // ===== DATA =====
-const APP_VERSION='4.2.0';
+const APP_VERSION='4.2.1';
 const DEFAULT_DATA={tasks:[],points:0,pointsHistory:[],rewards:[],techniques:[],metrics:[],settings:{gistId:'',token:'',dailyGoal:0},dailyGoalLog:{},streak:0,fractional:0,groupOrder:[],plan:[],savedPlans:[],planSectionRewards:{},groceries:[],recipes:[]};
 let D=JSON.parse(JSON.stringify(DEFAULT_DATA));
 let view='tasks',toolsView='menu',expandedTech=null,inlineMinId=null,categoryFilter='all',recurSort='custom';
@@ -435,12 +435,15 @@ function dragEnd(){
   document.body.style.userSelect='';
   document.body.style.webkitUserSelect='';
   if(clone&&clone.parentNode)clone.remove();
-  // Count only visible items + placeholder (exclude the hidden dragged item)
-  const children=[...container.children].filter(el=>el!==item&&((el.matches&&el.matches(itemSelector))||el.classList.contains('drag-placeholder')));
-  const newIdx=children.indexOf(placeholder);
+  // Calculate new index among all matching items + placeholder (including hidden dragged item)
+  const children=[...container.children].filter(el=>(el.matches&&el.matches(itemSelector))||el.classList.contains('drag-placeholder'));
+  let newIdx=children.indexOf(placeholder);
   if(placeholder&&placeholder.parentNode)placeholder.remove();
   item.style.display='';
-  if(newIdx>=0&&newIdx!==itemIdx)onReorder(itemIdx,newIdx);
+  if(newIdx<0||newIdx===itemIdx)return;
+  // Adjust: if moved down, account for removal shifting indices
+  if(newIdx>itemIdx)newIdx--;
+  onReorder(itemIdx,newIdx);
 }
 document.addEventListener('touchmove',dragMove,{passive:false});
 document.addEventListener('touchend',dragEnd);
