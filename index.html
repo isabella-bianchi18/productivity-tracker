@@ -25,7 +25,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-seri
 if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
 
 // ===== DATA =====
-const APP_VERSION='4.0.7';
+const APP_VERSION='4.1.0';
 const DEFAULT_DATA={tasks:[],points:0,pointsHistory:[],rewards:[],techniques:[],metrics:[],settings:{gistId:'',token:'',dailyGoal:0},dailyGoalLog:{},streak:0,fractional:0,groupOrder:[],plan:[],savedPlans:[],planSectionRewards:{},groceries:[],recipes:[]};
 let D=JSON.parse(JSON.stringify(DEFAULT_DATA));
 let view='tasks',toolsView='menu',expandedTech=null,inlineMinId=null,categoryFilter='all',recurSort='custom';
@@ -710,7 +710,7 @@ function rPlan(){
         const goalLine=gp&&!effectiveGoal?`<div style="font-size:.7rem;color:${gp.pct>=100?'var(--success-dark)':'var(--text-dim)'}">${gp.current}/${gp.target} ${t.timeBased?'min':t.countBased?(t.countUnit||'units'):'times'} ${gp.period}${gp.pct>=100?' ✓':''}</div>`:'';
         // Global index in D.plan for this task
         const globalIdx=secGlobalIndices[si]?secGlobalIndices[si][ti]:-1;
-        html+=`<div class="tcard plan-goal-tap" data-gi="${globalIdx}" style="background:${done?'var(--card-neutral)':catBg(t.category)};${done?'opacity:.6;padding:6px 12px':''};cursor:pointer"><div style="display:flex;align-items:center;gap:10px"><button class="plan-done-btn cbtn-plan" data-id="${t.id}" style="${done?'opacity:.4;width:24px;height:24px;font-size:.8rem':''}">${done?'✓':'○'}</button><div style="flex:1;min-width:0"><div style="font-weight:600;font-size:${done?'.8rem':'.9rem'};${done?'text-decoration:line-through;color:var(--text-dim)':''}">${t.name}</div>${done?'':planGoalLine+goalLine}</div>${done?'':`<span style="color:var(--warning-dark);font-weight:bold;font-size:.75rem">${pl}</span>`}<div style="display:flex;flex-direction:column;gap:1px">${globalIdx>0?`<button class="plan-move-g mbtn" data-gi="${globalIdx}" data-d="up">▲</button>`:'<div style="height:16px"></div>'}${globalIdx<D.plan.length-1?`<button class="plan-move-g mbtn" data-gi="${globalIdx}" data-d="down">▼</button>`:'<div style="height:16px"></div>'}</div><button class="plan-rm ibtn" data-gi="${globalIdx}" style="font-size:.7rem;color:var(--danger-dark)">✕</button></div>${isM?`<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);">${t.countBased?`<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><input id="imi-count" type="number" min="1" placeholder="" class="inf" style="width:70px;margin:0;text-align:center"><span class="rl">${t.countUnit||'units'}</span></div><div id="imi-preview" style="font-size:.8rem;color:var(--accent-dark);margin:6px 0;"></div>`:t.timeBased?`<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><input id="imi-h" type="number" min="0" placeholder="" class="inf" style="width:60px;margin:0;text-align:center"><span class="rl">hours</span><input id="imi-m" type="number" min="0" max="59" placeholder="" class="inf" style="width:60px;margin:0;text-align:center"><span class="rl">minutes</span></div><div id="imi-preview" style="font-size:.8rem;color:var(--accent-dark);margin:6px 0;"></div>`:''}<div style="display:flex;gap:6px;flex-wrap:wrap">${effectiveGoal?`<button id="ims-work" data-id="${t.id}" class="btn bsuc" style="padding:8px 10px;font-size:.8rem">Log</button>`:`<button id="ims-work" data-id="${t.id}" class="btn bmut" style="padding:8px 10px;font-size:.8rem">Log</button><button id="ims-done" data-id="${t.id}" class="btn bsuc" style="padding:8px 10px;font-size:.8rem">Log + Done ✅</button>`}<button id="imc" class="btn bmut" style="padding:8px 10px">✕</button></div></div>`:''}</div>`;
+        html+=`<div class="tcard plan-goal-tap plan-drag-item" data-gi="${globalIdx}" style="background:${done?'var(--card-neutral)':catBg(t.category)};${done?'opacity:.6;padding:6px 12px':''};cursor:pointer;user-select:none;-webkit-user-select:none"><div style="display:flex;align-items:center;gap:10px"><button class="plan-done-btn cbtn-plan" data-id="${t.id}" style="${done?'opacity:.4;width:24px;height:24px;font-size:.8rem':''}">${done?'✓':'○'}</button><div style="flex:1;min-width:0"><div style="font-weight:600;font-size:${done?'.8rem':'.9rem'};${done?'text-decoration:line-through;color:var(--text-dim)':''}">${t.name}</div>${done?'':planGoalLine+goalLine}</div>${done?'':`<span style="color:var(--warning-dark);font-weight:bold;font-size:.75rem">${pl}</span>`}<button class="plan-rm ibtn" data-gi="${globalIdx}" style="font-size:.7rem;color:var(--danger-dark)">✕</button></div>${isM?`<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);">${t.countBased?`<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><input id="imi-count" type="number" min="1" placeholder="" class="inf" style="width:70px;margin:0;text-align:center"><span class="rl">${t.countUnit||'units'}</span></div><div id="imi-preview" style="font-size:.8rem;color:var(--accent-dark);margin:6px 0;"></div>`:t.timeBased?`<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><input id="imi-h" type="number" min="0" placeholder="" class="inf" style="width:60px;margin:0;text-align:center"><span class="rl">hours</span><input id="imi-m" type="number" min="0" max="59" placeholder="" class="inf" style="width:60px;margin:0;text-align:center"><span class="rl">minutes</span></div><div id="imi-preview" style="font-size:.8rem;color:var(--accent-dark);margin:6px 0;"></div>`:''}<div style="display:flex;gap:6px;flex-wrap:wrap">${effectiveGoal?`<button id="ims-work" data-id="${t.id}" class="btn bsuc" style="padding:8px 10px;font-size:.8rem">Log</button>`:`<button id="ims-work" data-id="${t.id}" class="btn bmut" style="padding:8px 10px;font-size:.8rem">Log</button><button id="ims-done" data-id="${t.id}" class="btn bsuc" style="padding:8px 10px;font-size:.8rem">Log + Done ✅</button>`}<button id="imc" class="btn bmut" style="padding:8px 10px">✕</button></div></div>`:''}</div>`;
       });
     } else if(sections.length===1){
       html+=`<p style="color:var(--text-dim);font-style:italic;font-size:.85rem;margin-bottom:8px">No tasks planned yet. Add some above!</p>`;
@@ -740,7 +740,7 @@ function rPlan(){
     const loadedIdxs=new Set(sectionLinks.filter(x=>x!=null));
     savedHtml=`<div style="margin-top:16px;border-top:1px solid var(--border);padding-top:12px"><div style="font-size:.85rem;font-weight:600;color:var(--accent-dark);margin-bottom:8px">💾 Saved Plans</div>${D.savedPlans.map((sp,spi)=>{const validCount=sp.items.filter(id=>allTasks.find(t=>t.id===id&&!(t.type==='one-time'&&t.completed))).length;const isLoaded=loadedIdxs.has(spi);return `<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px"><button class="plan-load btn ${isLoaded?'bpri':'bmut'}" data-spi="${spi}" style="flex:1;font-size:.8rem;padding:6px 10px;text-align:left" ${isLoaded?'disabled':''}>${sp.name} (${validCount} task${validCount!==1?'s':''})${isLoaded?' ✓':''}</button><button class="plan-del-saved ibtn" data-spi="${spi}" style="font-size:.7rem;color:var(--danger-dark)">🗑️</button></div>`}).join('')}</div>`;
   }
-  return `<div class="vc"><h2 style="font-size:1.1rem;color:var(--accent-dark);margin-bottom:12px">📋 Today's Plan</h2>${progressBar}${html}${addBreakBtn}${savedHtml}</div>`;
+  return `<div class="vc"><h2 style="font-size:1.1rem;color:var(--accent-dark);margin-bottom:12px">📋 Today's Plan</h2>${progressBar}<div id="plan-drag-container">${html}</div>${addBreakBtn}${savedHtml}</div>`;
 }
 
 // ===== TASKS =====
@@ -1698,7 +1698,7 @@ function bindAll(){
   document.querySelectorAll('.tdet').forEach(b=>b.addEventListener('click',()=>showTaskDetail(b.dataset.id)));
   document.querySelectorAll('.sldet').forEach(b=>b.addEventListener('click',()=>showTaskDetail(b.dataset.id)));
   document.querySelectorAll('.sleep-folder').forEach(b=>b.addEventListener('click',()=>{const s=b.dataset.section;if(expandedSleep.has(s))expandedSleep.delete(s);else expandedSleep.add(s);render()}));
-  document.querySelectorAll('.mbtn:not(.plan-move-g):not(.plan-q-move)').forEach(b=>b.addEventListener('click',e=>{e.stopPropagation();moveTask(b.dataset.id,b.dataset.d)}));
+  document.querySelectorAll('.mbtn:not(.plan-q-move)').forEach(b=>b.addEventListener('click',e=>{e.stopPropagation();moveTask(b.dataset.id,b.dataset.d)}));
   document.getElementById('show-af')?.addEventListener('click',()=>{const c=document.getElementById('afc');if(c.innerHTML){c.innerHTML='';return}c.innerHTML=rAddForm();bindAddForm()});
   document.getElementById('quick-log-btn')?.addEventListener('click',()=>{const c=document.getElementById('qlfc');if(c.innerHTML){c.innerHTML='';return}c.innerHTML=rQuickLog();bindQuickLog()});
   document.getElementById('surprise-btn')?.addEventListener('click',showSurpriseModal);
@@ -1787,21 +1787,20 @@ function bindAll(){
     if(t.timeBased||t.countBased){inlineMinId=t.id;render()}
     else if(pg||(t.goal&&(t.goal.period==='daily'||t.goal.period==='hourly'||t.goal.period==='total'))){completeTask(t.id);if(view==='plan')checkPlanComplete()}
     else{completeTask(t.id);if(view==='plan')checkPlanComplete()}}));
-  document.querySelectorAll('.plan-move-g').forEach(b=>b.addEventListener('click',e=>{e.stopPropagation();const gi=parseInt(b.dataset.gi),dir=b.dataset.d;
-    if(isNaN(gi)||gi<0||gi>=D.plan.length)return;
-    // Find the next swappable position (skip headers)
-    let si=dir==='up'?gi-1:gi+1;
-    while(si>=0&&si<D.plan.length&&D.plan[si].type==='header')si+=(dir==='up'?-1:1);
-    if(si<0||si>=D.plan.length)return;
-    // If swapping across a break, check for duplicates in destination section
-    const movingTask=D.plan[gi];const target=D.plan[si];
-    if(movingTask.type==='task'&&target.type==='break'){
-      // Task is crossing into another section — find tasks in that section
-      const destTasks=[];const scanDir=dir==='up'?-1:1;
-      for(let i=si+scanDir;i>=0&&i<D.plan.length;i+=scanDir){if(D.plan[i].type==='break'||D.plan[i].type==='header')break;if(D.plan[i].type==='task')destTasks.push(D.plan[i].id)}
-      if(destTasks.includes(movingTask.id)){toast('Task already in that section');return}
-    }
-    [D.plan[gi],D.plan[si]]=[D.plan[si],D.plan[gi]];save();render()}));
+  // Plan drag-to-reorder
+  initDragList('#plan-drag-container','.plan-drag-item',(fromIdx,toIdx)=>{
+    // Get all visible plan-drag-items to map visual index to global D.plan index
+    const items=[...document.querySelectorAll('#plan-drag-container .plan-drag-item')];
+    const fromGi=parseInt(items[fromIdx]?.dataset.gi);
+    const toGi=parseInt(items[toIdx]?.dataset.gi);
+    if(isNaN(fromGi)||isNaN(toGi)||fromGi===toGi)return;
+    // Remove item from D.plan and insert at new position
+    const item=D.plan[fromGi];
+    D.plan.splice(fromGi,1);
+    const newGi=toGi>fromGi?toGi-1:toGi;
+    D.plan.splice(newGi,0,item);
+    save();render();
+  });
   document.querySelectorAll('.plan-rm').forEach(b=>b.addEventListener('click',e=>{e.stopPropagation();const gi=parseInt(b.dataset.gi);
     // Determine which section this task is in
     let secIdx=0;for(let i=0;i<gi;i++){if(D.plan[i].type==='break')secIdx++}
