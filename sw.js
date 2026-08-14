@@ -1,5 +1,5 @@
 // Service worker with cache busting for PWA updates
-const CACHE_VERSION = 'v4.6.3';
+const CACHE_VERSION = 'v4.6.4';
 
 self.addEventListener('install', e => {
   self.skipWaiting();
