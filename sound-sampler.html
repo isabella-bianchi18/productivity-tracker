@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>Sound Sampler</title>
+<style>body{font-family:system-ui;max-width:400px;margin:40px auto;padding:0 16px 80px}button{display:block;width:100%;padding:14px;margin:6px 0;border:none;border-radius:12px;font-size:.9rem;cursor:pointer;background:#f3e8ff;color:#6b21a8;text-align:left}button:active{background:#e9d5ff}h3{margin:20px 0 8px;color:#444;font-size:.85rem}</style>
+</head><body>
+<h2>🔊 Sound Sampler (42 sounds)</h2>
+<p style="font-size:.85rem;color:#666">Tap each to hear it. Tell me the number!</p>
+
+<h3>Pops & Clicks</h3>
+<button onclick="s1()">1. Pop — sine sweep up/down</button>
+<button onclick="s2()">2. Snap — short percussive click</button>
+<button onclick="s3()">3. Pluck — guitar string</button>
+<button onclick="s4()">4. Tick — soft clock tick</button>
+<button onclick="s5()">5. Thock — deep satisfying thock</button>
+<button onclick="s21()">21. Cork Pop — bottle cork</button>
+<button onclick="s22()">22. Tap — finger on wood</button>
+<button onclick="s23()">23. Droplet — water drop</button>
+
+<h3>Tones & Dings</h3>
+<button onclick="s6()">6. Ding — high bell</button>
+<button onclick="s7()">7. Soft Ding — muted warm bell</button>
+<button onclick="s8()">8. Xylophone — wooden tap</button>
+<button onclick="s9()">9. Glass — crystal tap</button>
+<button onclick="s10()">10. Marimba — warm mallet</button>
+<button onclick="s24()">24. Kalimba — thumb piano</button>
+<button onclick="s25()">25. Vibes — jazz vibraphone</button>
+<button onclick="s26()">26. Glockenspiel — bright metal</button>
+<button onclick="s27()">27. Soft Chime — gentle wind chime</button>
+
+<h3>Musical</h3>
+<button onclick="s11()">11. Coin — Mario two-tone</button>
+<button onclick="s12()">12. Chime — triangle chord</button>
+<button onclick="s13()">13. Level Up — ascending arpeggio</button>
+<button onclick="s14()">14. Victory — major chord stab</button>
+<button onclick="s15()">15. Harp — quick harp gliss</button>
+<button onclick="s28()">28. Piano Chord — soft major</button>
+<button onclick="s29()">29. Strum — quick guitar strum</button>
+<button onclick="s30()">30. Fanfare — trumpet-ish ta-da</button>
+<button onclick="s31()">31. Power Up — retro game</button>
+<button onclick="s32()">32. Celeste — music box note</button>
+
+<h3>Playful</h3>
+<button onclick="s16()">16. Bubble — low to high wobble</button>
+<button onclick="s17()">17. Boing — springy bounce</button>
+<button onclick="s18()">18. Sparkle — high shimmer</button>
+<button onclick="s19()">19. Whoosh Up — rising swoosh</button>
+<button onclick="s20()">20. Chirp — quick bird chirp</button>
+<button onclick="s33()">33. Wink — playful blink</button>
+<button onclick="s34()">34. Bounce — rubber ball</button>
+<button onclick="s35()">35. Twinkle — star sparkle</button>
+<button onclick="s36()">36. Zip — fast zipper</button>
+<button onclick="s37()">37. Pew — laser pew pew</button>
+
+<h3>Warm & Cozy</h3>
+<button onclick="s38()">38. Purr — warm vibration</button>
+<button onclick="s39()">39. Hum — gentle resonance</button>
+<button onclick="s40()">40. Bloom — flower opening</button>
+<button onclick="s41()">41. Cuddle — soft embracing tone</button>
+<button onclick="s42()">42. Sunrise — slow warm rise</button>
+
+<script>
+function ac(){return new(window.AudioContext||window.webkitAudioContext)()}
+function osc(c,type,freq,t,dur,vol){const o=c.createOscillator(),g=c.createGain();o.connect(g);g.connect(c.destination);o.type=type;o.frequency.setValueAtTime(freq,t);g.gain.setValueAtTime(vol||0.3,t);g.gain.exponentialRampToValueAtTime(0.01,t+dur);o.start(t);o.stop(t+dur);return o}
+
+// === Pops & Clicks ===
+function s1(){const c=ac(),o=c.createOscillator(),g=c.createGain();o.connect(g);g.connect(c.destination);o.type='sine';o.frequency.setValueAtTime(600,c.currentTime);o.frequency.exponentialRampToValueAtTime(1200,c.currentTime+0.05);o.frequency.exponentialRampToValueAtTime(300,c.currentTime+0.15);g.gain.setValueAtTime(0.3,c.currentTime);g.gain.exponentialRampToValueAtTime(0.01,c.currentTime+0.15);o.start();o.stop(c.currentTime+0.15)}
+function s2(){const c=ac(),o=c.createOscillator(),g=c.createGain();o.connect(g);g.connect(c.destination);o.type='square';o.frequency.setValueAtTime(800,c.currentTime);o.frequency.exponentialRampToValueAtTime(100,c.currentTime+0.05);g.gain.setValueAtTime(0.4,c.currentTime);g.gain.exponentialRampToValueAtTime(0.01,c.currentTime+0.06);o.start();o.stop(c.currentTime+0.06)}
+function s3(){const c=ac(),o=c.createOscillator(),g=c.createGain();o.connect(g);g.connect(c.destination);o.type='triangle';o.frequency.setValueAtTime(880,c.currentTime);g.gain.setValueAtTime(0.4,c.currentTime);g.gain.exponentialRampToValueAtTime(0.01,c.currentTime+0.2);o.start();o.stop(c.currentTime+0.2)}
+function s4(){const c=ac(),o=c.createOscillator(),g=c.createGain();o.connect(g);g.connect(c.destination);o.type='sine';o.frequency.setValueAtTime(1500,c.currentTime);o.frequency.exponentialRampToValueAtTime(800,c.currentTime+0.02);g.gain.setValueAtTime(0.2,c.currentTime);g.gain.exponentialRampToValueAtTime(0.01,c.currentTime+0.04);o.start();o.stop(c.currentTime+0.04)}
+function s5(){const c=ac(),o=c.createOscillator(),g=c.createGain();o.connect(g);g.connect(c.destination);o.type='sine';o.frequency.setValueAtTime(150,c.currentTime);o.frequency.exponentialRampToValueAtTime(60,c.currentTime+0.1);g.gain.setValueAtTime(0.5,c.currentTime);g.gain.exponentialRampToValueAtTime(0.01,c.currentTime+0.12);o.start();o.stop(c.currentTime+0.12)}
+function s21(){const c=ac(),o=c.createOscillator(),g=c.createGain();o.connect(g);g.connect(c.destination);o.type='sine';o.frequency.setValueAtTime(400,c.currentTime);o.frequency.exponentialRampToValueAtTime(1500,c.currentTime+0.03);o.frequency.exponentialRampToValueAtTime(500,c.currentTime+0.08);g.gain.setValueAtTime(0.35,c.currentTime);g.gain.exponentialRampToValueAtTime(0.01,c.currentTime+0.1);o.start();o.stop(c.currentTime+0.1)}
+function s22(){const c=ac(),o=c.createOscillator(),g=c.createGain();o.connect(g);g.connect(c.destination);o.type='triangle';o.frequency.setValueAtTime(300,c.currentTime);o.frequency.exponentialRampToValueAtTime(150,c.currentTime+0.04);g.gain.setValueAtTime(0.4,c.currentTime);g.gain.exponentialRampToValueAtTime(0.01,c.currentTime+0.06);o.start();o.stop(c.currentTime+0.06)}
+function s23(){const c=ac(),o=c.createOscillator(),g=c.createGain();o.connect(g);g.connect(c.destination);o.type='sine';o.frequency.setValueAtTime(1400,c.currentTime);o.frequency.exponentialRampToValueAtTime(400,c.currentTime+0.1);o.frequency.exponentialRampToValueAtTime(600,c.currentTime+0.15);g.gain.setValueAtTime(0.25,c.currentTime);g.gain.exponentialRampToValueAtTime(0.01,c.currentTime+0.2);o.start();o.stop(c.currentTime+0.2)}
+
+// === Tones & Dings ===
+function s6(){const c=ac();osc(c,'sine',1800,c.currentTime,0.4,0.3)}
+function s7(){const c=ac(),o=c.createOscillator(),g=c.createGain();o.connect(g);g.connect(c.destination);o.type='sine';o.frequency.setValueAtTime(900,c.currentTime);g.gain.setValueAtTime(0.25,c.currentTime);g.gain.exponentialRampToValueAtTime(0.01,c.currentTime+0.5);o.start();o.stop(c.currentTime+0.5)}
+function s8(){const c=ac(),o=c.createOscillator(),g=c.createGain();o.connect(g);g.connect(c.destination);o.type='triangle';o.frequency.setValueAtTime(1200,c.currentTime);g.gain.setValueAtTime(0.35,c.currentTime);g.gain.exponentialRampToValueAtTime(0.01,c.currentTime+0.15);o.start();o.stop(c.currentTime+0.15)}
+function s9(){const c=ac();[2200,3300].forEach(f=>{const o=c.createOscillator(),g=c.createGain();o.connect(g);g.connect(c.destination);o.type='sine';o.frequency.setValueAtTime(f,c.currentTime);g.gain.setValueAtTime(0.12,c.currentTime);g.gain.exponentialRampToValueAtTime(0.01,c.currentTime+0.3);o.start();o.stop(c.currentTime+0.3)})}
+function s10(){const c=ac(),o=c.createOscillator(),g=c.createGain();o.connect(g);g.connect(c.destination);o.type='sine';o.frequency.setValueAtTime(660,c.currentTime);g.gain.setValueAtTime(0.4,c.currentTime);g.gain.exponentialRampToValueAtTime(0.15,c.currentTime+0.05);g.gain.exponentialRampToValueAtTime(0.01,c.currentTime+0.25);o.start();o.stop(c.currentTime+0.25)}
+function s24(){const c=ac();osc(c,'sine',1175,c.currentTime,0.3,0.3);osc(c,'sine',1760,c.currentTime+0.01,0.2,0.1)}
+function s25(){const c=ac(),o=c.createOscillator(),g=c.createGain();o.connect(g);g.connect(c.destination);o.type='sine';o.frequency.setValueAtTime(740,c.currentTime);g.gain.setValueAtTime(0.3,c.currentTime);g.gain.setValueAtTime(0.25,c.currentTime+0.05);g.gain.setValueAtTime(0.2,c.currentTime+0.1);g.gain.exponentialRampToValueAtTime(0.01,c.currentTime+0.5);o.start();o.stop(c.currentTime+0.5)}
+function s26(){const c=ac();osc(c,'sine',2093,c.currentTime,0.25,0.3);osc(c,'sine',4186,c.currentTime,0.15,0.08)}
+function s27(){const c=ac();[1318,1568,2093].forEach((f,i)=>{osc(c,'sine',f,c.currentTime+i*0.06,0.4,0.12)})}
+
+// === Musical ===
+function s11(){const c=ac();[987,1319].forEach((f,i)=>{const o=c.createOscillator(),g=c.createGain();o.connect(g);g.connect(c.destination);o.type='square';o.frequency.setValueAtTime(f,c.currentTime+i*0.08);g.gain.setValueAtTime(0.15,c.currentTime+i*0.08);g.gain.exponentialRampToValueAtTime(0.01,c.currentTime+i*0.08+0.15);o.start(c.currentTime+i*0.08);o.stop(c.currentTime+i*0.08+0.15)})}
+function s12(){const c=ac();[523,659,784].forEach((f,i)=>{const o=c.createOscillator(),g=c.createGain();o.connect(g);g.connect(c.destination);o.type='triangle';o.frequency.setValueAtTime(f,c.currentTime+i*0.02);g.gain.setValueAtTime(0.2,c.currentTime+i*0.02);g.gain.exponentialRampToValueAtTime(0.01,c.currentTime+0.4);o.start(c.currentTime+i*0.02);o.stop(c.currentTime+0.4)})}
+function s13(){const c=ac();[523,659,784,1047].forEach((f,i)=>{osc(c,'sine',f,c.currentTime+i*0.08,0.12,0.25)})}
+function s14(){const c=ac();[523,659,784].forEach(f=>{osc(c,'sine',f,c.currentTime,0.3,0.2)})}
+function s15(){const c=ac();[392,494,587,659,784,880].forEach((f,i)=>{osc(c,'triangle',f,c.currentTime+i*0.04,0.2,0.18)})}
+function s28(){const c=ac();[262,330,392].forEach(f=>{osc(c,'sine',f,c.currentTime,0.5,0.15)})}
+function s29(){const c=ac();[330,415,494,659].forEach((f,i)=>{osc(c,'triangle',f,c.currentTime+i*0.025,0.2,0.2)})}
+function s30(){const c=ac();[523,523,784].forEach((f,i)=>{osc(c,'square',f,c.currentTime+i*0.12,i===2?0.3:0.1,0.12)})}
+function s31(){const c=ac();[262,330,392,523,659,784].forEach((f,i)=>{osc(c,'square',f,c.currentTime+i*0.05,0.08,0.12)})}
+function s32(){const c=ac();osc(c,'sine',2093,c.currentTime,0.6,0.2);osc(c,'sine',1568,c.currentTime,0.4,0.08)}
+
+// === Playful ===
+function s16(){const c=ac(),o=c.createOscillator(),g=c.createGain();o.connect(g);g.connect(c.destination);o.type='sine';o.frequency.setValueAtTime(200,c.currentTime);o.frequency.exponentialRampToValueAtTime(900,c.currentTime+0.1);o.frequency.exponentialRampToValueAtTime(600,c.currentTime+0.15);g.gain.setValueAtTime(0.3,c.currentTime);g.gain.exponentialRampToValueAtTime(0.01,c.currentTime+0.2);o.start();o.stop(c.currentTime+0.2)}
+function s17(){const c=ac(),o=c.createOscillator(),g=c.createGain();o.connect(g);g.connect(c.destination);o.type='sine';o.frequency.setValueAtTime(300,c.currentTime);o.frequency.exponentialRampToValueAtTime(800,c.currentTime+0.05);o.frequency.exponentialRampToValueAtTime(200,c.currentTime+0.2);o.frequency.exponentialRampToValueAtTime(500,c.currentTime+0.25);g.gain.setValueAtTime(0.3,c.currentTime);g.gain.exponentialRampToValueAtTime(0.01,c.currentTime+0.3);o.start();o.stop(c.currentTime+0.3)}
+function s18(){const c=ac();[2400,2800,3200].forEach((f,i)=>{osc(c,'sine',f,c.currentTime+i*0.04,0.15,0.15)})}
+function s19(){const c=ac(),o=c.createOscillator(),g=c.createGain();o.connect(g);g.connect(c.destination);o.type='sawtooth';o.frequency.setValueAtTime(200,c.currentTime);o.frequency.exponentialRampToValueAtTime(2000,c.currentTime+0.2);g.gain.setValueAtTime(0.1,c.currentTime);g.gain.setValueAtTime(0.2,c.currentTime+0.1);g.gain.exponentialRampToValueAtTime(0.01,c.currentTime+0.25);o.start();o.stop(c.currentTime+0.25)}
+function s20(){const c=ac(),o=c.createOscillator(),g=c.createGain();o.connect(g);g.connect(c.destination);o.type='sine';o.frequency.setValueAtTime(1800,c.currentTime);o.frequency.exponentialRampToValueAtTime(2800,c.currentTime+0.04);o.frequency.exponentialRampToValueAtTime(2000,c.currentTime+0.08);o.frequency.exponentialRampToValueAtTime(3000,c.currentTime+0.12);g.gain.setValueAtTime(0.25,c.currentTime);g.gain.exponentialRampToValueAtTime(0.01,c.currentTime+0.15);o.start();o.stop(c.currentTime+0.15)}
+function s33(){const c=ac();osc(c,'sine',1200,c.currentTime,0.06,0.25);osc(c,'sine',1600,c.currentTime+0.07,0.06,0.2)}
+function s34(){const c=ac(),o=c.createOscillator(),g=c.createGain();o.connect(g);g.connect(c.destination);o.type='sine';o.frequency.setValueAtTime(500,c.currentTime);o.frequency.exponentialRampToValueAtTime(250,c.currentTime+0.08);o.frequency.exponentialRampToValueAtTime(400,c.currentTime+0.12);o.frequency.exponentialRampToValueAtTime(200,c.currentTime+0.18);g.gain.setValueAtTime(0.3,c.currentTime);g.gain.exponentialRampToValueAtTime(0.01,c.currentTime+0.2);o.start();o.stop(c.currentTime+0.2)}
+function s35(){const c=ac();[1800,2200,2600,2200,1800].forEach((f,i)=>{osc(c,'sine',f,c.currentTime+i*0.05,0.08,0.12)})}
+function s36(){const c=ac(),o=c.createOscillator(),g=c.createGain();o.connect(g);g.connect(c.destination);o.type='sawtooth';o.frequency.setValueAtTime(1000,c.currentTime);o.frequency.exponentialRampToValueAtTime(4000,c.currentTime+0.06);g.gain.setValueAtTime(0.15,c.currentTime);g.gain.exponentialRampToValueAtTime(0.01,c.currentTime+0.08);o.start();o.stop(c.currentTime+0.08)}
+function s37(){const c=ac(),o=c.createOscillator(),g=c.createGain();o.connect(g);g.connect(c.destination);o.type='square';o.frequency.setValueAtTime(1500,c.currentTime);o.frequency.exponentialRampToValueAtTime(200,c.currentTime+0.12);g.gain.setValueAtTime(0.15,c.currentTime);g.gain.exponentialRampToValueAtTime(0.01,c.currentTime+0.12);o.start();o.stop(c.currentTime+0.12)}
+
+// === Warm & Cozy ===
+function s38(){const c=ac(),o=c.createOscillator(),g=c.createGain();o.connect(g);g.connect(c.destination);o.type='sine';o.frequency.setValueAtTime(180,c.currentTime);o.frequency.setValueAtTime(185,c.currentTime+0.05);o.frequency.setValueAtTime(180,c.currentTime+0.1);o.frequency.setValueAtTime(185,c.currentTime+0.15);g.gain.setValueAtTime(0.2,c.currentTime);g.gain.exponentialRampToValueAtTime(0.01,c.currentTime+0.3);o.start();o.stop(c.currentTime+0.3)}
+function s39(){const c=ac();[220,330].forEach(f=>{const o=c.createOscillator(),g=c.createGain();o.connect(g);g.connect(c.destination);o.type='sine';o.frequency.setValueAtTime(f,c.currentTime);g.gain.setValueAtTime(0.15,c.currentTime);g.gain.exponentialRampToValueAtTime(0.01,c.currentTime+0.4);o.start();o.stop(c.currentTime+0.4)})}
+function s40(){const c=ac(),o=c.createOscillator(),g=c.createGain();o.connect(g);g.connect(c.destination);o.type='sine';o.frequency.setValueAtTime(400,c.currentTime);o.frequency.exponentialRampToValueAtTime(800,c.currentTime+0.3);g.gain.setValueAtTime(0.01,c.currentTime);g.gain.linearRampToValueAtTime(0.25,c.currentTime+0.15);g.gain.exponentialRampToValueAtTime(0.01,c.currentTime+0.4);o.start();o.stop(c.currentTime+0.4)}
+function s41(){const c=ac();[330,415,494].forEach((f,i)=>{const o=c.createOscillator(),g=c.createGain();o.connect(g);g.connect(c.destination);o.type='sine';o.frequency.setValueAtTime(f,c.currentTime);g.gain.setValueAtTime(0.01,c.currentTime);g.gain.linearRampToValueAtTime(0.12,c.currentTime+0.1);g.gain.exponentialRampToValueAtTime(0.01,c.currentTime+0.5);o.start();o.stop(c.currentTime+0.5)})}
+function s42(){const c=ac(),o=c.createOscillator(),g=c.createGain();o.connect(g);g.connect(c.destination);o.type='sine';o.frequency.setValueAtTime(300,c.currentTime);o.frequency.linearRampToValueAtTime(600,c.currentTime+0.4);g.gain.setValueAtTime(0.01,c.currentTime);g.gain.linearRampToValueAtTime(0.25,c.currentTime+0.2);g.gain.exponentialRampToValueAtTime(0.01,c.currentTime+0.5);o.start();o.stop(c.currentTime+0.5)}
+</script>
+</body></html>

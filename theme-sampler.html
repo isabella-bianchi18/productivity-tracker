@@ -1,0 +1,449 @@
+<!DOCTYPE html>
+<html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>Theme Sampler</title>
+<style>
+:root{--accent:#7c3aed;--accent-dark:#5b21b6;--accent2:#7dd3fc;--bg:#f8fafc;--card:#fff;--card-task:#f3e8ff;--card-reward:#dbeafe;--card-sleep:#f3e8ff;--card-neutral:#f3f4f6;--text:#1e293b;--text-dim:#64748b;--border:#e2e8f0;--success:#86efac;--success-dark:#22c55e;--warning:#fcd34d;--warning-dark:#d97706;--danger:#fca5a5;--danger-dark:#dc2626}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:system-ui,-apple-system,sans-serif;background:var(--bg);color:var(--text);max-width:420px;margin:0 auto;padding:16px;min-height:100vh;transition:background .4s,color .4s}
+.header{background:var(--card);border-radius:16px;padding:16px;margin-bottom:16px;box-shadow:0 2px 8px rgba(0,0,0,.05);transition:background .4s}
+h1{font-size:1.3rem;color:var(--accent-dark);transition:color .4s}
+.subtitle{font-size:.8rem;color:var(--text-dim);margin-top:4px}
+.card{background:var(--card-task);border-radius:12px;padding:12px 16px;margin-bottom:8px;transition:background .4s}
+.card-title{font-weight:600;font-size:.9rem}
+.card-sub{font-size:.75rem;color:var(--text-dim);margin-top:2px}
+.card-reward{background:var(--card-reward);border-radius:12px;padding:12px 16px;margin-bottom:8px;transition:background .4s}
+.card-sleep{background:var(--card-sleep);border-radius:12px;padding:12px 16px;margin-bottom:8px;transition:background .4s}
+.card-neutral{background:var(--card-neutral);border-radius:12px;padding:12px 16px;margin-bottom:8px;transition:background .4s}
+/* Category colors on real task cards are hardcoded constants (catBg() in the app) —
+   they do NOT change with theme, so these stay fixed on purpose across every theme below */
+.card-work{background:#dbeafe;border-radius:12px;padding:12px 16px;margin-bottom:8px}
+.card-home{background:#d1fae5;border-radius:12px;padding:12px 16px;margin-bottom:8px}
+.card-growth{background:#fef3c7;border-radius:12px;padding:12px 16px;margin-bottom:8px}
+.swatch-row{display:flex;gap:8px;margin-bottom:12px}
+.swatch{flex:1;border-radius:8px;padding:8px 4px;text-align:center;font-size:.65rem;font-weight:600;color:#fff;transition:background .4s}
+.sw-accent2{background:var(--accent2);color:#1e293b}
+.sw-success{background:var(--success-dark)}
+.sw-warning{background:var(--warning-dark)}
+.sw-danger{background:var(--danger-dark)}
+.progress{height:8px;background:var(--border);border-radius:4px;margin:12px 0;overflow:hidden;transition:background .4s}
+.progress-fill{height:100%;width:65%;background:var(--accent);border-radius:4px;transition:background .4s}
+.btn-row{display:flex;gap:8px;margin-top:16px;flex-wrap:wrap}
+.btn{padding:14px;border:none;border-radius:12px;font-size:.9rem;cursor:pointer;flex:1;min-width:80px;font-weight:600;transition:background .3s}
+.btn:active{opacity:.8}
+.fall-btn{background:#fde68a;color:#92400e}
+.winter-btn{background:#bfdbfe;color:#1e40af}
+.spring-btn{background:#fbcfe8;color:#9d174d}
+.summer-btn{background:#a5f3fc;color:#0e7490}
+.default-btn{background:#e9d5ff;color:#6b21a8}
+.christmas-btn{background:#fecaca;color:#991b1b}
+.halloween-btn{background:#e9d5ff;color:#6b21a8}
+.birthday-btn{background:#bbf7d0;color:#15803d}
+.badge{display:inline-block;padding:2px 8px;border-radius:12px;font-size:.7rem;font-weight:600;background:var(--accent);color:white;margin-top:8px;transition:background .4s}
+canvas{position:fixed;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:999}
+.nav{display:flex;gap:4px;margin-top:16px;background:var(--card);border-radius:12px;padding:8px;transition:background .4s}
+.nav-btn{flex:1;text-align:center;padding:8px 4px;border-radius:8px;font-size:.75rem;border:none;background:transparent;color:var(--text-dim);cursor:pointer;transition:background .3s,color .3s}
+.nav-btn.active{background:var(--accent);color:white}
+.streak{color:var(--warning-dark);font-size:.8rem;font-weight:bold;margin-top:4px}
+</style>
+</head><body>
+<canvas id="cv"></canvas>
+
+<div class="header">
+  <div style="display:flex;justify-content:space-between;align-items:center">
+    <h1>⚡ Done!</h1>
+    <span style="font-weight:bold;color:var(--accent-dark)">✨ 847</span>
+  </div>
+  <div class="subtitle">Level 12 • 65% to next</div>
+  <div class="progress"><div class="progress-fill"></div></div>
+</div>
+
+<div class="card-work">
+  <div class="card-title">📊 Finish Quarterly Report</div>
+  <div class="card-sub">💼 Work • 🎯 One-Time • +8 pts</div>
+</div>
+
+<div class="card-home">
+  <div class="card-title">🧺 Do Laundry</div>
+  <div class="card-sub">🏠 Home • 🔄 Every 3 days • +5 pts</div>
+</div>
+
+<div class="card-growth">
+  <div class="card-title">🏃 Morning Run</div>
+  <div class="card-sub">🌱 Growth • 📅 Daily • 3 pts / 15 min</div>
+  <div class="streak">🔥 14 day streak</div>
+</div>
+
+<div class="card-neutral" style="opacity:.6">
+  <div class="card-title" style="text-decoration:line-through;color:var(--text-dim)">💧 Drink Water</div>
+  <div class="card-sub">✅ Done • plan view</div>
+</div>
+
+<div class="card-reward">
+  <div class="card-title">🎁 Coffee Shop Treat</div>
+  <div class="card-sub">150 pts • Reward card</div>
+</div>
+
+<div class="card-sleep">
+  <div class="card-title">🧘 Box Breathing</div>
+  <div class="card-sub">Technique / sleep card</div>
+</div>
+
+<div class="card-neutral">
+  <div class="card-title">📦 Archived Item</div>
+  <div class="card-sub">Neutral card</div>
+</div>
+
+<div class="swatch-row">
+  <div class="swatch sw-accent2">accent2</div>
+  <div class="swatch sw-success">success</div>
+  <div class="swatch sw-warning">warning</div>
+  <div class="swatch sw-danger">danger</div>
+</div>
+
+<div class="badge">🎯 3/5 daily goal</div>
+
+<div class="nav">
+  <div class="nav-btn active">🚀 Tasks</div>
+  <div class="nav-btn">📋 Plan</div>
+  <div class="nav-btn">🗓️ History</div>
+  <div class="nav-btn">🧰 Tools</div>
+</div>
+
+<div class="btn-row">
+  <button class="btn default-btn" onclick="setTheme('default')">Default</button>
+  <button class="btn fall-btn" onclick="setTheme('fall')">🍂 Fall</button>
+  <button class="btn winter-btn" onclick="setTheme('winter')">❄️ Winter</button>
+  <button class="btn spring-btn" onclick="setTheme('spring')">🌸 Spring</button>
+  <button class="btn summer-btn" onclick="setTheme('summer',confettiBubbles)">☀️ Summer</button>
+  <button class="btn christmas-btn" onclick="setTheme('christmas')">🎄 Christmas</button>
+  <button class="btn halloween-btn" onclick="setTheme('halloween')">🎃 Halloween</button>
+  <button class="btn birthday-btn" onclick="setTheme('birthday')">🎈 Birthday</button>
+</div>
+<p style="font-size:.75rem;color:var(--text-dim);text-align:center;margin-top:12px">Tap a season to preview the theme + confetti</p>
+
+<script>
+const cv=document.getElementById('cv'),cx=cv.getContext('2d');
+cv.width=innerWidth;cv.height=innerHeight;
+window.addEventListener('resize',()=>{cv.width=innerWidth;cv.height=innerHeight});
+
+const themes={
+  default:{
+    accent:'#7c3aed',accentDark:'#5b21b6',accent2:'#7dd3fc',bg:'#f8fafc',card:'#fff',
+    cardTask:'#f3e8ff',cardReward:'#dbeafe',cardSleep:'#f3e8ff',cardNeutral:'#f3f4f6',
+    text:'#1e293b',textDim:'#64748b',border:'#e2e8f0',
+    success:'#86efac',successDark:'#22c55e',warning:'#fcd34d',warningDark:'#d97706',
+    danger:'#fca5a5',dangerDark:'#ef4444'
+  },
+  fall:{
+    accent:'#d97706',accentDark:'#92400e',accent2:'#fb923c',bg:'#fffbeb',card:'#fff',
+    cardTask:'#fef3c7',cardReward:'#fed7aa',cardSleep:'#ffedd5',cardNeutral:'#f5f5f4',
+    text:'#451a03',textDim:'#78350f',border:'#fde68a',
+    success:'#bbf7d0',successDark:'#16a34a',warning:'#fde68a',warningDark:'#b45309',
+    danger:'#fecaca',dangerDark:'#b91c1c'
+  },
+  winter:{
+    accent:'#3b82f6',accentDark:'#1e40af',accent2:'#93c5fd',bg:'#f0f9ff',card:'#fff',
+    cardTask:'#dbeafe',cardReward:'#e0f2fe',cardSleep:'#e0e7ff',cardNeutral:'#f1f5f9',
+    text:'#1e3a5f',textDim:'#475569',border:'#bfdbfe',
+    success:'#bbf7d0',successDark:'#16a34a',warning:'#fde68a',warningDark:'#d97706',
+    danger:'#fecaca',dangerDark:'#dc2626'
+  },
+  spring:{
+    accent:'#ec4899',accentDark:'#9d174d',accent2:'#c084fc',bg:'#fdf2f8',card:'#fff',
+    cardTask:'#fce7f3',cardReward:'#fae8ff',cardSleep:'#ede9fe',cardNeutral:'#faf5ff',
+    text:'#1e293b',textDim:'#6b7280',border:'#fbcfe8',
+    success:'#bbf7d0',successDark:'#16a34a',warning:'#fde68a',warningDark:'#d97706',
+    danger:'#fecdd3',dangerDark:'#e11d48'
+  },
+  summer:{
+    accent:'#06b6d4',accentDark:'#0e7490',accent2:'#67e8f9',bg:'#ecfeff',card:'#fff',
+    cardTask:'#cffafe',cardReward:'#bae6fd',cardSleep:'#e0f2fe',cardNeutral:'#f0fdfa',
+    text:'#164e63',textDim:'#0e7490',border:'#67e8f9',
+    success:'#bbf7d0',successDark:'#16a34a',warning:'#fed7aa',warningDark:'#c2410c',
+    danger:'#fecaca',dangerDark:'#dc2626'
+  },
+  christmas:{
+    accent:'#dc2626',accentDark:'#991b1b',accent2:'#22c55e',bg:'#f0fdf4',card:'#fff',
+    cardTask:'#fee2e2',cardReward:'#dcfce7',cardSleep:'#fef9c3',cardNeutral:'#f5f5f4',
+    text:'#14532d',textDim:'#166534',border:'#fbbf24',
+    success:'#bbf7d0',successDark:'#16a34a',warning:'#fde68a',warningDark:'#b45309',
+    danger:'#fecaca',dangerDark:'#991b1b'
+  },
+  halloween:{
+    accent:'#a855f7',accentDark:'#6b21a8',accent2:'#f97316',bg:'#fdf4ff',card:'#fff',
+    cardTask:'#f3e8ff',cardReward:'#fed7aa',cardSleep:'#ede9fe',cardNeutral:'#f4f4f5',
+    text:'#1e1b2e',textDim:'#6b21a8',border:'#c084fc',
+    success:'#bbf7d0',successDark:'#16a34a',warning:'#fed7aa',warningDark:'#ea580c',
+    danger:'#fecaca',dangerDark:'#991b1b'
+  },
+  birthday:{
+    accent:'#4ade80',accentDark:'#15803d',accent2:'#facc15',bg:'#f7fee7',card:'#fff',
+    cardTask:'#dcfce7',cardReward:'#fef9c3',cardSleep:'#fce7f3',cardNeutral:'#f5f5f4',
+    text:'#052e16',textDim:'#15803d',border:'#86efac',
+    success:'#bbf7d0',successDark:'#16a34a',warning:'#fde68a',warningDark:'#d97706',
+    danger:'#fecaca',dangerDark:'#dc2626'
+  }
+};
+
+function setTheme(name,confettiOverride){
+  const t=themes[name];
+  const r=document.documentElement.style;
+  r.setProperty('--accent',t.accent);
+  r.setProperty('--accent-dark',t.accentDark);
+  r.setProperty('--accent2',t.accent2);
+  r.setProperty('--bg',t.bg);
+  r.setProperty('--card',t.card);
+  r.setProperty('--card-task',t.cardTask);
+  r.setProperty('--card-reward',t.cardReward);
+  r.setProperty('--card-sleep',t.cardSleep);
+  r.setProperty('--card-neutral',t.cardNeutral);
+  r.setProperty('--text',t.text);
+  r.setProperty('--text-dim',t.textDim);
+  r.setProperty('--border',t.border);
+  r.setProperty('--success',t.success);
+  r.setProperty('--success-dark',t.successDark);
+  r.setProperty('--warning',t.warning);
+  r.setProperty('--warning-dark',t.warningDark);
+  r.setProperty('--danger',t.danger);
+  r.setProperty('--danger-dark',t.dangerDark);
+  // Trigger confetti
+  if(confettiOverride){confettiOverride();return}
+  if(name==='fall')confettiFall();
+  else if(name==='winter')confettiWinter();
+  else if(name==='spring')confettiSpring();
+  else if(name==='summer')confettiBubbles();
+  else if(name==='christmas')confettiChristmas();
+  else if(name==='halloween')confettiHalloween();
+  else if(name==='birthday')confettiBirthday();
+  else confettiDefault();
+}
+
+// === DEFAULT: colored rectangles ===
+function confettiDefault(){
+  const cols=['#a78bfa','#7dd3fc','#86efac','#fcd34d','#fca5a5','#f9a8d4'];
+  const ps=Array.from({length:50},()=>({x:Math.random()*cv.width,y:-10,vx:(Math.random()-.5)*7,vy:Math.random()*3+2,c:cols[Math.floor(Math.random()*cols.length)],s:Math.random()*7+3,r:Math.random()*360,rv:(Math.random()-.5)*10}));
+  let f=0;(function a(){cx.clearRect(0,0,cv.width,cv.height);ps.forEach(p=>{p.x+=p.vx;p.y+=p.vy;p.vy+=.12;p.r+=p.rv;cx.save();cx.translate(p.x,p.y);cx.rotate(p.r*Math.PI/180);cx.fillStyle=p.c;cx.fillRect(-p.s/2,-p.s/3,p.s,p.s/2);cx.restore()});if(ps.every(p=>p.y>cv.height+20)){cx.clearRect(0,0,cv.width,cv.height)}else{requestAnimationFrame(a)}})()}
+
+// === FALL: drifting leaves ===
+function confettiFall(){
+  const colors=['#dc2626','#ea580c','#d97706','#b45309','#92400e','#facc15'];
+  const ps=Array.from({length:28},()=>({
+    x:Math.random()*cv.width,y:Math.random()*-200-20,
+    vx:0,vy:Math.random()*2+1.6,
+    drift:Math.random()*2-1,driftSpeed:Math.random()*0.02+0.01,driftPhase:Math.random()*Math.PI*2,
+    c:colors[Math.floor(Math.random()*colors.length)],
+    s:Math.random()*10+8,r:Math.random()*360,rv:(Math.random()-.5)*3
+  }));
+  let f=0;(function a(){cx.clearRect(0,0,cv.width,cv.height);ps.forEach(p=>{
+    p.driftPhase+=p.driftSpeed;
+    p.x+=Math.sin(p.driftPhase)*1.5;
+    p.y+=p.vy;p.r+=p.rv;
+    cx.save();cx.translate(p.x,p.y);cx.rotate(p.r*Math.PI/180);
+    // Draw leaf shape
+    cx.fillStyle=p.c;cx.beginPath();
+    cx.moveTo(0,-p.s/2);cx.quadraticCurveTo(p.s/2,0,0,p.s/2);cx.quadraticCurveTo(-p.s/2,0,0,-p.s/2);
+    cx.fill();
+    // Leaf vein
+    cx.strokeStyle='rgba(0,0,0,0.15)';cx.lineWidth=0.5;cx.beginPath();cx.moveTo(0,-p.s/2);cx.lineTo(0,p.s/2);cx.stroke();
+    cx.restore()
+  });if(ps.every(p=>p.y>cv.height+20)){cx.clearRect(0,0,cv.width,cv.height)}else{requestAnimationFrame(a)}})()}
+
+// === WINTER: gentle snowflakes ===
+function confettiWinter(){
+  const ps=Array.from({length:38},()=>({
+    x:Math.random()*cv.width,y:Math.random()*-140-20,
+    vx:0,vy:Math.random()*1.6+1.2,
+    wobble:Math.random()*Math.PI*2,wobbleSpeed:Math.random()*0.03+0.01,
+    s:Math.random()*8+4,opacity:Math.random()*0.5+0.5,
+    type:Math.floor(Math.random()*3) // 0=dot, 1=star, 2=crystal
+  }));
+  let f=0;(function a(){cx.clearRect(0,0,cv.width,cv.height);ps.forEach(p=>{
+    p.wobble+=p.wobbleSpeed;
+    p.x+=Math.sin(p.wobble)*0.8;
+    p.y+=p.vy;
+    cx.save();cx.translate(p.x,p.y);cx.globalAlpha=p.opacity;
+    if(p.type===0){
+      // Simple dot
+      cx.fillStyle='#fff';cx.beginPath();cx.arc(0,0,p.s/3,0,Math.PI*2);cx.fill();
+      cx.strokeStyle='#bfdbfe';cx.lineWidth=1;cx.stroke();
+    } else if(p.type===1){
+      // 6-pointed star
+      cx.strokeStyle='#93c5fd';cx.lineWidth=1.5;
+      for(let i=0;i<6;i++){cx.beginPath();cx.moveTo(0,0);const angle=i*Math.PI/3;cx.lineTo(Math.cos(angle)*p.s/2,Math.sin(angle)*p.s/2);cx.stroke()}
+    } else {
+      // Crystal snowflake
+      cx.strokeStyle='#60a5fa';cx.lineWidth=1;
+      for(let i=0;i<6;i++){
+        const angle=i*Math.PI/3;const len=p.s/2;
+        cx.beginPath();cx.moveTo(0,0);cx.lineTo(Math.cos(angle)*len,Math.sin(angle)*len);cx.stroke();
+        // Branches
+        const bx=Math.cos(angle)*len*0.6,by=Math.sin(angle)*len*0.6;
+        cx.beginPath();cx.moveTo(bx,by);cx.lineTo(bx+Math.cos(angle+0.5)*len*0.3,by+Math.sin(angle+0.5)*len*0.3);cx.stroke();
+        cx.beginPath();cx.moveTo(bx,by);cx.lineTo(bx+Math.cos(angle-0.5)*len*0.3,by+Math.sin(angle-0.5)*len*0.3);cx.stroke();
+      }
+    }
+    cx.restore()
+  });if(ps.every(p=>p.y>cv.height+20)){cx.clearRect(0,0,cv.width,cv.height)}else{requestAnimationFrame(a)}})()}
+
+// === SPRING: cherry blossom petals ===
+function confettiSpring(){
+  const colors=['#f9a8d4','#fbcfe8','#fce7f3','#f472b6','#c084fc','#86efac'];
+  const ps=Array.from({length:32},()=>({
+    x:Math.random()*cv.width,y:Math.random()*-200-20,
+    vx:Math.random()*0.5-0.25,vy:Math.random()*2+1.2,
+    drift:Math.random()*Math.PI*2,driftSpeed:Math.random()*0.025+0.01,
+    c:colors[Math.floor(Math.random()*colors.length)],
+    s:Math.random()*8+5,r:Math.random()*360,rv:(Math.random()-.5)*2,
+    squish:Math.random()*0.4+0.3 // petal shape
+  }));
+  let f=0;(function a(){cx.clearRect(0,0,cv.width,cv.height);ps.forEach(p=>{
+    p.drift+=p.driftSpeed;
+    p.x+=Math.sin(p.drift)*1.2+p.vx;
+    p.y+=p.vy;p.r+=p.rv;
+    cx.save();cx.translate(p.x,p.y);cx.rotate(p.r*Math.PI/180);cx.scale(1,p.squish);
+    // Petal shape
+    cx.fillStyle=p.c;cx.beginPath();
+    cx.moveTo(0,-p.s/2);
+    cx.quadraticCurveTo(p.s/2,-p.s/4,p.s*0.3,p.s/3);
+    cx.quadraticCurveTo(0,p.s/2,0,p.s/2);
+    cx.quadraticCurveTo(0,p.s/2,-p.s*0.3,p.s/3);
+    cx.quadraticCurveTo(-p.s/2,-p.s/4,0,-p.s/2);
+    cx.fill();
+    cx.restore()
+  });if(ps.every(p=>p.y>cv.height+20)){cx.clearRect(0,0,cv.width,cv.height)}else{requestAnimationFrame(a)}})()}
+
+// === SUMMER: soap bubbles falling from the top ===
+function confettiBubbles(){
+  const tints=['rgba(56,189,248,0.45)','rgba(34,211,238,0.45)','rgba(45,212,191,0.45)','rgba(125,211,252,0.4)','rgba(255,255,255,0.55)'];
+  const ps=Array.from({length:26},()=>({
+    x:Math.random()*cv.width,y:Math.random()*-160-20,
+    vy:Math.random()*2.1+1.7,
+    drift:Math.random()*Math.PI*2,driftSpeed:Math.random()*0.025+0.01,driftAmt:Math.random()*1.3+0.5,
+    c:tints[Math.floor(Math.random()*tints.length)],
+    s:Math.random()*9+6
+  }));
+  (function a(){cx.clearRect(0,0,cv.width,cv.height);ps.forEach(p=>{
+    p.drift+=p.driftSpeed;
+    p.x+=Math.sin(p.drift)*p.driftAmt;
+    p.y+=p.vy;
+    cx.save();cx.translate(p.x,p.y);
+    // Bubble body
+    cx.fillStyle=p.c;cx.beginPath();cx.arc(0,0,p.s,0,Math.PI*2);cx.fill();
+    cx.strokeStyle='rgba(255,255,255,0.7)';cx.lineWidth=1;cx.stroke();
+    // Highlight glint
+    cx.fillStyle='rgba(255,255,255,0.8)';cx.beginPath();cx.arc(-p.s*0.3,-p.s*0.3,p.s*0.25,0,Math.PI*2);cx.fill();
+    cx.restore()
+  });if(ps.every(p=>p.y>cv.height+20)){cx.clearRect(0,0,cv.width,cv.height)}else{requestAnimationFrame(a)}})()}
+
+// === CHRISTMAS: ornaments & gold stars ===
+function confettiChristmas(){
+  const ballColors=['#dc2626','#16a34a','#b91c1c','#15803d','#ef4444'];
+  const ps=Array.from({length:30},()=>({
+    x:Math.random()*cv.width,y:Math.random()*-200-20,
+    vx:(Math.random()-.5)*1.5,vy:Math.random()*2.6+2.2,
+    drift:Math.random()*Math.PI*2,driftSpeed:Math.random()*0.02+0.01,
+    type:Math.random()<0.25?'star':'ornament',
+    c:ballColors[Math.floor(Math.random()*ballColors.length)],
+    s:Math.random()*8+7,r:Math.random()*360,rv:(Math.random()-.5)*3
+  }));
+  (function a(){cx.clearRect(0,0,cv.width,cv.height);ps.forEach(p=>{
+    p.drift+=p.driftSpeed;
+    p.x+=Math.sin(p.drift)*1+p.vx*0.2;
+    p.y+=p.vy;p.r+=p.rv;
+    cx.save();cx.translate(p.x,p.y);cx.rotate(p.r*Math.PI/180);
+    if(p.type==='star'){
+      cx.fillStyle='#fbbf24';cx.beginPath();
+      for(let i=0;i<5;i++){
+        const angle=(i*4*Math.PI)/5-Math.PI/2;
+        const px=Math.cos(angle)*p.s/2,py=Math.sin(angle)*p.s/2;
+        if(i===0)cx.moveTo(px,py);else cx.lineTo(px,py);
+      }
+      cx.closePath();cx.fill();
+    } else {
+      cx.fillStyle=p.c;cx.beginPath();cx.arc(0,0,p.s/2,0,Math.PI*2);cx.fill();
+      cx.fillStyle='rgba(255,255,255,0.35)';cx.beginPath();cx.arc(-p.s*0.15,-p.s*0.15,p.s*0.15,0,Math.PI*2);cx.fill();
+      cx.fillStyle='#fbbf24';cx.fillRect(-p.s*0.12,-p.s/2-p.s*0.18,p.s*0.24,p.s*0.18);
+      cx.strokeStyle='#a16207';cx.lineWidth=1;cx.beginPath();cx.arc(0,-p.s/2-p.s*0.18,p.s*0.12,0,Math.PI*2);cx.stroke();
+    }
+    cx.restore()
+  });if(ps.every(p=>p.y>cv.height+20)){cx.clearRect(0,0,cv.width,cv.height)}else{requestAnimationFrame(a)}})()}
+
+// === HALLOWEEN: flapping bats, alternating with candy corn each time ===
+let halloweenTurn=0;
+function confettiHalloween(){
+  const useBats=halloweenTurn%2===0;
+  halloweenTurn++;
+  if(useBats){
+    const bats=Array.from({length:16},()=>({
+      x:Math.random()*cv.width,y:Math.random()*-200-20,
+      vy:Math.random()*1.4+1,
+      drift:Math.random()*Math.PI*2,driftSpeed:Math.random()*0.03+0.015,driftAmt:Math.random()*2+1.5,
+      flap:Math.random()*Math.PI*2,flapSpeed:Math.random()*0.25+0.15,
+      s:Math.random()*10+10
+    }));
+    (function a(){cx.clearRect(0,0,cv.width,cv.height);
+      bats.forEach(p=>{
+        p.drift+=p.driftSpeed;p.flap+=p.flapSpeed;
+        p.x+=Math.sin(p.drift)*p.driftAmt;
+        p.y+=p.vy;
+        const wing=Math.sin(p.flap);
+        cx.save();cx.translate(p.x,p.y);cx.fillStyle='rgba(30,20,40,0.85)';
+        cx.beginPath();cx.ellipse(0,0,p.s*0.12,p.s*0.18,0,0,Math.PI*2);cx.fill();
+        cx.beginPath();cx.moveTo(0,0);
+        cx.quadraticCurveTo(-p.s*0.4,-p.s*0.3*wing-p.s*0.1,-p.s*0.55,p.s*0.1*wing);
+        cx.quadraticCurveTo(-p.s*0.3,p.s*0.15,0,p.s*0.05);
+        cx.closePath();cx.fill();
+        cx.beginPath();cx.moveTo(0,0);
+        cx.quadraticCurveTo(p.s*0.4,-p.s*0.3*wing-p.s*0.1,p.s*0.55,p.s*0.1*wing);
+        cx.quadraticCurveTo(p.s*0.3,p.s*0.15,0,p.s*0.05);
+        cx.closePath();cx.fill();
+        cx.restore()
+      });
+      if(bats.every(p=>p.y>cv.height+20)){cx.clearRect(0,0,cv.width,cv.height)}else{requestAnimationFrame(a)}
+    })()
+  } else {
+    const candy=Array.from({length:28},()=>({
+      x:Math.random()*cv.width,y:-10,
+      vx:(Math.random()-.5)*5,vy:Math.random()*2.8+1.6,
+      s:Math.random()*8+7,r:Math.random()*360,rv:(Math.random()-.5)*8
+    }));
+    (function a(){cx.clearRect(0,0,cv.width,cv.height);
+      candy.forEach(p=>{
+        p.x+=p.vx;p.y+=p.vy;p.vy+=.12;p.r+=p.rv;
+        cx.save();cx.translate(p.x,p.y);cx.rotate(p.r*Math.PI/180);
+        cx.fillStyle='#fef9c3';cx.beginPath();cx.moveTo(0,-p.s/2);cx.lineTo(p.s/3,-p.s/6);cx.lineTo(-p.s/3,-p.s/6);cx.closePath();cx.fill();
+        cx.fillStyle='#f97316';cx.beginPath();cx.moveTo(-p.s/3,-p.s/6);cx.lineTo(p.s/3,-p.s/6);cx.lineTo(p.s*0.4,p.s/6);cx.lineTo(-p.s*0.4,p.s/6);cx.closePath();cx.fill();
+        cx.fillStyle='#fde047';cx.beginPath();cx.moveTo(-p.s*0.4,p.s/6);cx.lineTo(p.s*0.4,p.s/6);cx.lineTo(p.s/2,p.s/2);cx.lineTo(-p.s/2,p.s/2);cx.closePath();cx.fill();
+        cx.restore()
+      });
+      if(candy.every(p=>p.y>cv.height+20)){cx.clearRect(0,0,cv.width,cv.height)}else{requestAnimationFrame(a)}
+    })()
+  }
+}
+
+// === BIRTHDAY: floating balloons ===
+function confettiBirthday(){
+  const balloonColors=['#ec4899','#a855f7','#3b82f6','#fbbf24','#22c55e'];
+  const balloons=Array.from({length:16},()=>({
+    x:Math.random()*cv.width,y:cv.height+Math.random()*80+20,
+    vy:-(Math.random()*1.8+2.2),
+    drift:Math.random()*Math.PI*2,driftSpeed:Math.random()*0.02+0.008,driftAmt:Math.random()*1.5+0.6,
+    c:balloonColors[Math.floor(Math.random()*balloonColors.length)],
+    s:Math.random()*10+14
+  }));
+  (function a(){cx.clearRect(0,0,cv.width,cv.height);
+    balloons.forEach(p=>{
+      p.drift+=p.driftSpeed;
+      p.x+=Math.sin(p.drift)*p.driftAmt;
+      p.y+=p.vy;
+      cx.save();cx.translate(p.x,p.y);
+      cx.fillStyle=p.c;cx.beginPath();cx.ellipse(0,0,p.s*0.55,p.s*0.7,0,0,Math.PI*2);cx.fill();
+      cx.fillStyle='rgba(255,255,255,0.3)';cx.beginPath();cx.ellipse(-p.s*0.15,-p.s*0.25,p.s*0.15,p.s*0.22,0,0,Math.PI*2);cx.fill();
+      cx.fillStyle=p.c;cx.beginPath();cx.moveTo(-p.s*0.08,p.s*0.65);cx.lineTo(p.s*0.08,p.s*0.65);cx.lineTo(0,p.s*0.78);cx.closePath();cx.fill();
+      cx.strokeStyle='rgba(100,100,100,0.5)';cx.lineWidth=1;
+      cx.beginPath();cx.moveTo(0,p.s*0.78);cx.lineTo(0,p.s*0.78+16);cx.stroke();
+      cx.restore()
+    });
+    if(balloons.every(p=>p.y<-40)){cx.clearRect(0,0,cv.width,cv.height)}else{requestAnimationFrame(a)}
+  })()}
+</script>
+</body></html>
