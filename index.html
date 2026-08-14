@@ -1957,15 +1957,32 @@ function showTaskDetail(tid){
   document.getElementById('edl')?.addEventListener('click',()=>confirmAction('Delete this task?',()=>{deleteTask(tid);closeM()}));
 }
 
+function timePickerHTML(prefix,currentTime){
+  const parts=(currentTime||'19:00').split(':');
+  const ch=parts[0],cm=parts[1];
+  const hourOpts=Array.from({length:24},(_, h)=>{
+    const label=h===0?'12 AM':h<12?`${h} AM`:h===12?'12 PM':`${h-12} PM`;
+    const val=String(h).padStart(2,'0');
+    return `<option value="${val}" ${val===ch?'selected':''}>${label}</option>`;
+  }).join('');
+  const minOpts=['00','15','30','45'].map(m=>`<option value="${m}" ${m===cm?'selected':''}>:${m}</option>`).join('');
+  return `<div style="display:flex;justify-content:center;gap:6px;margin-bottom:8px"><select id="${prefix}hour" class="inf" style="width:110px;margin:0">${hourOpts}</select><select id="${prefix}min" class="inf" style="width:80px;margin:0">${minOpts}</select></div>`;
+}
+function readTimePicker(prefix){
+  const h=document.getElementById(prefix+'hour')?.value;
+  const m=document.getElementById(prefix+'min')?.value;
+  if(!h||!m)return null;
+  return h+':'+m;
+}
 function showRecurringReminderModal(task){
   const r=task.reminder||{};
-  modal(`<h2 style="color:var(--accent-dark);margin-bottom:6px">🔔 Reminders</h2><p style="font-size:.85rem;color:var(--text-dim);margin-bottom:14px">${task.name}</p><label class="chlbl"><input id="rmon" type="checkbox" ${r.on?'checked':''}> Remind me when this becomes due again</label><div id="rmfields" style="margin-top:12px;${r.on?'':'display:none'}"><label class="rl">Time</label><div style="display:flex;justify-content:center;margin-bottom:8px"><input id="rmtime" type="time" value="${r.time||'19:00'}" class="inf" style="width:160px;margin:0"></div><p style="font-size:.75rem;color:var(--text-dim);margin-bottom:8px">Fires once, on the day it genuinely becomes due — not every day it's outstanding, even if you skip it or hit "Not today" a few times. Best-effort schedule, won't fire to the exact minute.</p></div><div id="rme" class="err"></div><button id="rmsv" class="btn bpri" style="width:100%;margin-top:8px">Save</button><button data-close class="btn bmut" style="margin-top:8px;width:100%">Close</button>`);
+  modal(`<h2 style="color:var(--accent-dark);margin-bottom:6px">🔔 Reminders</h2><p style="font-size:.85rem;color:var(--text-dim);margin-bottom:14px">${task.name}</p><label class="chlbl"><input id="rmon" type="checkbox" ${r.on?'checked':''}> Remind me when this becomes due again</label><div id="rmfields" style="margin-top:12px;${r.on?'':'display:none'}"><label class="rl">Time</label>${timePickerHTML('rm',r.time||'19:00')}<p style="font-size:.75rem;color:var(--text-dim);margin-bottom:8px">Fires once, on the day it genuinely becomes due — not every day it's outstanding, even if you skip it or hit "Not today" a few times. Best-effort schedule, won't fire to the exact minute.</p></div><div id="rme" class="err"></div><button id="rmsv" class="btn bpri" style="width:100%;margin-top:8px">Save</button><button data-close class="btn bmut" style="margin-top:8px;width:100%">Close</button>`);
   document.getElementById('rmon')?.addEventListener('change',e=>{document.getElementById('rmfields').style.display=e.target.checked?'':'none'});
   document.getElementById('rmsv')?.addEventListener('click',()=>{
     const on=document.getElementById('rmon').checked;
     const err=document.getElementById('rme');
     if(on){
-      const time=document.getElementById('rmtime').value;
+      const time=readTimePicker('rm');
       if(!time){err.textContent='Please choose a time';err.style.display='block';return}
       task.reminder={on:true,time,freq:'recurring-due',lastSent:(task.reminder&&task.reminder.lastSent)||null};
       D.settings.timezone=Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -1991,7 +2008,7 @@ function showTaskReminderModal(tid){
   const domOptions=[`<option value="1" ${dayOfMonth===1?'selected':''}>First of the month</option>`,`<option value="last" ${dayOfMonth==='last'?'selected':''}>Last of the month</option>`].concat(
     Array.from({length:30},(_, i)=>i+2).map(d=>`<option value="${d}" ${dayOfMonth===d?'selected':''}>${d}</option>`)
   ).join('');
-  modal(`<h2 style="color:var(--accent-dark);margin-bottom:6px">🔔 Reminders</h2><p style="font-size:.85rem;color:var(--text-dim);margin-bottom:14px">${task.name}</p><label class="chlbl"><input id="rmon" type="checkbox" ${r.on?'checked':''}> Enable reminders for this task</label><div id="rmfields" style="margin-top:12px;${r.on?'':'display:none'}"><label class="rl">Time</label><div style="display:flex;justify-content:center;margin-bottom:8px"><input id="rmtime" type="time" value="${r.time||'19:00'}" class="inf" style="width:160px;margin:0"></div><label class="rl">Frequency</label><select id="rmfreq" class="inf"><option value="daily" ${freq==='daily'?'selected':''}>Daily</option><option value="weekly" ${freq==='weekly'?'selected':''}>Weekly</option><option value="monthly" ${freq==='monthly'?'selected':''}>Monthly</option><option value="once" ${freq==='once'?'selected':''}>One-time</option></select><div id="rmdaily" style="${freq==='daily'?'':'display:none'}"><label class="rl">On these days</label>${daysRow}</div><div id="rmweekly" style="${freq==='weekly'?'':'display:none'}"><label class="rl">On</label>${weekdaySelect}</div><div id="rmmonthly" style="${freq==='monthly'?'':'display:none'}"><label class="rl">Day of month</label><select id="rmdom" class="inf">${domOptions}</select><p style="font-size:.7rem;color:var(--text-dim);margin-top:-4px;margin-bottom:8px">Months without a specific numbered day (e.g. day 31 in a 30-day month) are skipped.</p></div><div id="rmonce" style="${freq==='once'?'':'display:none'}"><label class="rl">Date</label><div style="display:flex;justify-content:center;margin-bottom:8px"><input id="rmdate" type="date" value="${r.date||''}" class="inf" style="width:160px;margin:0"></div></div><p style="font-size:.75rem;color:var(--text-dim);margin-bottom:8px">Best-effort schedule — the check runs periodically, so it won't fire at the exact minute. Skips sending if this task's goal/requirement is already met for the current period.</p></div><div id="rme" class="err"></div><button id="rmsv" class="btn bpri" style="width:100%;margin-top:8px">Save</button><button data-close class="btn bmut" style="margin-top:8px;width:100%">Close</button>`);
+  modal(`<h2 style="color:var(--accent-dark);margin-bottom:6px">🔔 Reminders</h2><p style="font-size:.85rem;color:var(--text-dim);margin-bottom:14px">${task.name}</p><label class="chlbl"><input id="rmon" type="checkbox" ${r.on?'checked':''}> Enable reminders for this task</label><div id="rmfields" style="margin-top:12px;${r.on?'':'display:none'}"><label class="rl">Time</label>${timePickerHTML('rm',r.time||'19:00')}<label class="rl">Frequency</label><select id="rmfreq" class="inf"><option value="daily" ${freq==='daily'?'selected':''}>Daily</option><option value="weekly" ${freq==='weekly'?'selected':''}>Weekly</option><option value="monthly" ${freq==='monthly'?'selected':''}>Monthly</option><option value="once" ${freq==='once'?'selected':''}>One-time</option></select><div id="rmdaily" style="${freq==='daily'?'':'display:none'}"><label class="rl">On these days</label>${daysRow}</div><div id="rmweekly" style="${freq==='weekly'?'':'display:none'}"><label class="rl">On</label>${weekdaySelect}</div><div id="rmmonthly" style="${freq==='monthly'?'':'display:none'}"><label class="rl">Day of month</label><select id="rmdom" class="inf">${domOptions}</select><p style="font-size:.7rem;color:var(--text-dim);margin-top:-4px;margin-bottom:8px">Months without a specific numbered day (e.g. day 31 in a 30-day month) are skipped.</p></div><div id="rmonce" style="${freq==='once'?'':'display:none'}"><label class="rl">Date</label><div style="display:flex;justify-content:center;margin-bottom:8px"><input id="rmdate" type="date" value="${r.date||''}" class="inf" style="width:160px;margin:0"></div></div><p style="font-size:.75rem;color:var(--text-dim);margin-bottom:8px">Best-effort schedule — the check runs periodically, so it won't fire at the exact minute. Skips sending if this task's goal/requirement is already met for the current period.</p></div><div id="rme" class="err"></div><button id="rmsv" class="btn bpri" style="width:100%;margin-top:8px">Save</button><button data-close class="btn bmut" style="margin-top:8px;width:100%">Close</button>`);
   document.getElementById('rmon')?.addEventListener('change',e=>{document.getElementById('rmfields').style.display=e.target.checked?'':'none'});
   document.getElementById('rmfreq')?.addEventListener('change',e=>{
     document.getElementById('rmdaily').style.display=e.target.value==='daily'?'':'none';
@@ -2003,7 +2020,7 @@ function showTaskReminderModal(tid){
     const on=document.getElementById('rmon').checked;
     const err=document.getElementById('rme');
     if(on){
-      const time=document.getElementById('rmtime').value;
+      const time=readTimePicker('rm');
       const f=document.getElementById('rmfreq').value;
       if(!time){err.textContent='Please choose a time';err.style.display='block';return}
       const base={on:true,time,freq:f,lastSent:(task.reminder&&task.reminder.lastSent)||null};
