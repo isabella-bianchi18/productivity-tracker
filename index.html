@@ -25,7 +25,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-seri
 if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
 
 // ===== DATA =====
-const APP_VERSION='5.1.0';
+const APP_VERSION='5.1.1';
 const DEFAULT_DATA={tasks:[],points:0,pointsHistory:[],rewards:[],techniques:[],metrics:[],settings:{gistId:'',token:'',dailyGoal:0,theme:'default'},dailyGoalLog:{},streak:0,fractional:0,groupOrder:[],plan:[],savedPlans:[],planSectionRewards:{},groceries:[],recipes:[],pushSubscription:null};
 // Public VAPID key — safe to expose client-side, pairs with the private key held only in GitHub Actions secrets.
 const VAPID_PUBLIC_KEY='BJmb4cAGj9pEseTCWsRI6AzQV5nDwr5ln2BSbT7rEMZ7sm2Z--js3YVLM98lw1SjXO9cMQ1lrd-f9ELm-3v2ecY';
@@ -1962,20 +1962,25 @@ function showTaskDetail(tid){
 
 function timePickerHTML(prefix,currentTime){
   const parts=(currentTime||'19:00').split(':');
-  const ch=parts[0],cm=parts[1];
-  const hourOpts=Array.from({length:24},(_, h)=>{
-    const label=h===0?'12 AM':h<12?`${h} AM`:h===12?'12 PM':`${h-12} PM`;
-    const val=String(h).padStart(2,'0');
-    return `<option value="${val}" ${val===ch?'selected':''}>${label}</option>`;
+  const h24=parseInt(parts[0],10),cm=parts[1];
+  const ap=h24>=12?'PM':'AM';
+  const h12=h24%12===0?12:h24%12;
+  const hourOpts=Array.from({length:12},(_, i)=>{
+    const v=i+1;
+    return `<option value="${v}" ${v===h12?'selected':''}>${v}</option>`;
   }).join('');
   const minOpts=['00','15','30','45'].map(m=>`<option value="${m}" ${m===cm?'selected':''}>:${m}</option>`).join('');
-  return `<div style="display:flex;justify-content:center;gap:6px;margin-bottom:8px"><select id="${prefix}hour" class="inf" style="width:110px;margin:0">${hourOpts}</select><select id="${prefix}min" class="inf" style="width:80px;margin:0">${minOpts}</select></div>`;
+  const ampmOpts=['AM','PM'].map(a=>`<option value="${a}" ${a===ap?'selected':''}>${a}</option>`).join('');
+  return `<div style="display:flex;justify-content:center;gap:6px;margin-bottom:8px"><select id="${prefix}hour" class="inf" style="width:65px;margin:0">${hourOpts}</select><select id="${prefix}min" class="inf" style="width:75px;margin:0">${minOpts}</select><select id="${prefix}ampm" class="inf" style="width:65px;margin:0">${ampmOpts}</select></div>`;
 }
 function readTimePicker(prefix){
-  const h=document.getElementById(prefix+'hour')?.value;
+  const h12=parseInt(document.getElementById(prefix+'hour')?.value,10);
   const m=document.getElementById(prefix+'min')?.value;
-  if(!h||!m)return null;
-  return h+':'+m;
+  const ap=document.getElementById(prefix+'ampm')?.value;
+  if(!h12||!m||!ap)return null;
+  let h24=h12%12;
+  if(ap==='PM')h24+=12;
+  return String(h24).padStart(2,'0')+':'+m;
 }
 function showRecurringReminderModal(task){
   const r=task.reminder||{};
