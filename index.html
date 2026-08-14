@@ -25,7 +25,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-seri
 if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
 
 // ===== DATA =====
-const APP_VERSION='4.5.3';
+const APP_VERSION='4.5.4';
 const DEFAULT_DATA={tasks:[],points:0,pointsHistory:[],rewards:[],techniques:[],metrics:[],settings:{gistId:'',token:'',dailyGoal:0},dailyGoalLog:{},streak:0,fractional:0,groupOrder:[],plan:[],savedPlans:[],planSectionRewards:{},groceries:[],recipes:[]};
 let D=JSON.parse(JSON.stringify(DEFAULT_DATA));
 let view='tasks',toolsView='menu',expandedTech=null,inlineMinId=null,categoryFilter='all',recurSort='custom',taskSearch='',grocSearch='';
@@ -769,7 +769,7 @@ function rPlan(){
 }
 
 // ===== TASKS =====
-function rTasks(){
+function rTasksBody(){
   let content='';
   if(categoryFilter==='archived'){
     // Show archived tasks only
@@ -791,8 +791,12 @@ function rTasks(){
     if(D.metrics&&D.metrics.length&&(categoryFilter==='all'||categoryFilter==='growth')){const mTd=today();const allFilled=D.metrics.every(m=>m.entries.some(e=>e.date===mTd));if(!allFilled){const filled=D.metrics.filter(m=>m.entries.some(e=>e.date===mTd)).length;metricsReminder=`<div class="tcard metrics-reminder" style="background:#f3e8ff;cursor:pointer"><div style="display:flex;align-items:center;gap:10px"><span style="font-size:1.2rem">📊</span><div style="flex:1"><div style="font-weight:600;font-size:.9rem">Log today's metrics</div><div style="font-size:.7rem;color:var(--text-dim)">${filled}/${D.metrics.length} filled</div></div></div></div>`}}
     content=`<div style="display:flex;gap:8px;margin-bottom:14px"><button id="show-af" class="abtn" style="flex:1">+ Add Task</button><div style="display:flex;flex-direction:column;gap:4px"><button id="quick-log-btn" class="btn bmut" style="padding:8px 10px;border-radius:8px;font-size:.75rem;line-height:1.2;text-align:center">⚡ Quick<br>Log</button><button id="bulk-skip-btn" class="btn ${allSkipped?'bwar':'bmut'}" style="padding:8px 10px;border-radius:8px;font-size:.75rem;line-height:1.2;text-align:center">⏭️ Skip<br>All</button></div><button id="surprise-btn" class="btn bwar" style="flex-shrink:0;padding:14px 12px;border-radius:var(--radius);font-size:1rem">🎲</button></div><div id="afc"></div><div id="qlfc"></div>${pinnedSection}${rBucket('🎯 One-Time',ot)}${rBucket('🔄 Recurring',rc,true)}${!searchActive&&slRecurring.length?rSleep(slRecurring,'💤 Recurring - Upcoming'):''}${!searchActive?metricsReminder:''}${rBucket('📅 Daily',dy)}${!searchActive&&slDaily.length?rSleep(slDaily,'💤 Daily - Upcoming'):''}${rBucket('♾️ Evergreen',ev)}${!searchActive&&slOther.length?rSleep(slOther,'🚫 Not Today'):''}`;
   }
+  return content;
+}
+function rTasks(){
+  const content=rTasksBody();
   const fb=`<div style="display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap;align-items:center"><button class="cat-btn ${categoryFilter==='all'?'cat-active':''}" data-cat="all" style="background:var(--card-neutral)">All</button><button class="cat-btn ${categoryFilter==='work'?'cat-active':''}" data-cat="work" style="background:#dbeafe">💼 Work</button><button class="cat-btn ${categoryFilter==='home'?'cat-active':''}" data-cat="home" style="background:#d1fae5">🏠 Home</button><button class="cat-btn ${categoryFilter==='growth'?'cat-active':''}" data-cat="growth" style="background:#fef3c7">🌱 Growth</button><button class="cat-btn ${categoryFilter==='archived'?'cat-active':''}" data-cat="archived" style="background:#e5e7eb">📦 Archived</button><button id="task-search-btn" class="cat-btn" style="background:var(--card-neutral);margin-left:auto">🔍</button></div>${taskSearch!==''?`<input id="task-search-input" type="text" value="${taskSearch==='__open__'?'':taskSearch}" placeholder="Search tasks..." class="inf" style="margin-bottom:12px" autocomplete="off" autofocus>`:''}`;
-  return `<div class="vc">${fb}${content}</div>`}
+  return `<div class="vc">${fb}<div id="task-body">${content}</div></div>`}
 function rBucket(title,tasks,sortable){
   const sortBtn=sortable?`<button id="rsort" class="ibtn" style="font-size:.75rem;margin-left:6px">${recurSort==='custom'?'↕️ by due':'↕️ custom'}</button>`:'';
   if(!tasks.length)return `<div style="margin-bottom:18px"><h2 style="font-size:1rem;color:var(--accent-dark);margin-bottom:8px;display:inline">${title}</h2>${sortBtn}<p style="color:var(--text-dim);font-size:.85rem;font-style:italic;margin-top:8px">Nothing here ✨</p></div>`;
@@ -897,9 +901,7 @@ function rRewards(){
 function rAddReward(){return `<div class="fcard" style="margin-top:12px"><h3 style="margin-bottom:10px;color:var(--accent-dark)">New Reward</h3><input id="rfn" type="text" placeholder="Reward name" class="inf" autocapitalize="words"><input id="rfc" type="number" min="1" placeholder="Cost" class="inf"><div id="rfe" class="err"></div><button id="rfs" class="btn bac2" style="width:100%;opacity:.5" disabled>Add Reward</button></div>`}
 
 // ===== GROCERY LIST =====
-function rGrocery(){
-  if(!D.groceries)D.groceries=[];
-  if(!D.recipes)D.recipes=[];
+function rGroceryBody(){
   const searchTerm=(grocSearch&&grocSearch!=='__open__')?grocSearch.toLowerCase():'';
   const filtered=searchTerm?D.groceries.filter(g=>g.name.toLowerCase().includes(searchTerm)||(g.notes&&g.notes.toLowerCase().includes(searchTerm))):D.groceries;
   const unchecked=filtered.filter(g=>!g.checked);
@@ -910,9 +912,16 @@ function rGrocery(){
   };
   const uncheckedHtml=`<div id="groc-unchecked">${unchecked.map((g,i)=>renderItem(g,i)).join('')}</div>`;
   const checkedHtml=checked.length?`<div style="display:flex;align-items:center;gap:8px;margin:12px 0"><div style="flex:1;height:2px;background:var(--border)"></div><span style="font-size:.7rem;color:var(--text-dim)">— checked off —</span><div style="flex:1;height:2px;background:var(--border)"></div></div><div id="groc-checked">${checked.map((g,i)=>renderItem(g,i)).join('')}</div>`:'';
+  return `${uncheckedHtml}${checkedHtml}${!filtered.length&&searchTerm?'<p style="color:var(--text-dim);font-style:italic;font-size:.85rem">No matches.</p>':''}${!D.groceries.length?'<p style="color:var(--text-dim);font-style:italic;font-size:.85rem">No items yet. Add some above!</p>':''}`;
+}
+function rGrocery(){
+  if(!D.groceries)D.groceries=[];
+  if(!D.recipes)D.recipes=[];
+  const bodyHtml=rGroceryBody();
   // Recipes section
   const recipesHtml=D.recipes.length?`<div style="margin-top:16px;border-top:1px solid var(--border);padding-top:12px"><div style="font-size:.85rem;font-weight:600;color:var(--accent-dark);margin-bottom:8px">📖 Recipes</div>${D.recipes.map((r,ri)=>`<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px"><button class="recipe-view btn bmut" data-ri="${ri}" style="flex:1;font-size:.8rem;padding:6px 10px;text-align:left">🍳 ${r.name} (${r.items.length} item${r.items.length!==1?'s':''})</button><button class="recipe-edit ibtn" data-ri="${ri}" style="font-size:.7rem">✏️</button><button class="recipe-del ibtn" data-ri="${ri}" style="font-size:.7rem;color:var(--danger-dark)">🗑️</button></div>`).join('')}</div>`:'';
-  const searchInput=grocSearch!==''?`<input id="groc-search-input" type="text" value="${grocSearch==='__open__'?'':grocSearch}" placeholder="Search groceries..." class="inf" style="margin-bottom:12px;font-size:.85rem" autocomplete="off" autofocus>`:'';  return `<div class="vc"><button class="tback">← Back</button><div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px"><h2 style="font-size:1.1rem;color:var(--accent-dark)">🛒 Grocery List</h2>${D.groceries.length>3?`<button id="groc-search-btn" class="cat-btn" style="background:var(--card-neutral)">🔍</button>`:''}</div>${searchInput}<div style="display:flex;gap:6px;margin-bottom:12px"><input id="groc-name" type="text" placeholder="Item name" class="inf" autocapitalize="words" style="flex:1;margin:0"><button id="groc-add" class="btn bsuc" style="padding:8px 12px">+</button></div><input id="groc-notes" type="text" placeholder="Notes (optional)" class="inf" style="margin-top:-4px;margin-bottom:12px;font-size:.8rem">${uncheckedHtml}${checkedHtml}${!filtered.length&&searchTerm?'<p style="color:var(--text-dim);font-style:italic;font-size:.85rem">No matches.</p>':''}${!D.groceries.length?'<p style="color:var(--text-dim);font-style:italic;font-size:.85rem">No items yet. Add some above!</p>':''}<button id="recipe-create" class="btn bmut" style="width:100%;margin-top:12px;font-size:.8rem">📖 Create Recipe</button>${recipesHtml}</div>`}
+  const searchInput=grocSearch!==''?`<input id="groc-search-input" type="text" value="${grocSearch==='__open__'?'':grocSearch}" placeholder="Search groceries..." class="inf" style="margin-bottom:12px;font-size:.85rem" autocomplete="off" autofocus>`:'';
+  return `<div class="vc"><button class="tback">← Back</button><div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px"><h2 style="font-size:1.1rem;color:var(--accent-dark)">🛒 Grocery List</h2>${D.groceries.length>3?`<button id="groc-search-btn" class="ibtn" style="background:var(--card-neutral);padding:6px 10px;border-radius:8px">🔍</button>`:''}</div>${searchInput}<div style="display:flex;gap:6px;margin-bottom:12px"><input id="groc-name" type="text" placeholder="Item name" class="inf" autocapitalize="words" style="flex:1;margin:0"><button id="groc-add" class="btn bsuc" style="padding:8px 12px">+</button></div><input id="groc-notes" type="text" placeholder="Notes (optional)" class="inf" style="margin-top:-4px;margin-bottom:12px;font-size:.8rem"><div id="groc-body">${bodyHtml}</div><button id="recipe-create" class="btn bmut" style="width:100%;margin-top:12px;font-size:.8rem">📖 Create Recipe</button>${recipesHtml}</div>`}
 
 // ===== HISTORY =====
 let hM=new Date().getMonth(),hY=new Date().getFullYear(),selDay=null,histCatFilter='all';
@@ -1671,36 +1680,7 @@ function showTaskDetail(tid){
 }
 
 // ===== EVENTS =====
-function bindAll(){
-  document.querySelectorAll('.nbtn').forEach(b=>b.addEventListener('click',()=>{
-    const newView=b.dataset.v;
-    // Save current scroll position
-    scrollPos[view]=window.scrollY;scrollTime[view]=Date.now();
-    // If tapping same tab, reset scroll and reset tools/history view
-    if(newView===view){if(view==='tools')toolsView='menu';if(view==='history'){selDay=today();hM=new Date().getMonth();hY=new Date().getFullYear()}window.scrollTo(0,0);render();return}
-    view=newView;
-    if(view==='tools'){const elapsed=Date.now()-(scrollTime['tools']||0);if(elapsed>=SCROLL_TIMEOUT)toolsView='menu'}
-    if(view==='history'){const elapsed=Date.now()-(scrollTime['history']||0);if(elapsed>=SCROLL_TIMEOUT||!scrollTime['history']){selDay=today();hM=new Date().getMonth();hY=new Date().getFullYear()}}
-    // Restore scroll: set position before render to avoid flash
-    const saved=scrollPos[view],savedTime=scrollTime[view];
-    const restoreScroll=saved&&savedTime&&(Date.now()-savedTime)<SCROLL_TIMEOUT;
-    render();
-    window.scrollTo(0,restoreScroll?saved:0);
-  }));
-  document.getElementById('info-btn')?.addEventListener('click',showInfoModal);
-  document.getElementById('set-btn')?.addEventListener('click',showSettings);
-  document.getElementById('goal-btn')?.addEventListener('click',showGoalSettingModal);
-  document.querySelectorAll('.cat-btn:not(.hist-cat)').forEach(b=>b.addEventListener('click',()=>{if(b.id==='task-search-btn')return;categoryFilter=b.dataset.cat;taskSearch='';render()}));
-  document.getElementById('task-search-btn')?.addEventListener('click',()=>{
-    if(taskSearch!==''){taskSearch='';render()}
-    else{
-      // Create temp input to capture keyboard focus from user gesture (iOS requires this)
-      const tmp=document.createElement('input');tmp.style.cssText='position:absolute;opacity:0;height:0;width:0';document.body.appendChild(tmp);tmp.focus();
-      taskSearch='__open__';render();
-      setTimeout(()=>{const inp=document.getElementById('task-search-input');if(inp){inp.focus()}tmp.remove()},50);
-    }
-  });
-  document.getElementById('task-search-input')?.addEventListener('input',e=>{taskSearch=e.target.value||'__open__';render();setTimeout(()=>{const inp=document.getElementById('task-search-input');if(inp){inp.focus();inp.setSelectionRange(inp.value.length,inp.value.length)}},0)});
+function bindTasksBody(){
   document.querySelector('.metrics-reminder')?.addEventListener('click',()=>{view='tools';toolsView='metrics';render()});
   document.getElementById('rsort')?.addEventListener('click',()=>{recurSort=recurSort==='custom'?'due':'custom';render()});
   // Tasks
@@ -1863,6 +1843,82 @@ function bindAll(){
       if(count>0){save();render();toast(`⏭️ Skipped ${count}${catLabel?' '+catLabel:''} task${count>1?'s':''} for today`)}else{toast('All tasks already skipped or completed')}
     }
   });
+}
+function bindGroceryBody(){
+  document.querySelectorAll('.groc-check').forEach(b=>b.addEventListener('click',e=>{e.stopPropagation();const idx=parseInt(b.dataset.idx);const g=D.groceries[idx];if(!g)return;D.groceries.splice(idx,1);g.checked=!g.checked;if(g.checked){const firstChecked=D.groceries.findIndex(x=>x.checked);if(firstChecked>=0)D.groceries.splice(firstChecked,0,g);else D.groceries.push(g)}else{D.groceries.unshift(g)}save();render()}));
+  document.querySelectorAll('.groc-item').forEach(b=>b.addEventListener('click',()=>{const idx=parseInt(b.dataset.idx);const g=D.groceries[idx];if(!g)return;
+    modal(`<div><h3 style="color:var(--accent-dark);margin-bottom:12px">Edit Item</h3><input id="groc-edit-name" type="text" value="${g.name}" class="inf" autocapitalize="words"><input id="groc-edit-notes" type="text" value="${g.notes||''}" placeholder="Notes" class="inf" style="font-size:.85rem"><div style="display:flex;gap:8px;margin-top:12px"><button id="groc-edit-save" class="btn bpri" style="flex:1">Save</button><button data-close class="btn bmut" style="flex:1">Cancel</button></div></div>`);
+    document.getElementById('groc-edit-save')?.addEventListener('click',()=>{const n=document.getElementById('groc-edit-name')?.value.trim();if(!n)return;g.name=n;g.notes=document.getElementById('groc-edit-notes')?.value.trim()||'';save();closeM();render()})
+  }));
+  document.querySelectorAll('.groc-del').forEach(b=>b.addEventListener('click',e=>{e.stopPropagation();const idx=parseInt(b.dataset.idx);D.groceries.splice(idx,1);save();render()}));
+  // Drag-to-reorder for grocery items
+  initDragList('#groc-unchecked','.groc-item',(fromIdx,toIdx)=>{
+    const unchecked=D.groceries.filter(g=>!g.checked);
+    const item=unchecked[fromIdx];
+    const realFrom=D.groceries.indexOf(item);
+    D.groceries.splice(realFrom,1);
+    // Find real insert position among unchecked items
+    const remaining=D.groceries.filter(g=>!g.checked);
+    const insertBefore=remaining[toIdx];
+    const realTo=insertBefore?D.groceries.indexOf(insertBefore):D.groceries.filter(g=>!g.checked).length;
+    D.groceries.splice(realTo,0,item);
+    save();render();
+  });
+  initDragList('#groc-checked','.groc-item',(fromIdx,toIdx)=>{
+    const checked=D.groceries.filter(g=>g.checked);
+    const item=checked[fromIdx];
+    const realFrom=D.groceries.indexOf(item);
+    D.groceries.splice(realFrom,1);
+    const remaining=D.groceries.filter(g=>g.checked);
+    const insertBefore=remaining[toIdx];
+    const realTo=insertBefore?D.groceries.indexOf(insertBefore):D.groceries.length;
+    D.groceries.splice(realTo,0,item);
+    save();render();
+  });
+}
+function renderTasksBody(){
+  const el=document.getElementById('task-body');
+  if(!el){render();return}
+  el.innerHTML=rTasksBody();
+  bindTasksBody();
+}
+function renderGroceryBody(){
+  const el=document.getElementById('groc-body');
+  if(!el){render();return}
+  el.innerHTML=rGroceryBody();
+  bindGroceryBody();
+}
+function bindAll(){
+  document.querySelectorAll('.nbtn').forEach(b=>b.addEventListener('click',()=>{
+    const newView=b.dataset.v;
+    // Save current scroll position
+    scrollPos[view]=window.scrollY;scrollTime[view]=Date.now();
+    // If tapping same tab, reset scroll and reset tools/history view
+    if(newView===view){if(view==='tools')toolsView='menu';if(view==='history'){selDay=today();hM=new Date().getMonth();hY=new Date().getFullYear()}window.scrollTo(0,0);render();return}
+    view=newView;
+    if(view==='tools'){const elapsed=Date.now()-(scrollTime['tools']||0);if(elapsed>=SCROLL_TIMEOUT)toolsView='menu'}
+    if(view==='history'){const elapsed=Date.now()-(scrollTime['history']||0);if(elapsed>=SCROLL_TIMEOUT||!scrollTime['history']){selDay=today();hM=new Date().getMonth();hY=new Date().getFullYear()}}
+    // Restore scroll: set position before render to avoid flash
+    const saved=scrollPos[view],savedTime=scrollTime[view];
+    const restoreScroll=saved&&savedTime&&(Date.now()-savedTime)<SCROLL_TIMEOUT;
+    render();
+    window.scrollTo(0,restoreScroll?saved:0);
+  }));
+  document.getElementById('info-btn')?.addEventListener('click',showInfoModal);
+  document.getElementById('set-btn')?.addEventListener('click',showSettings);
+  document.getElementById('goal-btn')?.addEventListener('click',showGoalSettingModal);
+  document.querySelectorAll('.cat-btn:not(.hist-cat)').forEach(b=>b.addEventListener('click',()=>{if(b.id==='task-search-btn')return;categoryFilter=b.dataset.cat;taskSearch='';render()}));
+  document.getElementById('task-search-btn')?.addEventListener('click',()=>{
+    if(taskSearch!==''){taskSearch='';render()}
+    else{
+      // Create temp input to capture keyboard focus from user gesture (iOS requires this)
+      const tmp=document.createElement('input');tmp.style.cssText='position:absolute;opacity:0;height:0;width:0';document.body.appendChild(tmp);tmp.focus();
+      taskSearch='__open__';render();
+      setTimeout(()=>{const inp=document.getElementById('task-search-input');if(inp){inp.focus()}tmp.remove()},50);
+    }
+  });
+  document.getElementById('task-search-input')?.addEventListener('input',e=>{taskSearch=e.target.value||'__open__';renderTasksBody()});
+  bindTasksBody();
   // Rewards
   document.querySelectorAll('.rbtn').forEach(b=>b.addEventListener('click',()=>redeemReward(b.dataset.id)));
   document.querySelectorAll('.rdet').forEach(b=>b.addEventListener('click',()=>showRewardEdit(b.dataset.id)));
@@ -2128,37 +2184,8 @@ function bindAll(){
     if(grocSearch!==''){grocSearch='';render()}
     else{const tmp=document.createElement('input');tmp.style.cssText='position:absolute;opacity:0;height:0;width:0';document.body.appendChild(tmp);tmp.focus();grocSearch='__open__';render();setTimeout(()=>{const inp=document.getElementById('groc-search-input');if(inp){inp.focus()}tmp.remove()},50)}
   });
-  document.getElementById('groc-search-input')?.addEventListener('input',e=>{grocSearch=e.target.value||'__open__';render();setTimeout(()=>{const inp=document.getElementById('groc-search-input');if(inp){inp.focus();inp.setSelectionRange(inp.value.length,inp.value.length)}},0)});
-  document.querySelectorAll('.groc-check').forEach(b=>b.addEventListener('click',e=>{e.stopPropagation();const idx=parseInt(b.dataset.idx);const g=D.groceries[idx];if(!g)return;D.groceries.splice(idx,1);g.checked=!g.checked;if(g.checked){const firstChecked=D.groceries.findIndex(x=>x.checked);if(firstChecked>=0)D.groceries.splice(firstChecked,0,g);else D.groceries.push(g)}else{D.groceries.unshift(g)}save();render()}));
-  document.querySelectorAll('.groc-item').forEach(b=>b.addEventListener('click',()=>{const idx=parseInt(b.dataset.idx);const g=D.groceries[idx];if(!g)return;
-    modal(`<div><h3 style="color:var(--accent-dark);margin-bottom:12px">Edit Item</h3><input id="groc-edit-name" type="text" value="${g.name}" class="inf" autocapitalize="words"><input id="groc-edit-notes" type="text" value="${g.notes||''}" placeholder="Notes" class="inf" style="font-size:.85rem"><div style="display:flex;gap:8px;margin-top:12px"><button id="groc-edit-save" class="btn bpri" style="flex:1">Save</button><button data-close class="btn bmut" style="flex:1">Cancel</button></div></div>`);
-    document.getElementById('groc-edit-save')?.addEventListener('click',()=>{const n=document.getElementById('groc-edit-name')?.value.trim();if(!n)return;g.name=n;g.notes=document.getElementById('groc-edit-notes')?.value.trim()||'';save();closeM();render()})
-  }));
-  document.querySelectorAll('.groc-del').forEach(b=>b.addEventListener('click',e=>{e.stopPropagation();const idx=parseInt(b.dataset.idx);D.groceries.splice(idx,1);save();render()}));
-  // Drag-to-reorder for grocery items
-  initDragList('#groc-unchecked','.groc-item',(fromIdx,toIdx)=>{
-    const unchecked=D.groceries.filter(g=>!g.checked);
-    const item=unchecked[fromIdx];
-    const realFrom=D.groceries.indexOf(item);
-    D.groceries.splice(realFrom,1);
-    // Find real insert position among unchecked items
-    const remaining=D.groceries.filter(g=>!g.checked);
-    const insertBefore=remaining[toIdx];
-    const realTo=insertBefore?D.groceries.indexOf(insertBefore):D.groceries.filter(g=>!g.checked).length;
-    D.groceries.splice(realTo,0,item);
-    save();render();
-  });
-  initDragList('#groc-checked','.groc-item',(fromIdx,toIdx)=>{
-    const checked=D.groceries.filter(g=>g.checked);
-    const item=checked[fromIdx];
-    const realFrom=D.groceries.indexOf(item);
-    D.groceries.splice(realFrom,1);
-    const remaining=D.groceries.filter(g=>g.checked);
-    const insertBefore=remaining[toIdx];
-    const realTo=insertBefore?D.groceries.indexOf(insertBefore):D.groceries.length;
-    D.groceries.splice(realTo,0,item);
-    save();render();
-  });
+  document.getElementById('groc-search-input')?.addEventListener('input',e=>{grocSearch=e.target.value||'__open__';renderGroceryBody()});
+  bindGroceryBody();
   // Recipe: create
   document.getElementById('recipe-create')?.addEventListener('click',()=>{
     const existingItems=D.groceries.map((g,i)=>`<label style="display:flex;align-items:center;gap:6px;padding:4px 0;font-size:.85rem"><input type="checkbox" class="rc-existing" data-i="${i}"> ${g.name}</label>`).join('');
