@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>Theme Sampler</title>
 <style>
-:root{--accent:#7c3aed;--accent-dark:#5b21b6;--accent2:#7dd3fc;--bg:#f8fafc;--card:#fff;--card-task:#f3e8ff;--card-reward:#dbeafe;--card-sleep:#f3e8ff;--card-neutral:#f3f4f6;--text:#1e293b;--text-dim:#64748b;--border:#e2e8f0;--success:#86efac;--success-dark:#22c55e;--warning:#fcd34d;--warning-dark:#d97706;--danger:#fca5a5;--danger-dark:#dc2626}
+:root{--accent:#a78bfa;--accent-dark:#7c3aed;--accent2:#7dd3fc;--bg:#f9fafb;--card:#fff;--card-task:#ede9fe;--card-reward:#dbeafe;--card-sleep:#f3e8ff;--card-neutral:#f3f4f6;--text:#1f2937;--text-dim:#6b7280;--border:#e5e7eb;--success:#86efac;--success-dark:#22c55e;--warning:#fcd34d;--warning-dark:#f59e0b;--danger:#fca5a5;--danger-dark:#ef4444;--cat-work:#dbeafe;--cat-home:#d1fae5;--cat-growth:#fef3c7}
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:system-ui,-apple-system,sans-serif;background:var(--bg);color:var(--text);max-width:420px;margin:0 auto;padding:16px;min-height:100vh;transition:background .4s,color .4s}
 .header{background:var(--card);border-radius:16px;padding:16px;margin-bottom:16px;box-shadow:0 2px 8px rgba(0,0,0,.05);transition:background .4s}
@@ -13,11 +13,11 @@ h1{font-size:1.3rem;color:var(--accent-dark);transition:color .4s}
 .card-reward{background:var(--card-reward);border-radius:12px;padding:12px 16px;margin-bottom:8px;transition:background .4s}
 .card-sleep{background:var(--card-sleep);border-radius:12px;padding:12px 16px;margin-bottom:8px;transition:background .4s}
 .card-neutral{background:var(--card-neutral);border-radius:12px;padding:12px 16px;margin-bottom:8px;transition:background .4s}
-/* Category colors on real task cards are hardcoded constants (catBg() in the app) —
-   they do NOT change with theme, so these stay fixed on purpose across every theme below */
-.card-work{background:#dbeafe;border-radius:12px;padding:12px 16px;margin-bottom:8px}
-.card-home{background:#d1fae5;border-radius:12px;padding:12px 16px;margin-bottom:8px}
-.card-growth{background:#fef3c7;border-radius:12px;padding:12px 16px;margin-bottom:8px}
+/* Category colors now shift per theme (fitting each theme's palette) while staying
+   distinct from one another — see CAT_COLORS below. Default theme keeps the original colors. */
+.card-work{background:var(--cat-work);border-radius:12px;padding:12px 16px;margin-bottom:8px;transition:background .4s}
+.card-home{background:var(--cat-home);border-radius:12px;padding:12px 16px;margin-bottom:8px;transition:background .4s}
+.card-growth{background:var(--cat-growth);border-radius:12px;padding:12px 16px;margin-bottom:8px;transition:background .4s}
 .swatch-row{display:flex;gap:8px;margin-bottom:12px}
 .swatch{flex:1;border-radius:8px;padding:8px 4px;text-align:center;font-size:.65rem;font-weight:600;color:#fff;transition:background .4s}
 .sw-accent2{background:var(--accent2);color:#1e293b}
@@ -32,7 +32,7 @@ h1{font-size:1.3rem;color:var(--accent-dark);transition:color .4s}
 .fall-btn{background:#fde68a;color:#92400e}
 .winter-btn{background:#bfdbfe;color:#1e40af}
 .spring-btn{background:#fbcfe8;color:#9d174d}
-.summer-btn{background:#a5f3fc;color:#0e7490}
+.summer-btn{background:#fef08a;color:#a16207}
 .default-btn{background:#e9d5ff;color:#6b21a8}
 .christmas-btn{background:#fecaca;color:#991b1b}
 .halloween-btn{background:#e9d5ff;color:#6b21a8}
@@ -127,10 +127,10 @@ window.addEventListener('resize',()=>{cv.width=innerWidth;cv.height=innerHeight}
 
 const themes={
   default:{
-    accent:'#7c3aed',accentDark:'#5b21b6',accent2:'#7dd3fc',bg:'#f8fafc',card:'#fff',
-    cardTask:'#f3e8ff',cardReward:'#dbeafe',cardSleep:'#f3e8ff',cardNeutral:'#f3f4f6',
-    text:'#1e293b',textDim:'#64748b',border:'#e2e8f0',
-    success:'#86efac',successDark:'#22c55e',warning:'#fcd34d',warningDark:'#d97706',
+    accent:'#a78bfa',accentDark:'#7c3aed',accent2:'#7dd3fc',bg:'#f9fafb',card:'#fff',
+    cardTask:'#ede9fe',cardReward:'#dbeafe',cardSleep:'#f3e8ff',cardNeutral:'#f3f4f6',
+    text:'#1f2937',textDim:'#6b7280',border:'#e5e7eb',
+    success:'#86efac',successDark:'#22c55e',warning:'#fcd34d',warningDark:'#f59e0b',
     danger:'#fca5a5',dangerDark:'#ef4444'
   },
   fall:{
@@ -154,15 +154,16 @@ const themes={
     success:'#bbf7d0',successDark:'#16a34a',warning:'#fde68a',warningDark:'#d97706',
     danger:'#fecdd3',dangerDark:'#e11d48'
   },
+  // Summer — Citrus Lemonade (bright yellow/lime)
   summer:{
-    accent:'#06b6d4',accentDark:'#0e7490',accent2:'#67e8f9',bg:'#ecfeff',card:'#fff',
-    cardTask:'#cffafe',cardReward:'#bae6fd',cardSleep:'#e0f2fe',cardNeutral:'#f0fdfa',
-    text:'#164e63',textDim:'#0e7490',border:'#67e8f9',
+    accent:'#eab308',accentDark:'#a16207',accent2:'#84cc16',bg:'#fefce8',card:'#fff',
+    cardTask:'#fef08a',cardReward:'#d9f99d',cardSleep:'#ecfccb',cardNeutral:'#fefce8',
+    text:'#3f6212',textDim:'#854d0e',border:'#fde047',
     success:'#bbf7d0',successDark:'#16a34a',warning:'#fed7aa',warningDark:'#c2410c',
     danger:'#fecaca',dangerDark:'#dc2626'
   },
   christmas:{
-    accent:'#dc2626',accentDark:'#991b1b',accent2:'#22c55e',bg:'#f0fdf4',card:'#fff',
+    accent:'#dc2626',accentDark:'#991b1b',accent2:'#22c55e',bg:'#fef2f2',card:'#fff',
     cardTask:'#fee2e2',cardReward:'#dcfce7',cardSleep:'#fef9c3',cardNeutral:'#f5f5f4',
     text:'#14532d',textDim:'#166534',border:'#fbbf24',
     success:'#bbf7d0',successDark:'#16a34a',warning:'#fde68a',warningDark:'#b45309',
@@ -176,7 +177,7 @@ const themes={
     danger:'#fecaca',dangerDark:'#991b1b'
   },
   birthday:{
-    accent:'#4ade80',accentDark:'#15803d',accent2:'#facc15',bg:'#f7fee7',card:'#fff',
+    accent:'#4ade80',accentDark:'#15803d',accent2:'#facc15',bg:'#f0fdf4',card:'#fff',
     cardTask:'#dcfce7',cardReward:'#fef9c3',cardSleep:'#fce7f3',cardNeutral:'#f5f5f4',
     text:'#052e16',textDim:'#15803d',border:'#86efac',
     success:'#bbf7d0',successDark:'#16a34a',warning:'#fde68a',warningDark:'#d97706',
@@ -184,9 +185,32 @@ const themes={
   }
 };
 
+// Per-theme overrides for non-default themes only — default is never touched,
+// it just keeps whatever --cat-work/home/growth are declared in :root above.
+const CAT_COLORS={
+  fall:{work:'#f0dcae',home:'#f3c8a0',growth:'#c8dba0'},
+  winter:{work:'#cfe3f7',home:'#e2e0fb',growth:'#bfeee0'},
+  spring:{work:'#dcd6f5',home:'#ffe1ef',growth:'#c9f2c9'},
+  summer:{work:'#fdf0a0',home:'#fdd8a0',growth:'#d4f0a0'},
+  christmas:{work:'#fbd0d0',home:'#c8e6c9',growth:'#fce8b0'},
+  halloween:{work:'#fcd9b0',home:'#e0c8f5',growth:'#cbe8b0'},
+  birthday:{work:'#c8e0fb',home:'#fbd0e8',growth:'#fdf0b0'}
+};
+
 function setTheme(name,confettiOverride){
   const t=themes[name];
+  // Lettered variants (e.g. 'summerB') use their own color palette above, but share
+  // the base theme's category colors / sound / confetti — only the palette differs.
+  const base=name.replace(/[A-Z]$/,'');
+  const cat=CAT_COLORS[name]||CAT_COLORS[base];
   const r=document.documentElement.style;
+  if(base==='default'||!cat){
+    r.removeProperty('--cat-work');r.removeProperty('--cat-home');r.removeProperty('--cat-growth');
+  } else {
+    r.setProperty('--cat-work',cat.work);
+    r.setProperty('--cat-home',cat.home);
+    r.setProperty('--cat-growth',cat.growth);
+  }
   r.setProperty('--accent',t.accent);
   r.setProperty('--accent-dark',t.accentDark);
   r.setProperty('--accent2',t.accent2);
@@ -205,16 +229,86 @@ function setTheme(name,confettiOverride){
   r.setProperty('--warning-dark',t.warningDark);
   r.setProperty('--danger',t.danger);
   r.setProperty('--danger-dark',t.dangerDark);
-  // Trigger confetti
+  // Play matching completion sound (based on base theme)
+  playThemeSound(base);
+  // Trigger confetti (based on base theme)
   if(confettiOverride){confettiOverride();return}
-  if(name==='fall')confettiFall();
-  else if(name==='winter')confettiWinter();
-  else if(name==='spring')confettiSpring();
-  else if(name==='summer')confettiBubbles();
-  else if(name==='christmas')confettiChristmas();
-  else if(name==='halloween')confettiHalloween();
-  else if(name==='birthday')confettiBirthday();
+  if(base==='fall')confettiFall();
+  else if(base==='winter')confettiWinter();
+  else if(base==='spring')confettiSpring();
+  else if(base==='summer')confettiBubbles();
+  else if(base==='christmas')confettiChristmas();
+  else if(base==='halloween')confettiHalloween();
+  else if(base==='birthday')confettiBirthday();
   else confettiDefault();
+}
+
+// === Sound effects: Web Audio helpers (ported from sound-sampler.html) ===
+function ac(){return new(window.AudioContext||window.webkitAudioContext)()}
+function osc(c,type,freq,t,dur,vol){const o=c.createOscillator(),g=c.createGain();o.connect(g);g.connect(c.destination);o.type=type;o.frequency.setValueAtTime(freq,t);g.gain.setValueAtTime(vol||0.3,t);g.gain.exponentialRampToValueAtTime(0.01,t+dur);o.start(t);o.stop(t+dur);return o}
+function noiseBurst(c,dur,filterType,filterFreq,vol,curve){
+  const bufferSize=Math.floor(c.sampleRate*dur);
+  const buffer=c.createBuffer(1,bufferSize,c.sampleRate);
+  const data=buffer.getChannelData(0);
+  for(let i=0;i<bufferSize;i++){const env=curve==='square'?Math.pow(1-i/bufferSize,2):(1-i/bufferSize);data[i]=(Math.random()*2-1)*env}
+  const noise=c.createBufferSource();noise.buffer=buffer;
+  const filter=c.createBiquadFilter();filter.type=filterType;filter.frequency.value=filterFreq;
+  const g=c.createGain();g.gain.setValueAtTime(vol,c.currentTime);g.gain.exponentialRampToValueAtTime(0.01,c.currentTime+dur);
+  noise.connect(filter);filter.connect(g);g.connect(c.destination);
+  noise.start();noise.stop(c.currentTime+dur);
+}
+function bellTone(c,t,f,vol){
+  [1,2.4,3.8,5.4].forEach((mult,i)=>{
+    const o=c.createOscillator(),g=c.createGain();
+    o.connect(g);g.connect(c.destination);o.type='sine';
+    o.frequency.setValueAtTime(f*mult,t);
+    const v=vol/(i+1);
+    g.gain.setValueAtTime(v,t);
+    g.gain.exponentialRampToValueAtTime(0.001,t+0.4-i*0.05);
+    o.start(t);o.stop(t+0.4);
+  });
+}
+
+// Default — Pop
+function soundPop(){const c=ac(),o=c.createOscillator(),g=c.createGain();o.connect(g);g.connect(c.destination);o.type='sine';o.frequency.setValueAtTime(600,c.currentTime);o.frequency.exponentialRampToValueAtTime(1200,c.currentTime+0.05);o.frequency.exponentialRampToValueAtTime(300,c.currentTime+0.15);g.gain.setValueAtTime(0.3,c.currentTime);g.gain.exponentialRampToValueAtTime(0.01,c.currentTime+0.15);o.start();o.stop(c.currentTime+0.15)}
+// Fall — Leaf Crunch
+function soundLeafCrunch(){const c=ac();noiseBurst(c,0.15,'bandpass',1200,0.35,'square')}
+// Winter — Glass, crystal tap
+function soundGlassTap(){const c=ac();[2200,3300].forEach(f=>{const o=c.createOscillator(),g=c.createGain();o.connect(g);g.connect(c.destination);o.type='sine';o.frequency.setValueAtTime(f,c.currentTime);g.gain.setValueAtTime(0.12,c.currentTime);g.gain.exponentialRampToValueAtTime(0.01,c.currentTime+0.3);o.start();o.stop(c.currentTime+0.3)})}
+// Spring — Warble
+function soundWarble(){
+  const c=ac(),o=c.createOscillator(),g=c.createGain(),lfo=c.createOscillator(),lfoGain=c.createGain();
+  o.connect(g);g.connect(c.destination);o.type='sine';o.frequency.setValueAtTime(2200,c.currentTime);
+  lfo.frequency.setValueAtTime(14,c.currentTime);lfo.connect(lfoGain);lfoGain.gain.setValueAtTime(150,c.currentTime);lfoGain.connect(o.frequency);
+  g.gain.setValueAtTime(0.001,c.currentTime);g.gain.linearRampToValueAtTime(0.22,c.currentTime+0.03);g.gain.exponentialRampToValueAtTime(0.01,c.currentTime+0.25);
+  lfo.start();o.start();o.stop(c.currentTime+0.25);lfo.stop(c.currentTime+0.25);
+}
+// Summer — Sun Sparkle
+function soundSunSparkle(){const c=ac();[1800,2400,3000,3600].forEach((f,i)=>{osc(c,'sine',f,c.currentTime+i*0.03,0.15,0.12)})}
+// Christmas — Jingle Shake
+function soundJingleShake(){const c=ac();for(let i=0;i<10;i++){const t=c.currentTime+Math.random()*0.35;const f=1800+Math.random()*1400;bellTone(c,t,f,0.12)}}
+// Halloween — Eerie Whistle
+function soundEerieWhistle(){
+  const c=ac(),o=c.createOscillator(),g=c.createGain(),lfo=c.createOscillator(),lfoGain=c.createGain();
+  o.connect(g);g.connect(c.destination);o.type='sine';o.frequency.setValueAtTime(1200,c.currentTime);
+  lfo.frequency.setValueAtTime(6,c.currentTime);lfo.connect(lfoGain);lfoGain.gain.setValueAtTime(40,c.currentTime);lfoGain.connect(o.frequency);
+  g.gain.setValueAtTime(0.001,c.currentTime);g.gain.linearRampToValueAtTime(0.2,c.currentTime+0.1);g.gain.exponentialRampToValueAtTime(0.01,c.currentTime+0.5);
+  lfo.start();o.start();o.stop(c.currentTime+0.5);lfo.stop(c.currentTime+0.5);
+}
+// Birthday — Fanfare
+function soundFanfare(){const c=ac();[523,523,784].forEach((f,i)=>{osc(c,'square',f,c.currentTime+i*0.12,i===2?0.3:0.1,0.12)})}
+
+function playThemeSound(name){
+  try{
+    if(name==='fall')soundLeafCrunch();
+    else if(name==='winter')soundGlassTap();
+    else if(name==='spring')soundWarble();
+    else if(name==='summer')soundSunSparkle();
+    else if(name==='christmas')soundJingleShake();
+    else if(name==='halloween')soundEerieWhistle();
+    else if(name==='birthday')soundFanfare();
+    else soundPop();
+  }catch(e){/* AudioContext may be blocked until user gesture; ignore */}
 }
 
 // === DEFAULT: colored rectangles ===
@@ -348,7 +442,7 @@ function confettiChristmas(){
   (function a(){cx.clearRect(0,0,cv.width,cv.height);ps.forEach(p=>{
     p.drift+=p.driftSpeed;
     p.x+=Math.sin(p.drift)*1+p.vx*0.2;
-    p.y+=p.vy;p.r+=p.rv;
+    p.y+=p.vy;p.vy+=.12;p.r+=p.rv;
     cx.save();cx.translate(p.x,p.y);cx.rotate(p.r*Math.PI/180);
     if(p.type==='star'){
       cx.fillStyle='#fbbf24';cx.beginPath();
