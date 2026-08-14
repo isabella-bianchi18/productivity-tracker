@@ -1,0 +1,9 @@
+{
+  "name": "productivity-tracker-scripts",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Server-side scripts for push reminders (run by GitHub Actions, not part of the client app)",
+  "dependencies": {
+    "web-push": "3.6.7"
+  }
+}

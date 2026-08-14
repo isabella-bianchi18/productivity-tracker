@@ -26,7 +26,34 @@ if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
 
 // ===== DATA =====
 const APP_VERSION='4.7.0';
-const DEFAULT_DATA={tasks:[],points:0,pointsHistory:[],rewards:[],techniques:[],metrics:[],settings:{gistId:'',token:'',dailyGoal:0,theme:'default'},dailyGoalLog:{},streak:0,fractional:0,groupOrder:[],plan:[],savedPlans:[],planSectionRewards:{},groceries:[],recipes:[]};
+const DEFAULT_DATA={tasks:[],points:0,pointsHistory:[],rewards:[],techniques:[],metrics:[],settings:{gistId:'',token:'',dailyGoal:0,theme:'default'},dailyGoalLog:{},streak:0,fractional:0,groupOrder:[],plan:[],savedPlans:[],planSectionRewards:{},groceries:[],recipes:[],pushSubscription:null};
+// Public VAPID key — safe to expose client-side, pairs with the private key held only in GitHub Actions secrets.
+const VAPID_PUBLIC_KEY='BJmb4cAGj9pEseTCWsRI6AzQV5nDwr5ln2BSbT7rEMZ7sm2Z--js3YVLM98lw1SjXO9cMQ1lrd-f9ELm-3v2ecY';
+function urlBase64ToUint8Array(base64String){
+  const padding='='.repeat((4-base64String.length%4)%4);
+  const base64=(base64String+padding).replace(/-/g,'+').replace(/_/g,'/');
+  const rawData=atob(base64);
+  const outputArray=new Uint8Array(rawData.length);
+  for(let i=0;i<rawData.length;++i)outputArray[i]=rawData.charCodeAt(i);
+  return outputArray;
+}
+async function enablePushReminders(){
+  if(!('serviceWorker' in navigator)||!('PushManager' in window))return{ok:false,msg:'Push isn\'t supported on this browser/device.'};
+  try{
+    const perm=await Notification.requestPermission();
+    if(perm!=='granted')return{ok:false,msg:'Permission not granted.'};
+    const reg=await navigator.serviceWorker.ready;
+    let sub=await reg.pushManager.getSubscription();
+    if(!sub){
+      sub=await reg.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:urlBase64ToUint8Array(VAPID_PUBLIC_KEY)});
+    }
+    D.pushSubscription=JSON.parse(JSON.stringify(sub));
+    saveDirty();
+    return{ok:true,msg:'✅ Reminders enabled! Subscription saved.'};
+  }catch(e){
+    return{ok:false,msg:'❌ Failed: '+(e&&e.message?e.message:'unknown error')};
+  }
+}
 let D=JSON.parse(JSON.stringify(DEFAULT_DATA));
 let view='tasks',toolsView='menu',expandedTech=null,inlineMinId=null,categoryFilter='all',recurSort='custom',taskSearch='',grocSearch='';
 const collapsedGroups=new Set(JSON.parse(localStorage.getItem('pt_collapsedGroups')||'[]'));
@@ -1372,8 +1399,16 @@ function rTech(){
 function showSettings(){
   const curTheme=(D.settings&&D.settings.theme)||'default';
   const themeOptions=Object.keys(THEME_LABELS).map(k=>`<option value="${k}"${k===curTheme?' selected':''}>${THEME_LABELS[k]}</option>`).join('');
-  modal(`<h2 style="color:var(--accent-dark);margin-bottom:16px">⚙️ Settings</h2><p style="font-size:.85rem;color:var(--text-dim);margin-bottom:8px"><b>Theme</b> (preview — try any one)</p><select id="theme-select" class="inf" style="margin-bottom:12px">${themeOptions}</select><p style="font-size:.85rem;color:var(--text-dim);margin-bottom:12px"><b>Gist Sync</b><br><a href="https://gist.github.com/" target="_blank" style="color:var(--accent-dark)">Create secret Gist</a> (file: <code>productivity_data.json</code> with <code>{}</code>)<br><a href="https://github.com/settings/tokens/new?scopes=gist&description=Productivity+Tracker" target="_blank" style="color:var(--accent-dark)">Generate token</a> (classic, gist scope only)</p><input id="sgi" type="text" value="${D.settings.gistId}" placeholder="Gist ID" class="inf"><input id="sgt" type="password" value="${D.settings.token}" placeholder="Token" class="inf"><button id="ssv" class="btn bsuc" style="width:100%;margin-bottom:8px">Save & Sync</button><button id="spl" class="btn bmut" style="width:100%;margin-bottom:8px">⬇️ Pull</button><button id="spu" class="btn bmut" style="width:100%;margin-bottom:8px">⬆️ Push</button><button id="sexp" class="btn bmut" style="width:100%;margin-bottom:8px">📦 Export Backup</button><button id="simp" class="btn bmut" style="width:100%;margin-bottom:8px">📥 Import Backup</button><input id="simp-file" type="file" accept=".json" style="display:none"><div id="sst" style="text-align:center;font-size:.85rem;color:var(--text-dim);margin-top:8px"></div><button data-close class="btn bmut" style="margin-top:12px;width:100%">Close</button><p style="text-align:center;font-size:.75rem;color:var(--text-dim);margin-top:12px">App version: ${APP_VERSION}</p>`);
+  const pushEnabled=!!D.pushSubscription;
+  modal(`<h2 style="color:var(--accent-dark);margin-bottom:16px">⚙️ Settings</h2><p style="font-size:.85rem;color:var(--text-dim);margin-bottom:8px"><b>Theme</b> (preview — try any one)</p><select id="theme-select" class="inf" style="margin-bottom:12px">${themeOptions}</select><p style="font-size:.85rem;color:var(--text-dim);margin-bottom:8px"><b>Reminders</b> (experimental — testing in progress)</p><button id="push-enable" class="btn ${pushEnabled?'bmut':'bsuc'}" style="width:100%;margin-bottom:4px">${pushEnabled?'🔔 Reminders enabled (tap to re-subscribe)':'🔔 Enable Reminders'}</button><div id="push-st" style="text-align:center;font-size:.8rem;color:var(--text-dim);margin-bottom:12px"></div><p style="font-size:.85rem;color:var(--text-dim);margin-bottom:12px"><b>Gist Sync</b><br><a href="https://gist.github.com/" target="_blank" style="color:var(--accent-dark)">Create secret Gist</a> (file: <code>productivity_data.json</code> with <code>{}</code>)<br><a href="https://github.com/settings/tokens/new?scopes=gist&description=Productivity+Tracker" target="_blank" style="color:var(--accent-dark)">Generate token</a> (classic, gist scope only)</p><input id="sgi" type="text" value="${D.settings.gistId}" placeholder="Gist ID" class="inf"><input id="sgt" type="password" value="${D.settings.token}" placeholder="Token" class="inf"><button id="ssv" class="btn bsuc" style="width:100%;margin-bottom:8px">Save & Sync</button><button id="spl" class="btn bmut" style="width:100%;margin-bottom:8px">⬇️ Pull</button><button id="spu" class="btn bmut" style="width:100%;margin-bottom:8px">⬆️ Push</button><button id="sexp" class="btn bmut" style="width:100%;margin-bottom:8px">📦 Export Backup</button><button id="simp" class="btn bmut" style="width:100%;margin-bottom:8px">📥 Import Backup</button><input id="simp-file" type="file" accept=".json" style="display:none"><div id="sst" style="text-align:center;font-size:.85rem;color:var(--text-dim);margin-top:8px"></div><button data-close class="btn bmut" style="margin-top:12px;width:100%">Close</button><p style="text-align:center;font-size:.75rem;color:var(--text-dim);margin-top:12px">App version: ${APP_VERSION}</p>`);
   document.getElementById('theme-select')?.addEventListener('change',e=>{D.settings.theme=e.target.value;applyTheme();saveDirty();render();confetti()});
+  document.getElementById('push-enable')?.addEventListener('click',async()=>{
+    const st=document.getElementById('push-st');
+    st.textContent='Requesting permission...';
+    const r=await enablePushReminders();
+    st.textContent=r.msg;
+    if(r.ok){const btn=document.getElementById('push-enable');btn.textContent='🔔 Reminders enabled (tap to re-subscribe)';btn.classList.remove('bsuc');btn.classList.add('bmut')}
+  });
   document.getElementById('ssv')?.addEventListener('click',async()=>{D.settings.gistId=document.getElementById('sgi').value.trim();D.settings.token=document.getElementById('sgt').value.trim();saveL();const s=document.getElementById('sst');s.textContent='Syncing...';const pulled=await gistPull();if(pulled){updateStreak();s.textContent='✅ Synced!';startAutoSync();closeM();render()}else{s.textContent='❌ Failed — check credentials'}});
   document.getElementById('spl')?.addEventListener('click',async()=>{const s=document.getElementById('sst');s.textContent='Pulling...';const ok=await gistPull();s.textContent=ok?'✅ Pulled!':'❌ Failed';if(ok){updateStreak();closeM();render()}});
   document.getElementById('spu')?.addEventListener('click',async()=>{const s=document.getElementById('sst');s.textContent='Pushing...';const ok=await gistPush();s.textContent=ok?'✅ Pushed!':'❌ Failed'});
