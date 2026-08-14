@@ -1957,9 +1957,29 @@ function showTaskDetail(tid){
   document.getElementById('edl')?.addEventListener('click',()=>confirmAction('Delete this task?',()=>{deleteTask(tid);closeM()}));
 }
 
+function showRecurringReminderModal(task){
+  const r=task.reminder||{};
+  modal(`<h2 style="color:var(--accent-dark);margin-bottom:6px">🔔 Reminders</h2><p style="font-size:.85rem;color:var(--text-dim);margin-bottom:14px">${task.name}</p><label class="chlbl"><input id="rmon" type="checkbox" ${r.on?'checked':''}> Remind me when this becomes due again</label><div id="rmfields" style="margin-top:12px;${r.on?'':'display:none'}"><label class="rl">Time</label><div style="display:flex;justify-content:center;margin-bottom:8px"><input id="rmtime" type="time" value="${r.time||'19:00'}" class="inf" style="width:160px;margin:0"></div><p style="font-size:.75rem;color:var(--text-dim);margin-bottom:8px">Fires once, on the day it genuinely becomes due — not every day it's outstanding, even if you skip it or hit "Not today" a few times. Best-effort schedule, won't fire to the exact minute.</p></div><div id="rme" class="err"></div><button id="rmsv" class="btn bpri" style="width:100%;margin-top:8px">Save</button><button data-close class="btn bmut" style="margin-top:8px;width:100%">Close</button>`);
+  document.getElementById('rmon')?.addEventListener('change',e=>{document.getElementById('rmfields').style.display=e.target.checked?'':'none'});
+  document.getElementById('rmsv')?.addEventListener('click',()=>{
+    const on=document.getElementById('rmon').checked;
+    const err=document.getElementById('rme');
+    if(on){
+      const time=document.getElementById('rmtime').value;
+      if(!time){err.textContent='Please choose a time';err.style.display='block';return}
+      task.reminder={on:true,time,freq:'recurring-due',lastSent:(task.reminder&&task.reminder.lastSent)||null};
+      D.settings.timezone=Intl.DateTimeFormat().resolvedOptions().timeZone;
+    } else {
+      task.reminder={...r,on:false};
+    }
+    saveDirty();closeM();render();toast(on?'🔔 Reminder set':'🔕 Reminder turned off');
+  });
+}
+
 function showTaskReminderModal(tid){
   const task=D.tasks.find(t=>t.id===tid);if(!task)return;
   const r=task.reminder||{};
+  if(task.type==='recurring')return showRecurringReminderModal(task);
   const freq=r.freq||'daily';
   const days=r.days||[0,1,2,3,4,5,6];
   const weekday=r.weekday!=null?r.weekday:0;
