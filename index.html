@@ -25,10 +25,10 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-seri
 if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
 
 // ===== DATA =====
-const APP_VERSION='4.5.1';
+const APP_VERSION='4.5.2';
 const DEFAULT_DATA={tasks:[],points:0,pointsHistory:[],rewards:[],techniques:[],metrics:[],settings:{gistId:'',token:'',dailyGoal:0},dailyGoalLog:{},streak:0,fractional:0,groupOrder:[],plan:[],savedPlans:[],planSectionRewards:{},groceries:[],recipes:[]};
 let D=JSON.parse(JSON.stringify(DEFAULT_DATA));
-let view='tasks',toolsView='menu',expandedTech=null,inlineMinId=null,categoryFilter='all',recurSort='custom',taskSearch='';
+let view='tasks',toolsView='menu',expandedTech=null,inlineMinId=null,categoryFilter='all',recurSort='custom',taskSearch='',grocSearch='';
 const collapsedGroups=new Set(JSON.parse(localStorage.getItem('pt_collapsedGroups')||'[]'));
 const expandedSleep=new Set();
 let T={running:false,paused:false,mode:null,start:null,elapsed:0,workDur:25,breakDur:5,phase:'work',note:'',taskId:'',pts:1,per:15,planMode:false,planQueue:[],planTimes:{},planCurrentStart:0,planCompleted:[],planCounts:{},totalWork:0,totalBreak:0,awaitingAck:false};
@@ -900,8 +900,10 @@ function rAddReward(){return `<div class="fcard" style="margin-top:12px"><h3 sty
 function rGrocery(){
   if(!D.groceries)D.groceries=[];
   if(!D.recipes)D.recipes=[];
-  const unchecked=D.groceries.filter(g=>!g.checked);
-  const checked=D.groceries.filter(g=>g.checked);
+  const searchTerm=grocSearch.toLowerCase();
+  const filtered=searchTerm?D.groceries.filter(g=>g.name.toLowerCase().includes(searchTerm)||(g.notes&&g.notes.toLowerCase().includes(searchTerm))):D.groceries;
+  const unchecked=filtered.filter(g=>!g.checked);
+  const checked=filtered.filter(g=>g.checked);
   const renderItem=(g,i)=>{
     const idx=D.groceries.indexOf(g);
     return `<div class="tcard groc-item" data-idx="${idx}" style="background:${g.checked?'var(--card-neutral)':'var(--card-task)'};display:flex;align-items:flex-start;gap:10px;padding:10px 12px;cursor:pointer;user-select:none;-webkit-user-select:none"><button class="groc-check cbtn" data-idx="${idx}" style="${g.checked?'opacity:.5':''}">${g.checked?'✓':'○'}</button><div style="flex:1;min-width:0"><div style="font-weight:600;font-size:.9rem;${g.checked?'text-decoration:line-through;color:var(--text-dim)':''}">${g.name}</div>${g.notes?`<div style="font-size:.8rem;color:var(--text-dim);margin-top:2px;padding-left:8px;font-style:italic">${g.notes}</div>`:''}</div><button class="groc-del ibtn" data-idx="${idx}" style="font-size:.7rem;color:var(--danger-dark)">🗑️</button></div>`;
@@ -909,8 +911,9 @@ function rGrocery(){
   const uncheckedHtml=`<div id="groc-unchecked">${unchecked.map((g,i)=>renderItem(g,i)).join('')}</div>`;
   const checkedHtml=checked.length?`<div style="display:flex;align-items:center;gap:8px;margin:12px 0"><div style="flex:1;height:2px;background:var(--border)"></div><span style="font-size:.7rem;color:var(--text-dim)">— checked off —</span><div style="flex:1;height:2px;background:var(--border)"></div></div><div id="groc-checked">${checked.map((g,i)=>renderItem(g,i)).join('')}</div>`:'';
   // Recipes section
-  const recipesHtml=D.recipes.length?`<div style="margin-top:16px;border-top:1px solid var(--border);padding-top:12px"><div style="font-size:.85rem;font-weight:600;color:var(--accent-dark);margin-bottom:8px">📖 Recipes</div>${D.recipes.map((r,ri)=>`<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px"><button class="recipe-add btn bmut" data-ri="${ri}" style="flex:1;font-size:.8rem;padding:6px 10px;text-align:left">🍳 ${r.name} (${r.items.length} item${r.items.length!==1?'s':''})</button><button class="recipe-edit ibtn" data-ri="${ri}" style="font-size:.7rem">✏️</button><button class="recipe-del ibtn" data-ri="${ri}" style="font-size:.7rem;color:var(--danger-dark)">🗑️</button></div>`).join('')}</div>`:'';
-  return `<div class="vc"><button class="tback">← Back</button><h2 style="font-size:1.1rem;color:var(--accent-dark);margin-bottom:12px">🛒 Grocery List</h2><div style="display:flex;gap:6px;margin-bottom:12px"><input id="groc-name" type="text" placeholder="Item name" class="inf" autocapitalize="words" style="flex:1;margin:0"><button id="groc-add" class="btn bsuc" style="padding:8px 12px">+</button></div><input id="groc-notes" type="text" placeholder="Notes (optional)" class="inf" style="margin-top:-4px;margin-bottom:12px;font-size:.8rem">${uncheckedHtml}${checkedHtml}${!D.groceries.length?'<p style="color:var(--text-dim);font-style:italic;font-size:.85rem">No items yet. Add some above!</p>':''}<button id="recipe-create" class="btn bmut" style="width:100%;margin-top:12px;font-size:.8rem">📖 Create Recipe</button>${recipesHtml}</div>`}
+  const recipesHtml=D.recipes.length?`<div style="margin-top:16px;border-top:1px solid var(--border);padding-top:12px"><div style="font-size:.85rem;font-weight:600;color:var(--accent-dark);margin-bottom:8px">📖 Recipes</div>${D.recipes.map((r,ri)=>`<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px"><button class="recipe-view btn bmut" data-ri="${ri}" style="flex:1;font-size:.8rem;padding:6px 10px;text-align:left">🍳 ${r.name} (${r.items.length} item${r.items.length!==1?'s':''})</button><button class="recipe-edit ibtn" data-ri="${ri}" style="font-size:.7rem">✏️</button><button class="recipe-del ibtn" data-ri="${ri}" style="font-size:.7rem;color:var(--danger-dark)">🗑️</button></div>`).join('')}</div>`:'';
+  const searchInput=D.groceries.length>3?`<input id="groc-search" type="text" placeholder="🔍 Search groceries..." class="inf" style="margin-bottom:12px;font-size:.85rem" value="${grocSearch}">`:'';
+  return `<div class="vc"><button class="tback">← Back</button><h2 style="font-size:1.1rem;color:var(--accent-dark);margin-bottom:12px">🛒 Grocery List</h2><div style="display:flex;gap:6px;margin-bottom:12px"><input id="groc-name" type="text" placeholder="Item name" class="inf" autocapitalize="words" style="flex:1;margin:0"><button id="groc-add" class="btn bsuc" style="padding:8px 12px">+</button></div><input id="groc-notes" type="text" placeholder="Notes (optional)" class="inf" style="margin-top:-4px;margin-bottom:12px;font-size:.8rem">${searchInput}${uncheckedHtml}${checkedHtml}${!filtered.length&&searchTerm?'<p style="color:var(--text-dim);font-style:italic;font-size:.85rem">No matches.</p>':''}${!D.groceries.length?'<p style="color:var(--text-dim);font-style:italic;font-size:.85rem">No items yet. Add some above!</p>':''}<button id="recipe-create" class="btn bmut" style="width:100%;margin-top:12px;font-size:.8rem">📖 Create Recipe</button>${recipesHtml}</div>`}
 
 // ===== HISTORY =====
 let hM=new Date().getMonth(),hY=new Date().getFullYear(),selDay=null,histCatFilter='all';
@@ -2122,6 +2125,7 @@ function bindAll(){
   document.getElementById('met-add')?.addEventListener('click',()=>{const n=document.getElementById('met-new')?.value.trim();if(!n)return;if(!D.metrics)D.metrics=[];D.metrics.push({id:id(),name:n,entries:[]});save();render()});
   // Grocery list bindings
   document.getElementById('groc-add')?.addEventListener('click',()=>{const name=document.getElementById('groc-name')?.value.trim();if(!name)return;const notes=document.getElementById('groc-notes')?.value.trim()||'';if(!D.groceries)D.groceries=[];D.groceries.unshift({name,notes,checked:false});save();render()});
+  document.getElementById('groc-search')?.addEventListener('input',e=>{grocSearch=e.target.value;render()});
   document.querySelectorAll('.groc-check').forEach(b=>b.addEventListener('click',e=>{e.stopPropagation();const idx=parseInt(b.dataset.idx);const g=D.groceries[idx];if(!g)return;D.groceries.splice(idx,1);g.checked=!g.checked;if(g.checked){const firstChecked=D.groceries.findIndex(x=>x.checked);if(firstChecked>=0)D.groceries.splice(firstChecked,0,g);else D.groceries.push(g)}else{D.groceries.unshift(g)}save();render()}));
   document.querySelectorAll('.groc-item').forEach(b=>b.addEventListener('click',()=>{const idx=parseInt(b.dataset.idx);const g=D.groceries[idx];if(!g)return;
     modal(`<div><h3 style="color:var(--accent-dark);margin-bottom:12px">Edit Item</h3><input id="groc-edit-name" type="text" value="${g.name}" class="inf" autocapitalize="words"><input id="groc-edit-notes" type="text" value="${g.notes||''}" placeholder="Notes" class="inf" style="font-size:.85rem"><div style="display:flex;gap:8px;margin-top:12px"><button id="groc-edit-save" class="btn bpri" style="flex:1">Save</button><button data-close class="btn bmut" style="flex:1">Cancel</button></div></div>`);
@@ -2166,10 +2170,14 @@ function bindAll(){
       if(!D.recipes)D.recipes=[];D.recipes.push({name,items});save();closeM();render();toast('📖 Recipe saved!')
     });
   });
-  // Recipe: add to list (uncheck all ingredients)
-  document.querySelectorAll('.recipe-add').forEach(b=>b.addEventListener('click',()=>{const ri=parseInt(b.dataset.ri);const r=D.recipes?.[ri];if(!r)return;
-    r.items.forEach(itemName=>{const existing=D.groceries.find(g=>g.name.toLowerCase()===itemName.toLowerCase());if(existing){if(existing.checked){D.groceries.splice(D.groceries.indexOf(existing),1);existing.checked=false;D.groceries.unshift(existing)}}else{D.groceries.unshift({name:itemName,notes:'',checked:false})}});
-    save();render();toast(`🍳 Added ${r.items.length} items from "${r.name}"`)
+  // Recipe: view popup with ingredients + add button
+  document.querySelectorAll('.recipe-view').forEach(b=>b.addEventListener('click',()=>{const ri=parseInt(b.dataset.ri);const r=D.recipes?.[ri];if(!r)return;
+    const ingredientList=r.items.map(item=>{const existing=D.groceries.find(g=>g.name.toLowerCase()===item.toLowerCase());const checked=existing&&existing.checked;const inList=!!existing;return `<div style="display:flex;align-items:center;gap:8px;padding:4px 0;font-size:.85rem"><span style="${checked?'text-decoration:line-through;color:var(--text-dim)':''}">${item}</span>${inList?`<span style="font-size:.65rem;color:${checked?'var(--success-dark)':'var(--accent-dark)'}">${checked?'✓ got it':'in list'}</span>`:''}</div>`}).join('');
+    modal(`<div><h3 style="color:var(--accent-dark);margin-bottom:12px">🍳 ${r.name}</h3><div style="margin-bottom:16px;max-height:250px;overflow-y:auto">${ingredientList}</div><button id="recipe-add-all" class="btn bsuc" style="width:100%;margin-bottom:8px">🛒 Add all to grocery list</button><button data-close class="btn bmut" style="width:100%">Close</button></div>`);
+    document.getElementById('recipe-add-all')?.addEventListener('click',()=>{
+      r.items.forEach(itemName=>{const existing=D.groceries.find(g=>g.name.toLowerCase()===itemName.toLowerCase());if(existing){if(existing.checked){D.groceries.splice(D.groceries.indexOf(existing),1);existing.checked=false;D.groceries.unshift(existing)}}else{D.groceries.unshift({name:itemName,notes:'',checked:false})}});
+      save();closeM();render();toast(`🍳 Added ${r.items.length} items from "${r.name}"`)
+    });
   }));
   document.querySelectorAll('.recipe-del').forEach(b=>b.addEventListener('click',e=>{e.stopPropagation();const ri=parseInt(b.dataset.ri);confirmAction(`Delete recipe "${D.recipes[ri]?.name}"?`,()=>{D.recipes.splice(ri,1);save();render()})}));
   document.querySelectorAll('.recipe-edit').forEach(b=>b.addEventListener('click',e=>{e.stopPropagation();const ri=parseInt(b.dataset.ri);const r=D.recipes?.[ri];if(!r)return;
