@@ -25,7 +25,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-seri
 if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
 
 // ===== DATA =====
-const APP_VERSION='4.5.4';
+const APP_VERSION='4.6.1';
 const DEFAULT_DATA={tasks:[],points:0,pointsHistory:[],rewards:[],techniques:[],metrics:[],settings:{gistId:'',token:'',dailyGoal:0},dailyGoalLog:{},streak:0,fractional:0,groupOrder:[],plan:[],savedPlans:[],planSectionRewards:{},groceries:[],recipes:[]};
 let D=JSON.parse(JSON.stringify(DEFAULT_DATA));
 let view='tasks',toolsView='menu',expandedTech=null,inlineMinId=null,categoryFilter='all',recurSort='custom',taskSearch='',grocSearch='';
@@ -784,7 +784,7 @@ function rTasksBody(){
     const ev=vis.filter(t=>t.type==='evergreen'&&!t.pinned),dy=vis.filter(t=>t.type==='daily'&&!t.pinned),sl=sleepingTasks().filter(t=>!t.archived&&!t.pinned&&(categoryFilter==='all'||t.category===categoryFilter));
     const slRecurring=sl.filter(t=>t.type==='recurring'),slDaily=sl.filter(t=>t.type==='daily'),slOther=sl.filter(t=>t.type!=='recurring'&&t.type!=='daily');
     const pinned=vis.filter(t=>t.pinned);
-    const pinnedSection=pinned.length?`<div style="margin-bottom:18px"><h2 style="font-size:1rem;color:var(--accent-dark);margin-bottom:8px">📌 Pinned</h2>${pinned.map((t,i)=>rCard(t,i,pinned.length)).join('')}</div>`:'';
+    const pinnedSection=pinned.length?`<div style="margin-bottom:18px"><h2 style="font-size:1rem;color:var(--accent-dark);margin-bottom:8px">📌 Pinned</h2><div class="pinned-bucket" style="margin-top:8px">${pinned.map((t,i)=>rSwipeWrap(t,rCard(t,i,pinned.length))).join('')}</div></div>`:'';
     const td=today();const allSkippable=D.tasks.filter(t=>!t.archived&&(t.type==='daily'||(t.goal&&t.goal.period==='daily'))&&(categoryFilter==='all'||t.category===categoryFilter));const allSkipped=allSkippable.length>0&&allSkippable.every(t=>t.goalSkips&&t.goalSkips.includes(td));
     // Metrics reminder: show if metrics exist and not all filled today
     let metricsReminder='';
@@ -843,10 +843,14 @@ function rBucket(title,tasks,sortable){
     } else {
       const t=item.task;
       const tIdx=ungrouped.indexOf(t);
-      cards+=`<div class="bucket-item" data-id="${t.id}" style="user-select:none;-webkit-user-select:none;position:relative"><div class="swipe-indicator" style="position:absolute;left:0;top:0;bottom:0;width:100px;display:flex;align-items:center;justify-content:center;background:var(--accent);border-radius:14px;color:#fff;font-weight:600;font-size:.75rem;pointer-events:none;opacity:0">📋 Plan</div><div class="swipe-card" style="position:relative">${rCard(t,tIdx,ungrouped.length)}</div></div>`;
+      cards+=rSwipeWrap(t,rCard(t,tIdx,ungrouped.length));
     }
   });
   return `<div style="margin-bottom:18px"><h2 style="font-size:1rem;color:var(--accent-dark);margin-bottom:8px;display:inline">${title}</h2>${sortBtn}<div class="task-bucket" style="margin-top:8px">${cards}</div></div>`}
+function rSwipeWrap(t,cardHtml){
+  const pinLabel=t.pinned?'📌 Unpin':'📌 Pin';
+  return `<div class="bucket-item" data-id="${t.id}" style="user-select:none;-webkit-user-select:none;position:relative"><div class="swipe-indicator swipe-plan" style="position:absolute;left:0;top:0;bottom:0;width:100px;display:flex;align-items:center;justify-content:center;background:var(--accent);border-radius:14px;color:#fff;font-weight:600;font-size:.75rem;pointer-events:none;opacity:0">📋 Plan</div><div class="swipe-indicator swipe-pin" style="position:absolute;right:0;top:0;bottom:0;width:100px;display:flex;align-items:center;justify-content:center;background:var(--warning-dark);border-radius:14px;color:#fff;font-weight:600;font-size:.75rem;pointer-events:none;opacity:0">${pinLabel}</div><div class="swipe-card" style="position:relative">${cardHtml}</div></div>`;
+}
 function rCard(t,i,n){
   const isM=inlineMinId===t.id,pl=t.timeBased?`${t.ptsAmount} pts / ${t.ptsPerMinutes} min`:t.countBased?`${t.ptsAmount} pts / ${t.ptsPerCount} ${t.countUnit}`:`+${t.points}`;
   // Goal progress bar
@@ -1693,14 +1697,19 @@ function bindTasksBody(){
   document.querySelectorAll('.task-drag-item[data-id]').forEach(el=>el.addEventListener('contextmenu',e=>{
     e.preventDefault();
     const tid=el.dataset.id;if(!tid)return;
+    const t=D.tasks.find(x=>x.id===tid);if(!t)return;
     document.querySelectorAll('.ctx-menu').forEach(m=>m.remove());
     const menu=document.createElement('div');menu.className='ctx-menu';
-    menu.innerHTML=`<button class="ctx-plan-add" data-id="${tid}">📋 Add to Plan</button>`;
+    menu.innerHTML=`<button class="ctx-plan-add" data-id="${tid}">📋 Add to Plan</button><button class="ctx-pin-toggle" data-id="${tid}">${t.pinned?'📌 Unpin':'📌 Pin'}</button>`;
     menu.style.left=e.clientX+'px';menu.style.top=e.clientY+'px';
     document.body.appendChild(menu);
     menu.querySelector('.ctx-plan-add').addEventListener('click',()=>{
       if(D.plan.some(p=>p.type==='task'&&p.id===tid)){toast('Already in plan')}
       else{if(!D.plan)D.plan=[];D.plan.push({type:'task',id:tid});save();toast('📋 Added to plan')}
+      menu.remove();
+    });
+    menu.querySelector('.ctx-pin-toggle').addEventListener('click',()=>{
+      t.pinned=!t.pinned;save();render();toast(t.pinned?'📌 Pinned':'📌 Unpinned');
       menu.remove();
     });
     const close=()=>{menu.remove();document.removeEventListener('click',close)};
@@ -1760,6 +1769,25 @@ function bindTasksBody(){
       save();render();
     },{nestedGuard:'.grp-content'});
   });
+  // Task drag-to-reorder within Pinned section (simple id-based reorder, mixed types)
+  document.querySelectorAll('.pinned-bucket').forEach(bucket=>{
+    initDragList(bucket,'.bucket-item',(fromIdx,toIdx)=>{
+      const items=[...bucket.querySelectorAll('.bucket-item')];
+      const ids=items.map(el=>el.dataset.id);
+      const moved=ids.splice(fromIdx,1)[0];
+      const insertAt=toIdx>fromIdx?Math.min(toIdx-1,ids.length):Math.min(toIdx,ids.length);
+      ids.splice(insertAt,0,moved);
+      const idSet=new Set(ids);
+      const reorderedPinned=ids.map(id=>D.tasks.find(t=>t.id===id)).filter(Boolean);
+      let firstIdx=D.tasks.findIndex(t=>idSet.has(t.id));
+      if(firstIdx<0)firstIdx=0;
+      const others=D.tasks.filter(t=>!idSet.has(t.id));
+      const insertPos=Math.min(firstIdx,others.length);
+      others.splice(insertPos,0,...reorderedPinned);
+      D.tasks=others;
+      save();render();
+    });
+  });
   // Task drag-to-reorder within each group
   document.querySelectorAll('.grp-content').forEach(grpDiv=>{
     const grp=grpDiv.dataset.grp;
@@ -1783,12 +1811,13 @@ function bindTasksBody(){
       save();render();
     });
   });
-  // Swipe right to add to plan (Tasks tab only)
+  // Swipe right to add to plan, swipe left to pin/unpin (Tasks tab only)
   if(view==='tasks'){
     document.querySelectorAll('.bucket-item[data-id]').forEach(el=>{
       let sx=0,sy=0,swiping=false,translateX=0;
       const card=el.querySelector('.swipe-card');
-      const indicator=el.querySelector('.swipe-indicator');
+      const planInd=el.querySelector('.swipe-plan');
+      const pinInd=el.querySelector('.swipe-pin');
       if(!card)return;
       el.addEventListener('touchstart',e=>{
         if(dragState||e.target.closest('button'))return;
@@ -1800,24 +1829,29 @@ function bindTasksBody(){
         if(!swiping&&Math.abs(dx)>10&&Math.abs(dx)>Math.abs(dy)*1.5)swiping=true;
         if(!swiping)return;
         e.preventDefault();
-        translateX=Math.max(0,Math.min(dx,100));
+        translateX=Math.max(-100,Math.min(dx,100));
         card.style.transform=`translateX(${translateX}px)`;
         card.style.transition='none';
-        if(indicator)indicator.style.opacity=Math.min(1,translateX/40);
+        if(planInd)planInd.style.opacity=translateX>0?Math.min(1,translateX/40):0;
+        if(pinInd)pinInd.style.opacity=translateX<0?Math.min(1,-translateX/40):0;
       },{passive:false});
       el.addEventListener('touchend',()=>{
         if(!swiping){translateX=0;return}
+        const tid=el.dataset.id;
         if(translateX>60){
-          const tid=el.dataset.id;
           if(tid&&!D.plan.some(p=>p.type==='task'&&p.id===tid)){
             if(!D.plan)D.plan=[];
             D.plan.push({type:'task',id:tid});
             save();toast('📋 Added to plan');
             if(navigator.vibrate)navigator.vibrate(15);
           } else {toast('Already in plan')}
+        } else if(translateX<-60){
+          const t=D.tasks.find(x=>x.id===tid);
+          if(t){t.pinned=!t.pinned;save();render();toast(t.pinned?'📌 Pinned':'📌 Unpinned');if(navigator.vibrate)navigator.vibrate(15);return}
         }
         card.style.transform='';card.style.transition='transform 0.2s';
-        if(indicator)indicator.style.opacity='0';
+        if(planInd)planInd.style.opacity='0';
+        if(pinInd)pinInd.style.opacity='0';
         setTimeout(()=>{card.style.transition=''},200);
         swiping=false;translateX=0;
       });
@@ -2758,7 +2792,25 @@ function showStartupModals(){
   localStorage.setItem('pt_lastVersion',APP_VERSION);
   // Reset daily goal each new day
   const t=today();
-  if(D._lastDay!==t){D.settings.dailyGoal=0;D._lastDay=t;saveL()}
+  if(D._lastDay!==t){
+    D.settings.dailyGoal=0;
+    // Auto skip/hide work tasks on weekends
+    const wd=new Date().getDay();
+    if(wd===0||wd===6){
+      D.tasks.forEach(task=>{
+        if(task.archived||task.category!=='work')return;
+        const canSkip=!!task.goal||task.type==='daily';
+        if(canSkip){
+          if(!task.goalSkips)task.goalSkips=[];
+          if(!task.goalSkips.includes(t))task.goalSkips.push(t);
+        } else {
+          if(!task.hiddenToday)task.hiddenToday=[];
+          if(!task.hiddenToday.includes(t))task.hiddenToday.push(t);
+        }
+      });
+    }
+    D._lastDay=t;saveL();
+  }
   const dow=new Date().getDay();
   if(dow===1&&D._lastRecap!==getWeekRecap().monStr){showWeekRecap(true);return}
   showGoodMorning();
