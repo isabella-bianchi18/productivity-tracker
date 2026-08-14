@@ -25,7 +25,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-seri
 if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
 
 // ===== DATA =====
-const APP_VERSION='4.6.1';
+const APP_VERSION='4.6.2';
 const DEFAULT_DATA={tasks:[],points:0,pointsHistory:[],rewards:[],techniques:[],metrics:[],settings:{gistId:'',token:'',dailyGoal:0},dailyGoalLog:{},streak:0,fractional:0,groupOrder:[],plan:[],savedPlans:[],planSectionRewards:{},groceries:[],recipes:[]};
 let D=JSON.parse(JSON.stringify(DEFAULT_DATA));
 let view='tasks',toolsView='menu',expandedTech=null,inlineMinId=null,categoryFilter='all',recurSort='custom',taskSearch='',grocSearch='';
@@ -93,7 +93,7 @@ function getGoalProgress(task){
     const psStr=periodStart.toISOString().slice(0,task.goal.period==='hourly'?13:10);
     entries=D.pointsHistory.filter(h=>h.taskId===task.id&&h.type==='earned'&&h.date.slice(0,psStr.length)>=psStr);
   }
-  const current=task.timeBased?entries.reduce((s,h)=>s+(h.minutes||0),0)+(T.planMode?Math.floor((T.planTimes?.[task.id]||0)/60):0):task.countBased?entries.reduce((s,h)=>s+(h.count||0),0)+(T.planMode?(T.planCounts?.[task.id]||0):0):entries.length+(T.planFlatDone?.[task.id]||0);
+  const current=task.timeBased?entries.reduce((s,h)=>s+(h.minutes||0),0)+(T.planMode?Math.floor((T.planTimes?.[task.id]||0)/60):0):task.countBased?entries.reduce((s,h)=>s+(h.count||0),0)+(T.planMode?(T.planCounts?.[task.id]||0):0):entries.length+(T.planMode?(T.planFlatDone?.[task.id]||0):0);
   return{current,target:task.goal.target,pct:Math.min(100,Math.round(current/task.goal.target*100)),period:task.goal.period};
 }
 
@@ -602,11 +602,11 @@ function checkPlanComplete(){
   // Helper to check if a task is done
   function isTaskDone(t,pg){
     const effectiveGoal=pg||(t.goal&&(t.goal.period==='daily'||t.goal.period==='hourly'||t.goal.period==='total')?t.goal:null);
-    if(effectiveGoal){const entries=effectiveGoal.period==='total'?D.pointsHistory.filter(h=>h.taskId===t.id&&h.type==='earned'):D.pointsHistory.filter(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td);const current=t.timeBased?entries.reduce((s,h)=>s+(h.minutes||0),0)+(T.planMode?Math.floor((T.planTimes?.[t.id]||0)/60):0):t.countBased?entries.reduce((s,h)=>s+(h.count||0),0)+(T.planMode?(T.planCounts?.[t.id]||0):0):entries.filter(h=>h.task.includes('✅')).length+(T.planFlatDone?.[t.id]||0);return current>=effectiveGoal.target}
+    if(effectiveGoal){const entries=effectiveGoal.period==='total'?D.pointsHistory.filter(h=>h.taskId===t.id&&h.type==='earned'):D.pointsHistory.filter(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td);const current=t.timeBased?entries.reduce((s,h)=>s+(h.minutes||0),0)+(T.planMode?Math.floor((T.planTimes?.[t.id]||0)/60):0):t.countBased?entries.reduce((s,h)=>s+(h.count||0),0)+(T.planMode?(T.planCounts?.[t.id]||0):0):entries.filter(h=>h.task.includes('✅')).length+(T.planMode?(T.planFlatDone?.[t.id]||0):0);return current>=effectiveGoal.target}
     if(t.type==='one-time')return t.completed;
-    if(t.type==='daily')return(t.lastCompleted&&t.lastCompleted.slice(0,10)===td)||D.pointsHistory.some(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td&&h.task.includes('✅'))||(T.planFlatDone?.[t.id]>0);
+    if(t.type==='daily')return(t.lastCompleted&&t.lastCompleted.slice(0,10)===td)||D.pointsHistory.some(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td&&h.task.includes('✅'))||(T.planMode&&T.planFlatDone?.[t.id]>0);
     if(t.type==='recurring')return t.lastCompleted&&(new Date()-new Date(t.lastCompleted))/864e5<t.cadenceDays;
-    if(t.type==='evergreen')return(t.lastCompleted&&t.lastCompleted.slice(0,10)===td)||D.pointsHistory.some(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td&&h.task.includes('✅'))||(T.planFlatDone?.[t.id]>0);
+    if(t.type==='evergreen')return(t.lastCompleted&&t.lastCompleted.slice(0,10)===td)||D.pointsHistory.some(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td&&h.task.includes('✅'))||(T.planMode&&T.planFlatDone?.[t.id]>0);
     return false;
   }
   // Per-section completion check
@@ -652,13 +652,13 @@ function rPlan(){
     const effectiveGoal=planGoal||(t.goal&&(t.goal.period==='daily'||t.goal.period==='hourly'||t.goal.period==='total')?t.goal:null);
     if(effectiveGoal){
       const entries=effectiveGoal.period==='total'?D.pointsHistory.filter(h=>h.taskId===t.id&&h.type==='earned'):D.pointsHistory.filter(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td);
-      const current=t.timeBased?entries.reduce((s,h)=>s+(h.minutes||0),0)+(T.planMode?Math.floor((T.planTimes?.[t.id]||0)/60):0):t.countBased?entries.reduce((s,h)=>s+(h.count||0),0)+(T.planMode?(T.planCounts?.[t.id]||0):0):entries.filter(h=>h.task.includes('✅')).length+(T.planFlatDone?.[t.id]||0);
+      const current=t.timeBased?entries.reduce((s,h)=>s+(h.minutes||0),0)+(T.planMode?Math.floor((T.planTimes?.[t.id]||0)/60):0):t.countBased?entries.reduce((s,h)=>s+(h.count||0),0)+(T.planMode?(T.planCounts?.[t.id]||0):0):entries.filter(h=>h.task.includes('✅')).length+(T.planMode?(T.planFlatDone?.[t.id]||0):0);
       return current>=effectiveGoal.target;
     }
     if(t.type==='one-time')return t.completed;
-    if(t.type==='daily')return(t.lastCompleted&&t.lastCompleted.slice(0,10)===td)||D.pointsHistory.some(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td&&h.task.includes('✅'))||(T.planFlatDone?.[t.id]>0);
+    if(t.type==='daily')return(t.lastCompleted&&t.lastCompleted.slice(0,10)===td)||D.pointsHistory.some(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td&&h.task.includes('✅'))||(T.planMode&&T.planFlatDone?.[t.id]>0);
     if(t.type==='recurring')return t.lastCompleted&&(new Date()-new Date(t.lastCompleted))/864e5<t.cadenceDays;
-    if(t.type==='evergreen')return(t.lastCompleted&&t.lastCompleted.slice(0,10)===td)||D.pointsHistory.some(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td&&h.task.includes('✅'))||(T.planFlatDone?.[t.id]>0);
+    if(t.type==='evergreen')return(t.lastCompleted&&t.lastCompleted.slice(0,10)===td)||D.pointsHistory.some(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td&&h.task.includes('✅'))||(T.planMode&&T.planFlatDone?.[t.id]>0);
     return false;
   }
   // Split plan into sections by breaks/headers
