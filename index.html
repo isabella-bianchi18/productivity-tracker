@@ -25,7 +25,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-seri
 if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
 
 // ===== DATA =====
-const APP_VERSION='5.6.0';
+const APP_VERSION='5.7.0';
 const DEFAULT_DATA={tasks:[],points:0,pointsHistory:[],rewards:[],techniques:[],metrics:[],settings:{gistId:'',token:'',dailyGoal:0,theme:'default'},dailyGoalLog:{},streak:0,fractional:0,groupOrder:[],plan:[],savedPlans:[],planSectionRewards:{},groceries:[],recipes:[],pushSubscription:null};
 // Public VAPID key — safe to expose client-side, pairs with the private key held only in GitHub Actions secrets.
 const VAPID_PUBLIC_KEY='BJmb4cAGj9pEseTCWsRI6AzQV5nDwr5ln2BSbT7rEMZ7sm2Z--js3YVLM98lw1SjXO9cMQ1lrd-f9ELm-3v2ecY';
@@ -481,7 +481,7 @@ function dragEnd(){
   document.body.style.webkitUserSelect='';
   if(clone&&clone.parentNode)clone.remove();
   const children=[...container.children].filter(el=>(el.matches&&el.matches(itemSelector))||el.classList.contains('drag-placeholder'));
-  let newIdx=children.indexOf(placeholder);
+  let newIdx=0;{const allKids=[...container.children];const phIdx=allKids.indexOf(placeholder);for(let ci=0;ci<phIdx;ci++){const el=allKids[ci];if(el!==item&&el.matches&&el.matches(itemSelector))newIdx++}}
   if(placeholder&&placeholder.parentNode)placeholder.remove();
   item.style.display='';
   if(newIdx<0||newIdx===itemIdx)return;
@@ -1562,7 +1562,7 @@ function rInsights(){
   const byHour=Array(24).fill(0),byHourCount=Array(24).fill(0);
   earned.forEach(h=>{const hr=new Date(h.date).getUTCHours();byHour[hr]+=h.points;byHourCount[hr]++});
   const timeBlocks=[
-    {name:'Early Morning',range:'5–8a',hrs:[5,6,7]},
+    {name:'Late Night',range:'12–5a',hrs:[0,1,2,3,4]},{name:'Early Morning',range:'5–8a',hrs:[5,6,7]},
     {name:'Morning',range:'8a–12p',hrs:[8,9,10,11]},
     {name:'Afternoon',range:'12–5p',hrs:[12,13,14,15,16]},
     {name:'Evening',range:'5–9p',hrs:[17,18,19,20]},
