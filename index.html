@@ -24,7 +24,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-seri
 if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
 
 // ===== DATA =====
-const APP_VERSION='5.8.0';
+const APP_VERSION='5.8.1';
 const DEFAULT_DATA={tasks:[],points:0,pointsHistory:[],rewards:[],techniques:[],metrics:[],settings:{gistId:'',token:'',dailyGoal:0,theme:'default'},dailyGoalLog:{},streak:0,fractional:0,groupOrder:[],plan:[],savedPlans:[],planSectionRewards:{},groceries:[],recipes:[],pushSubscription:null};
 // Public VAPID key — safe to expose client-side, pairs with the private key held only in GitHub Actions secrets.
 const VAPID_PUBLIC_KEY='BJmb4cAGj9pEseTCWsRI6AzQV5nDwr5ln2BSbT7rEMZ7sm2Z--js3YVLM98lw1SjXO9cMQ1lrd-f9ELm-3v2ecY';
@@ -2419,6 +2419,52 @@ function bindAll(){
       save();render();
     });
   });
+  // Plan swipe: left=move to section above, right=move to section below
+  if(view==='plan'){
+    const totalSecs=document.querySelectorAll('.plan-sec-items').length;
+    document.querySelectorAll('.plan-sec-items .plan-drag-item[data-gi]').forEach(el=>{
+      if(el.dataset.gi==='-1')return;
+      let sx=0,sy=0,swiping=false,translateX=0;
+      el.addEventListener('touchstart',e=>{
+        if(dragState||e.target.closest('button'))return;
+        const t=e.touches[0];sx=t.clientX;sy=t.clientY;swiping=false;translateX=0;
+      },{passive:true});
+      el.addEventListener('touchmove',e=>{
+        if(dragState)return;
+        const t=e.touches[0],dx=t.clientX-sx,dy=t.clientY-sy;
+        if(!swiping&&Math.abs(dx)>10&&Math.abs(dx)>Math.abs(dy)*1.5)swiping=true;
+        if(!swiping)return;
+        e.preventDefault();
+        translateX=Math.max(-80,Math.min(dx,80));
+        el.style.transform='translateX('+translateX+'px)';
+        el.style.transition='none';
+      },{passive:false});
+      el.addEventListener('touchend',()=>{
+        if(!swiping){translateX=0;return}
+        const gi=parseInt(el.dataset.gi);
+        const secDiv=el.closest('.plan-sec-items');
+        const sec=secDiv?parseInt(secDiv.dataset.sec):-1;
+        if(translateX<-50&&sec>0){
+          // Move to section above
+          const item=D.plan[gi];D.plan.splice(gi,1);
+          let breakCount=0,insertAt=0;
+          for(let pi=0;pi<D.plan.length;pi++){if(D.plan[pi].type==='break'){breakCount++;if(breakCount>=sec){insertAt=pi;break}}}
+          D.plan.splice(insertAt,0,item);
+          save();render();toast('Moved to section above');if(navigator.vibrate)navigator.vibrate(15);return;
+        } else if(translateX>50&&sec<totalSecs-1){
+          // Move to section below
+          const item=D.plan[gi];D.plan.splice(gi,1);
+          let breakCount=0,insertAt=D.plan.length;
+          for(let pi=0;pi<D.plan.length;pi++){if(D.plan[pi].type==='break'){breakCount++;if(breakCount>sec+1){insertAt=pi;break}}}
+          D.plan.splice(insertAt,0,item);
+          save();render();toast('Moved to section below');if(navigator.vibrate)navigator.vibrate(15);return;
+        }
+        el.style.transform='';el.style.transition='transform 0.2s';
+        setTimeout(()=>{el.style.transition=''},200);
+        swiping=false;translateX=0;
+      });
+    });
+  }
   document.querySelectorAll('.plan-rm').forEach(b=>b.addEventListener('click',e=>{e.stopPropagation();const gi=parseInt(b.dataset.gi);
     // Determine which section this task is in
     let secIdx=0;for(let i=0;i<gi;i++){if(D.plan[i].type==='break')secIdx++}
