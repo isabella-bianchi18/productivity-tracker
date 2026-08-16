@@ -25,7 +25,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-seri
 if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
 
 // ===== DATA =====
-const APP_VERSION='5.2.0';
+const APP_VERSION='5.2.1';
 const DEFAULT_DATA={tasks:[],points:0,pointsHistory:[],rewards:[],techniques:[],metrics:[],settings:{gistId:'',token:'',dailyGoal:0,theme:'default'},dailyGoalLog:{},streak:0,fractional:0,groupOrder:[],plan:[],savedPlans:[],planSectionRewards:{},groceries:[],recipes:[],pushSubscription:null};
 // Public VAPID key — safe to expose client-side, pairs with the private key held only in GitHub Actions secrets.
 const VAPID_PUBLIC_KEY='BJmb4cAGj9pEseTCWsRI6AzQV5nDwr5ln2BSbT7rEMZ7sm2Z--js3YVLM98lw1SjXO9cMQ1lrd-f9ELm-3v2ecY';
@@ -1098,7 +1098,7 @@ function rBucket(title,tasks,sortable){
       cards+=`<div class="grp-hdr" data-grp="${g}" style="margin:4px 0;font-size:.8rem;color:var(--accent-dark);font-weight:600;padding:8px 10px;background:${gColor};border-radius:8px;cursor:pointer"><div style="display:flex;justify-content:space-between;align-items:center"><span>${collapsed?'▶':'▼'} 📁 ${g}</span><span style="font-size:.7rem;color:var(--text-dim);font-weight:normal">${progressText}${ptsText}</span></div></div>`;
       if(!collapsed){
         cards+=`<div class="grp-content" data-grp="${g}" style="padding-left:10px;border-left:3px solid ${gColor};margin-left:4px">`;
-        cards+=gTasks.map((t,i)=>rCard(t,i,gTasks.length)).join('');
+        cards+=gTasks.map((t,i)=>rSwipeWrap(t,rCard(t,i,gTasks.length))).join('');
         cards+=`<div style="display:flex;gap:6px;margin:4px 0 8px;flex-wrap:wrap" onclick="event.stopPropagation()"><button class="grp-done btn bsuc" data-grp="${g}" style="font-size:.7rem;padding:4px 8px">✓ All</button><button class="grp-skip btn ${skippedAll?'bwar':'bmut'}" data-grp="${g}" style="font-size:.7rem;padding:4px 8px">⏭️ Skip</button><button class="grp-hide btn ${hiddenAll?'bdan':'bmut'}" data-grp="${g}" style="font-size:.7rem;padding:4px 8px">🚫 Not today</button></div>`;
         cards+=`</div>`;
       }
@@ -2164,8 +2164,8 @@ function bindTasksBody(){
   // Task drag-to-reorder within each group
   document.querySelectorAll('.grp-content').forEach(grpDiv=>{
     const grp=grpDiv.dataset.grp;
-    initDragList(grpDiv,'.task-drag-item',(fromIdx,toIdx)=>{
-      const items=[...grpDiv.querySelectorAll('.task-drag-item')];
+    initDragList(grpDiv,'.bucket-item',(fromIdx,toIdx)=>{
+      const items=[...grpDiv.querySelectorAll('.bucket-item')];
       const fromId=items[fromIdx]?.dataset.id;
       const toId=items[toIdx]?.dataset.id;
       if(!fromId)return;
