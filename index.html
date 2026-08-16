@@ -25,7 +25,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-seri
 if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
 
 // ===== DATA =====
-const APP_VERSION='5.3.1';
+const APP_VERSION='5.3.2';
 const DEFAULT_DATA={tasks:[],points:0,pointsHistory:[],rewards:[],techniques:[],metrics:[],settings:{gistId:'',token:'',dailyGoal:0,theme:'default'},dailyGoalLog:{},streak:0,fractional:0,groupOrder:[],plan:[],savedPlans:[],planSectionRewards:{},groceries:[],recipes:[],pushSubscription:null};
 // Public VAPID key — safe to expose client-side, pairs with the private key held only in GitHub Actions secrets.
 const VAPID_PUBLIC_KEY='BJmb4cAGj9pEseTCWsRI6AzQV5nDwr5ln2BSbT7rEMZ7sm2Z--js3YVLM98lw1SjXO9cMQ1lrd-f9ELm-3v2ecY';
@@ -1928,8 +1928,8 @@ function showTaskDetail(tid){
   const isHidden=task.hiddenToday&&task.hiddenToday.includes(today());
   const canSkip=task.type==='daily'||task.goal;
   const skipBtn=canSkip?`<button id="eskip" class="btn ${isSkipped?'bwar':'bmut'}" style="width:100%;margin-bottom:8px;font-size:.85rem">${isSkipped?'⏭️ Skipped today (tap to undo)':'⏭️ Skip today (preserve streak)'}</button>`:'';
-  const hideBtn=`<button id="ehide" class="btn ${isHidden?'bdan':'bmut'}" style="width:100%;margin-bottom:8px;font-size:.85rem">${isHidden?'🚫 Hidden today (tap to undo)':'🚫 Not today'}</button>`;
   const wouldNaturallySleep=task.type==='recurring'&&task.lastCompleted&&(new Date()-new Date(task.lastCompleted))/864e5<task.cadenceDays;
+  const hideBtn=(wouldNaturallySleep&&!task.dueEarly)?"":`<button id="ehide" class="btn ${isHidden?'bdan':'bmut'}" style="width:100%;margin-bottom:8px;font-size:.85rem">${isHidden?'🚫 Hidden today (tap to undo)':'🚫 Not today'}</button>`;
   const backToSleepBtn=(task.dueEarly&&wouldNaturallySleep)?`<button id="eundueearly" class="btn bmut" style="width:100%;margin-bottom:8px;font-size:.85rem">😴 Back to sleep (undo due early)</button>`:'';
   const goalInfo=task.goal?`<div style="margin-bottom:14px;font-size:.85rem;color:var(--text-dim)">📊 Goal: ${task.goal.target} ${task.timeBased?'min':task.countBased?(task.countUnit||'units'):'times'} per ${task.goal.period}${goalStreak>0?` · 🔥 ${goalStreak} ${task.goal.period} streak`:''}</div>${skipBtn}${hideBtn}${backToSleepBtn}`:(task.type==='daily'?`${dailyStreak>0?`<div style="margin-bottom:14px;font-size:.85rem;color:var(--text-dim)">🔥 ${dailyStreak} day streak</div>`:''}${skipBtn}${hideBtn}${backToSleepBtn}`:`${hideBtn}${backToSleepBtn}`);
   const isSleeping=(task.type==='recurring'&&task.lastCompleted&&(new Date()-new Date(task.lastCompleted))/864e5<task.cadenceDays&&task.dueEarly!==today())||(task.type==='daily'&&task.dueEarly!==today()&&D.pointsHistory.some(h=>h.taskId===task.id&&h.type==='earned'&&h.date.slice(0,10)===today()&&h.task.includes('✅')));
