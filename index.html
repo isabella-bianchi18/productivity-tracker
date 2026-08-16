@@ -24,7 +24,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-seri
 if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
 
 // ===== DATA =====
-const APP_VERSION='5.8.4';
+const APP_VERSION='5.8.5';
 const DEFAULT_DATA={tasks:[],points:0,pointsHistory:[],rewards:[],techniques:[],metrics:[],settings:{gistId:'',token:'',dailyGoal:0,theme:'default'},dailyGoalLog:{},streak:0,fractional:0,groupOrder:[],plan:[],savedPlans:[],planSectionRewards:{},groceries:[],recipes:[],pushSubscription:null};
 // Public VAPID key — safe to expose client-side, pairs with the private key held only in GitHub Actions secrets.
 const VAPID_PUBLIC_KEY='BJmb4cAGj9pEseTCWsRI6AzQV5nDwr5ln2BSbT7rEMZ7sm2Z--js3YVLM98lw1SjXO9cMQ1lrd-f9ELm-3v2ecY';
@@ -1115,7 +1115,7 @@ function rSwipeWrap(t,cardHtml){
   const pinLabel=t.pinned?'📌 Unpin':'📌 Pin';
   return `<div class="bucket-item" data-id="${t.id}" style="user-select:none;-webkit-user-select:none;position:relative"><div class="swipe-indicator swipe-plan" style="position:absolute;left:0;top:0;bottom:0;width:100px;display:flex;align-items:center;justify-content:center;background:var(--accent);border-radius:14px;color:#fff;font-weight:600;font-size:.75rem;pointer-events:none;opacity:0">📋 Plan</div><div class="swipe-indicator swipe-pin" style="position:absolute;right:0;top:0;bottom:0;width:100px;display:flex;align-items:center;justify-content:center;background:var(--warning-dark);border-radius:14px;color:#fff;font-weight:600;font-size:.75rem;pointer-events:none;opacity:0">${pinLabel}</div><div class="swipe-card" style="position:relative">${cardHtml}</div></div>`;
 }
-function rPlanSwipeWrap(gi,cardHtml){return '<div class="plan-drag-item plan-sw-wrap" data-gi="'+gi+'" style="user-select:none;-webkit-user-select:none;position:relative">'+'<div class="plan-sw-up" style="position:absolute;right:0;top:0;bottom:0;width:80px;display:flex;align-items:center;justify-content:center;background:var(--accent);border-radius:14px;color:#fff;font-weight:600;font-size:.75rem;pointer-events:none;opacity:0">▲ Up</div>'+'<div class="plan-sw-down" style="position:absolute;left:0;top:0;bottom:0;width:80px;display:flex;align-items:center;justify-content:center;background:var(--accent);border-radius:14px;color:#fff;font-weight:600;font-size:.75rem;pointer-events:none;opacity:0">▼ Down</div>'+'<div class="plan-swipe-card" style="position:relative">'+cardHtml+'</div></div>'}
+function rPlanSwipeWrap(gi,cardHtml){return '<div class="plan-drag-item plan-sw-wrap" data-gi="'+gi+'" style="user-select:none;-webkit-user-select:none;position:relative">'+'<div class="plan-sw-up" style="position:absolute;right:0;top:0;bottom:0;width:80px;display:flex;align-items:center;justify-content:center;background:var(--accent);border-radius:14px;color:#fff;font-weight:600;font-size:.75rem;pointer-events:none;opacity:0">▲ Up</div>'+'<div class="plan-sw-down" style="position:absolute;left:0;top:0;bottom:0;width:80px;display:flex;align-items:center;justify-content:center;background:var(--accent);border-radius:14px;color:#fff;font-weight:600;font-size:.75rem;pointer-events:none;opacity:0">▼ Down</div>'+'<div class="plan-swipe-card" style="position:relative;background:var(--bg);border-radius:14px">'+cardHtml+'</div></div>'}
 function rCard(t,i,n){
   const isM=inlineMinId===t.id,pl=t.timeBased?`${t.ptsAmount} pts / ${t.ptsPerMinutes} min`:t.countBased?`${t.ptsAmount} pts / ${t.ptsPerCount} ${t.countUnit}`:`+${t.points}`;
   // Goal progress bar
@@ -2451,7 +2451,7 @@ function bindAll(){
         const sec=secDiv?parseInt(secDiv.dataset.sec):-1;
         if(translateX>50&&sec>0){
           // Swipe right = move to section above (end of that section)
-          const tid=D.plan[gi].id;let bc=0,inTgt=false;for(let pi=0;pi<D.plan.length;pi++){if(D.plan[pi].type==='break'){bc++;continue}if(bc===sec-1&&D.plan[pi].type==='task'&&D.plan[pi].id===tid&&pi!==gi){inTgt=true;break}}if(inTgt){el.style.transform='';el.style.transition='transform 0.2s';if(upInd)upInd.style.opacity='0';swiping=false;translateX=0;toast('Already there');return}
+          const tid=D.plan[gi].id;let bc=0,inTgt=false;for(let pi=0;pi<D.plan.length;pi++){if(D.plan[pi].type==='break'){bc++;continue}if(bc===sec-1&&D.plan[pi].type==='task'&&D.plan[pi].id===tid&&pi!==gi){inTgt=true;break}}if(inTgt){const pc=el.querySelector('.plan-swipe-card');if(pc){pc.style.transform='';pc.style.transition='transform 0.2s'}if(upInd)upInd.style.opacity='0';swiping=false;translateX=0;toast('Already there');return}
           const item=D.plan[gi];D.plan.splice(gi,1);
           let breakCount=0,insertAt=0;
           for(let pi=0;pi<D.plan.length;pi++){if(D.plan[pi].type==='break'){breakCount++;if(breakCount>=sec){insertAt=pi;break}}}
