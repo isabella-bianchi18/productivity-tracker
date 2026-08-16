@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -25,7 +25,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-seri
 if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
 
 // ===== DATA =====
-const APP_VERSION='5.1.1';
+const APP_VERSION='5.2.0';
 const DEFAULT_DATA={tasks:[],points:0,pointsHistory:[],rewards:[],techniques:[],metrics:[],settings:{gistId:'',token:'',dailyGoal:0,theme:'default'},dailyGoalLog:{},streak:0,fractional:0,groupOrder:[],plan:[],savedPlans:[],planSectionRewards:{},groceries:[],recipes:[],pushSubscription:null};
 // Public VAPID key — safe to expose client-side, pairs with the private key held only in GitHub Actions secrets.
 const VAPID_PUBLIC_KEY='BJmb4cAGj9pEseTCWsRI6AzQV5nDwr5ln2BSbT7rEMZ7sm2Z--js3YVLM98lw1SjXO9cMQ1lrd-f9ELm-3v2ecY';
@@ -88,6 +88,7 @@ function id(){return Date.now().toString(36)+Math.random().toString(36).slice(2,
 function today(){return localISO().slice(0,10)}
 function daysAgoCal(dateStr){const td=today();const d=dateStr.slice(0,10);if(d===td)return 0;const t1=new Date(td+'T00:00:00');const t2=new Date(d+'T00:00:00');return Math.round((t1-t2)/864e5)}
 function localISO(){const d=new Date();return new Date(d.getTime()-d.getTimezoneOffset()*60000).toISOString()}
+function localDateStr(d){return new Date(d.getTime()-d.getTimezoneOffset()*60000).toISOString().slice(0,10)}
 function ptsToday(){return D.pointsHistory.filter(h=>h.date.slice(0,10)===today()&&h.type==='earned').reduce((s,h)=>s+h.points,0)}
 function getLevel(){
   const totalEarned=D.pointsHistory.filter(h=>h.type==='earned').reduce((s,h)=>s+h.points,0);
@@ -187,7 +188,7 @@ function getGoalStreak(task){
 function getDailyStreak(task){
   let streak=0;const now=new Date();let d=new Date(now);d.setDate(d.getDate()-1);
   for(let i=0;i<365;i++){
-    const ds=d.toISOString().slice(0,10);
+    const ds=localDateStr(d);
     const hasEntry=D.pointsHistory.some(h=>h.taskId===task.id&&h.type==='earned'&&h.date.slice(0,10)===ds&&h.task.includes('✅'));
     if(hasEntry){streak++}else break;
     d.setDate(d.getDate()-1);
@@ -207,7 +208,7 @@ function awardTimerPts(exactPts){
   return whole;
 }
 function visibleTasks(){const n=new Date();const td=today();return D.tasks.filter(t=>{if(t.archived)return false;if(t.hiddenToday&&t.hiddenToday.includes(td))return false;if(t.goalSkips&&t.goalSkips.includes(td))return false;if(t.type==='one-time'){if(t.goal&&t.goal.period==='total'){const entries=D.pointsHistory.filter(h=>h.taskId===t.id&&h.type==='earned');const current=t.timeBased?entries.reduce((s,h)=>s+(h.minutes||0),0):t.countBased?entries.reduce((s,h)=>s+(h.count||0),0):entries.filter(h=>h.task.includes('✅')).length;return current<t.goal.target}return!t.completed}if(t.type==='recurring'){if(t.dueEarly===td)return true;if(!t.lastCompleted)return true;return(n-new Date(t.lastCompleted))/864e5>=t.cadenceDays}if(t.type==='daily'){if(t.dueEarly===td)return true;if(!t.lastCompleted){const completedToday=D.pointsHistory.some(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td&&h.task.includes('✅'));return!completedToday}const completedToday=D.pointsHistory.some(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td&&h.task.includes('✅'));return!completedToday}return true})}
-function sleepingTasks(){const n=new Date();const td=today();return D.tasks.filter(t=>{if(t.archived)return false;if(t.hiddenToday&&t.hiddenToday.includes(td))return true;if(t.goalSkips&&t.goalSkips.includes(td))return true;if(t.type==='recurring'&&t.lastCompleted&&(n-new Date(t.lastCompleted))/864e5<t.cadenceDays&&t.dueEarly!==td)return true;if(t.type==='daily'&&t.dueEarly!==td){const completedToday=D.pointsHistory.some(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td&&h.task.includes('✅'));if(completedToday)return true}return false}).map(t=>{if(t.hiddenToday&&t.hiddenToday.includes(td))return{...t,left:'hidden'};if(t.goalSkips&&t.goalSkips.includes(td)&&t.type!=='daily'&&t.type!=='recurring')return{...t,left:'skipped'};if(t.type==='daily'){const skippedToday=t.goalSkips&&t.goalSkips.includes(td);return{...t,left:skippedToday?'skipped':1}}if(t.type==='recurring')return{...t,left:Math.ceil(t.cadenceDays-(new Date()-new Date(t.lastCompleted))/864e5)};return{...t,left:'skipped'}}).sort((a,b)=>(typeof a.left==='string'?0:a.left)-(typeof b.left==='string'?0:b.left))}
+function sleepingTasks(){const n=new Date();const td=today();return D.tasks.filter(t=>{if(t.archived)return false;if(t.type==='one-time'&&t.completed)return false;if(t.hiddenToday&&t.hiddenToday.includes(td))return true;if(t.goalSkips&&t.goalSkips.includes(td))return true;if(t.type==='recurring'&&t.lastCompleted&&(n-new Date(t.lastCompleted))/864e5<t.cadenceDays&&t.dueEarly!==td)return true;if(t.type==='daily'&&t.dueEarly!==td){const completedToday=D.pointsHistory.some(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td&&h.task.includes('✅'));if(completedToday)return true}return false}).map(t=>{if(t.hiddenToday&&t.hiddenToday.includes(td))return{...t,left:'hidden'};if(t.goalSkips&&t.goalSkips.includes(td)&&t.type!=='daily'&&t.type!=='recurring')return{...t,left:'skipped'};if(t.type==='daily'){const skippedToday=t.goalSkips&&t.goalSkips.includes(td);return{...t,left:skippedToday?'skipped':1}}if(t.type==='recurring')return{...t,left:Math.ceil(t.cadenceDays-(new Date()-new Date(t.lastCompleted))/864e5)};return{...t,left:'skipped'}}).sort((a,b)=>(typeof a.left==='string'?0:a.left)-(typeof b.left==='string'?0:b.left))}
 function checkGoal(){const t=today(),g=D.settings.dailyGoal;if(!g||g<=0)return;
   // Store what goal was set for today
   if(!D.dailyGoalLog[t]||D.dailyGoalLog[t]===true)D.dailyGoalLog[t]=g;
@@ -233,7 +234,7 @@ function updateStreak(){
   let current=0,longest=0,s=0,d=new Date();
   // Go back up to 365 days
   for(let i=0;i<365;i++){
-    const ds=d.toISOString().slice(0,10);
+    const ds=localDateStr(d);
     const g=D.dailyGoalLog[ds];
     if(g&&g!==true){
       // Had a goal this day
@@ -1554,13 +1555,13 @@ function rInsights(){
   // Best day of week
   const dayNames=['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
   const byDay=[0,0,0,0,0,0,0],byDayCount=[0,0,0,0,0,0,0];
-  earned.forEach(h=>{const dow=new Date(h.date).getDay();byDay[dow]+=h.points;byDayCount[dow]++});
-  const avgByDay=byDay.map((pts,i)=>{const uniqueDays=new Set(earned.filter(h=>new Date(h.date).getDay()===i).map(h=>h.date.slice(0,10))).size;return uniqueDays>0?Math.round(pts/uniqueDays):0});
+  earned.forEach(h=>{const dow=new Date(h.date.slice(0,10)+'T12:00:00').getDay();byDay[dow]+=h.points;byDayCount[dow]++});
+  const avgByDay=byDay.map((pts,i)=>{const uniqueDays=new Set(earned.filter(h=>new Date(h.date.slice(0,10)+'T12:00:00').getDay()===i).map(h=>h.date.slice(0,10))).size;return uniqueDays>0?Math.round(pts/uniqueDays):0});
   const bestDayIdx=avgByDay.indexOf(Math.max(...avgByDay));
   const worstDayIdx=avgByDay.indexOf(Math.min(...avgByDay.filter(v=>v>0)));
   // Best time of day (using local time from history timestamps)
   const byHour=Array(24).fill(0),byHourCount=Array(24).fill(0);
-  earned.forEach(h=>{const hr=new Date(h.date).getHours();byHour[hr]+=h.points;byHourCount[hr]++});
+  earned.forEach(h=>{const hr=new Date(h.date).getUTCHours();byHour[hr]+=h.points;byHourCount[hr]++});
   const timeBlocks=[
     {name:'Early Morning',range:'5–8a',hrs:[5,6,7]},
     {name:'Morning',range:'8a–12p',hrs:[8,9,10,11]},
@@ -1582,7 +1583,7 @@ function rInsights(){
   const totalCatPts=Object.values(cats).reduce((s,v)=>s+v,0);
   const catBars=totalCatPts>0?Object.entries(cats).map(([k,v])=>{const pct=Math.round(v/totalCatPts*100);const label=k==='work'?'💼 Work':k==='home'?'🏠 Home':'🌱 Growth';return `<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px"><span style="font-size:.75rem;min-width:70px;white-space:nowrap">${label}</span><div style="flex:1;height:14px;background:var(--card-neutral);border-radius:4px;overflow:hidden"><div style="height:100%;width:${pct}%;background:var(--accent);border-radius:4px"></div></div><span style="font-size:.7rem;color:var(--text-dim);min-width:30px;text-align:right">${pct}%</span></div>`}).join(''):'';
   // Productivity score: rolling 7-day avg
-  const last7=[];for(let i=0;i<7;i++){const d=new Date();d.setDate(d.getDate()-i);const ds=d.toISOString().slice(0,10);last7.push(ptsForDay(ds))}
+  const last7=[];for(let i=0;i<7;i++){const d=new Date();d.setDate(d.getDate()-i);const ds=new Date(d.getTime()-d.getTimezoneOffset()*60000).toISOString().slice(0,10);last7.push(ptsForDay(ds))}
   const avg7=Math.round(last7.reduce((s,v)=>s+v,0)/7);
   return `<div class="vc"><button class="tback">← Back</button><h2 style="font-size:1.1rem;color:var(--accent-dark);margin-bottom:16px">🔍 Insights</h2>
     <div class="fcard" style="margin-bottom:12px;text-align:center"><div style="font-size:.8rem;color:var(--text-dim);margin-bottom:4px">7-day average</div><div style="font-size:1.5rem;font-weight:bold;color:var(--accent-dark)">${avg7} pts/day</div></div>
@@ -3080,7 +3081,7 @@ function showGoodMorning(){
   const hr=new Date().getHours();
   const greeting=hr<12?'Good morning':hr<17?'Good afternoon':'Good evening';
   const emoji=hr<12?'☀️':hr<17?'🌤️':'🌙';
-  const yesterday=new Date();yesterday.setDate(yesterday.getDate()-1);const yd=yesterday.toISOString().slice(0,10);
+  const yesterday=new Date();yesterday.setDate(yesterday.getDate()-1);const yd=localDateStr(yesterday);
   const yPts=ptsForDay(yd);
   // Gather tasks for today: prioritize one-time (first 2), then due recurring, then remaining one-time, then evergreen. Exclude daily.
   const vis=visibleTasks();
@@ -3107,7 +3108,7 @@ function getWeekRecap(){
   const now=new Date();const dayOfWeek=now.getDay();
   const lastSun=new Date(now);lastSun.setDate(now.getDate()-(dayOfWeek||7));
   const lastMon=new Date(lastSun);lastMon.setDate(lastSun.getDate()-6);
-  const monStr=lastMon.toISOString().slice(0,10),sunStr=lastSun.toISOString().slice(0,10);
+  const monStr=localDateStr(lastMon),sunStr=localDateStr(lastSun);
   const entries=D.pointsHistory.filter(h=>h.date.slice(0,10)>=monStr&&h.date.slice(0,10)<=sunStr);
   const earned=entries.filter(h=>h.type==='earned').reduce((s,h)=>s+h.points,0);
   const tasks=entries.filter(h=>h.type==='earned'&&h.task!=='🎯 Daily goal bonus').length;
@@ -3166,24 +3167,17 @@ if(!D._unlockedAchievements){D._unlockedAchievements=getAchievements().filter(a=
 if(!D._lastLevel){D._lastLevel=getLevel().level;saveL()}
 if(D.settings.gistId&&D.settings.token){gistPull().then(()=>{updateStreak();render();showStartupModals()});startAutoSync()}
 else{render();showStartupModals()}
-function showStartupModals(){
-  // Version update popup
-  const lastVersion=localStorage.getItem('pt_lastVersion');
-  if(lastVersion&&lastVersion!==APP_VERSION){
-    localStorage.setItem('pt_lastVersion',APP_VERSION);
-    modal(`<div style="text-align:center"><div style="font-size:2rem;margin-bottom:8px">🆕</div><h2 style="color:var(--accent-dark);margin-bottom:8px">Updated to v${APP_VERSION}</h2><p style="font-size:.85rem;color:var(--text-dim);margin-bottom:16px">The app has been updated!</p><button data-close class="btn bpri" style="width:100%">Got it</button></div>`);
-    return;
-  }
-  localStorage.setItem('pt_lastVersion',APP_VERSION);
-  // Reset daily goal each new day
+function checkDayChange(){
   const t=today();
   if(D._lastDay!==t){
     D.settings.dailyGoal=0;
+    if(D.dailyGoalLog&&D.dailyGoalLog[t])delete D.dailyGoalLog[t];
     // Auto skip/hide work tasks on weekends
     const wd=new Date().getDay();
     if(wd===0||wd===6){
       D.tasks.forEach(task=>{
         if(task.archived||task.category!=='work')return;
+        if(task.type==='one-time'&&task.completed)return;
         const canSkip=!!task.goal||task.type==='daily';
         if(canSkip){
           if(!task.goalSkips)task.goalSkips=[];
@@ -3195,13 +3189,27 @@ function showStartupModals(){
       });
     }
     D._lastDay=t;saveL();
+    return true;
   }
+  return false;
+}
+function showStartupModals(){
+  // Version update popup
+  const lastVersion=localStorage.getItem('pt_lastVersion');
+  if(lastVersion&&lastVersion!==APP_VERSION){
+    localStorage.setItem('pt_lastVersion',APP_VERSION);
+    modal(`<div style="text-align:center"><div style="font-size:2rem;margin-bottom:8px">🆕</div><h2 style="color:var(--accent-dark);margin-bottom:8px">Updated to v${APP_VERSION}</h2><p style="font-size:.85rem;color:var(--text-dim);margin-bottom:16px">The app has been updated!</p><button data-close class="btn bpri" style="width:100%">Got it</button></div>`);
+    checkDayChange();
+    return;
+  }
+  localStorage.setItem('pt_lastVersion',APP_VERSION);
+  checkDayChange();
   const dow=new Date().getDay();
   if(dow===1&&D._lastRecap!==getWeekRecap().monStr){showWeekRecap(true);return}
   showGoodMorning();
 }
 // Sync when app is backgrounded or foregrounded
-document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='hidden'){if(localDirty){D._lastModified=Date.now();saveL();gistPush()}}else if(document.visibilityState==='visible'&&!document.querySelector('.modal-bg')){gistPull().then(r=>{if(r==='updated'){updateStreak();render()}})}});
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='hidden'){if(localDirty){D._lastModified=Date.now();saveL();gistPush()}}else if(document.visibilityState==='visible'&&!document.querySelector('.modal-bg')){if(checkDayChange()){updateStreak();render()}gistPull().then(r=>{if(r==='updated'){updateStreak();render()}})}});
 window.addEventListener('pagehide',()=>{if(localDirty){D._lastModified=Date.now();saveL();gistPush()}});
 </script>
 <style>
