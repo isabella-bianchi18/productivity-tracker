@@ -182,9 +182,20 @@ async function main() {
   let dataChanged = false;
   let subscriptionDead = false;
 
+  console.log(`Found ${tasks.length} task(s) with reminders enabled.`);
   for (const task of tasks) {
     try {
-      if (!isEligibleNow(task, data, parts)) continue;
+      const r = task.reminder;
+      const reasons = [];
+      if (r.lastSent === parts.dateStr) reasons.push("already sent today (lastSent="+r.lastSent+")");
+      else if (parts.hhmm < r.time) reasons.push("not time yet (now="+parts.hhmm+", scheduled="+r.time+")");
+      else if (!scheduleMatchesToday(task, parts)) {
+        if (task.type === "recurring") reasons.push("recurring not due (dueDate="+computeRecurringDueDateStr(task)+", today="+parts.dateStr+", lastCompleted="+task.lastCompleted+", cadence="+task.cadenceDays+"d)");
+        else reasons.push("schedule mismatch (freq="+r.freq+", days="+JSON.stringify(r.days)+", weekday="+r.weekday+", todayDow="+parts.weekday+")");
+      } else if (task.type === "recurring" && task.lastCompleted && task.lastCompleted.slice(0,10) === parts.dateStr) reasons.push("recurring completed today already");
+      else if (task.type !== "recurring" && isTaskDone(task, data.pointsHistory, parts)) reasons.push("task done for period");
+      if (reasons.length) { console.log("  SKIP \""+task.name+"\": "+reasons.join("; ")); continue; }
+      if (!isEligibleNow(task, data, parts)) { console.log("  SKIP \""+task.name+"\": passed manual checks but isEligibleNow=false"); continue; }
       console.log(`Sending reminder for "${task.name}"...`);
       const payload = JSON.stringify({
         title: '⏰ ' + task.name,
