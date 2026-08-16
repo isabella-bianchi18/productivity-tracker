@@ -25,7 +25,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-seri
 if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
 
 // ===== DATA =====
-const APP_VERSION='5.4.1';
+const APP_VERSION='5.4.2';
 const DEFAULT_DATA={tasks:[],points:0,pointsHistory:[],rewards:[],techniques:[],metrics:[],settings:{gistId:'',token:'',dailyGoal:0,theme:'default'},dailyGoalLog:{},streak:0,fractional:0,groupOrder:[],plan:[],savedPlans:[],planSectionRewards:{},groceries:[],recipes:[],pushSubscription:null};
 // Public VAPID key — safe to expose client-side, pairs with the private key held only in GitHub Actions secrets.
 const VAPID_PUBLIC_KEY='BJmb4cAGj9pEseTCWsRI6AzQV5nDwr5ln2BSbT7rEMZ7sm2Z--js3YVLM98lw1SjXO9cMQ1lrd-f9ELm-3v2ecY';
@@ -132,7 +132,7 @@ function getGoalProgress(task){
   } else {
     if(task.goal.period==='hourly'){periodStart=new Date(now);periodStart.setMinutes(0,0,0)}
     else if(task.goal.period==='daily'){periodStart=new Date(now.getFullYear(),now.getMonth(),now.getDate())}
-    else if(task.goal.period==='weekly'){const d=new Date(now);d.setDate(d.getDate()-d.getDay()+1);periodStart=new Date(d.getFullYear(),d.getMonth(),d.getDate())}
+    else if(task.goal.period==='weekly'){const d=new Date(now);d.setDate(d.getDate()-((d.getDay()+6)%7));periodStart=new Date(d.getFullYear(),d.getMonth(),d.getDate())}
     else if(task.goal.period==='monthly'){periodStart=new Date(now.getFullYear(),now.getMonth(),1)}
     else if(task.goal.period==='annually'){periodStart=new Date(now.getFullYear(),0,1)}
     const psStr=periodStart.toISOString().slice(0,task.goal.period==='hourly'?13:10);
@@ -149,17 +149,17 @@ function getGoalStreak(task){
   // Determine the start of the CURRENT period (to exclude from backward loop)
   let currentPeriodStart;
   if(task.goal.period==='daily'){currentPeriodStart=today()}
-  else if(task.goal.period==='weekly'){const wd=new Date(now);wd.setDate(wd.getDate()-wd.getDay()+1);currentPeriodStart=new Date(wd.getFullYear(),wd.getMonth(),wd.getDate()).toISOString().slice(0,10)}
+  else if(task.goal.period==='weekly'){const wd=new Date(now);wd.setDate(wd.getDate()-((wd.getDay()+6)%7));currentPeriodStart=new Date(wd.getFullYear(),wd.getMonth(),wd.getDate()).toISOString().slice(0,10)}
   else if(task.goal.period==='monthly'){currentPeriodStart=new Date(now.getFullYear(),now.getMonth(),1).toISOString().slice(0,10)}
   // Start backward loop from the period BEFORE the current one
   let d=new Date(now);
   if(task.goal.period==='daily'){d.setDate(d.getDate()-1)}
-  else if(task.goal.period==='weekly'){d.setDate(d.getDate()-d.getDay()+1);d.setDate(d.getDate()-1)}
+  else if(task.goal.period==='weekly'){d.setDate(d.getDate()-((d.getDay()+6)%7));d.setDate(d.getDate()-1)}
   else if(task.goal.period==='monthly'){d.setDate(0)}
   for(let i=0;i<365;i++){
     let pStart,psStr;
     if(task.goal.period==='daily'){pStart=new Date(d.getFullYear(),d.getMonth(),d.getDate());d.setDate(d.getDate()-1)}
-    else if(task.goal.period==='weekly'){const wd=new Date(d);wd.setDate(wd.getDate()-wd.getDay()+1);pStart=new Date(wd.getFullYear(),wd.getMonth(),wd.getDate());d.setDate(d.getDate()-7)}
+    else if(task.goal.period==='weekly'){const wd=new Date(d);wd.setDate(wd.getDate()-((wd.getDay()+6)%7));pStart=new Date(wd.getFullYear(),wd.getMonth(),wd.getDate());d.setDate(d.getDate()-7)}
     else if(task.goal.period==='monthly'){pStart=new Date(d.getFullYear(),d.getMonth(),1);d.setMonth(d.getMonth()-1)}
     else break;
     psStr=pStart.toISOString().slice(0,10);
