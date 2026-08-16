@@ -25,7 +25,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-seri
 if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
 
 // ===== DATA =====
-const APP_VERSION='5.7.2';
+const APP_VERSION='5.7.3';
 const DEFAULT_DATA={tasks:[],points:0,pointsHistory:[],rewards:[],techniques:[],metrics:[],settings:{gistId:'',token:'',dailyGoal:0,theme:'default'},dailyGoalLog:{},streak:0,fractional:0,groupOrder:[],plan:[],savedPlans:[],planSectionRewards:{},groceries:[],recipes:[],pushSubscription:null};
 // Public VAPID key — safe to expose client-side, pairs with the private key held only in GitHub Actions secrets.
 const VAPID_PUBLIC_KEY='BJmb4cAGj9pEseTCWsRI6AzQV5nDwr5ln2BSbT7rEMZ7sm2Z--js3YVLM98lw1SjXO9cMQ1lrd-f9ELm-3v2ecY';
@@ -2866,9 +2866,7 @@ function stopSW(){
         if(t.type==='one-time'){t.completed=true;t.completedAt=localISO()}
         else if(t.type==='recurring'||t.type==='daily'){t.lastCompleted=localISO()}
         // Push a ✅ marker for completed tasks so isDoneToday/recurElapsed detects them
-        {
-          D.pointsHistory.push({date:localISO(),task:t.name+' ✅',taskId:tid,points:0,type:'earned'});
-        }
+        {const doneCount=T.planFlatDone?.[tid]||1;for(let di=0;di<doneCount;di++){D.pointsHistory.push({date:localISO(),task:t.name+' ✅',taskId:tid,points:0,type:'earned'})}}
       }
       if(taskSecs>0||count>0||completed||T.planFlatDone?.[tid]){
         // Push individual tracking entry for goal progress (0 pts to avoid double-counting)
