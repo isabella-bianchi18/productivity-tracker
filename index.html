@@ -25,7 +25,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-seri
 if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
 
 // ===== DATA =====
-const APP_VERSION='5.4.3';
+const APP_VERSION='5.5.1';
 const DEFAULT_DATA={tasks:[],points:0,pointsHistory:[],rewards:[],techniques:[],metrics:[],settings:{gistId:'',token:'',dailyGoal:0,theme:'default'},dailyGoalLog:{},streak:0,fractional:0,groupOrder:[],plan:[],savedPlans:[],planSectionRewards:{},groceries:[],recipes:[],pushSubscription:null};
 // Public VAPID key — safe to expose client-side, pairs with the private key held only in GitHub Actions secrets.
 const VAPID_PUBLIC_KEY='BJmb4cAGj9pEseTCWsRI6AzQV5nDwr5ln2BSbT7rEMZ7sm2Z--js3YVLM98lw1SjXO9cMQ1lrd-f9ELm-3v2ecY';
@@ -81,7 +81,7 @@ function save(){
   // Defensive: remove corrupted plan entries before saving
   if(D.plan)D.plan=D.plan.filter(item=>item.type!=='task'||typeof item.id==='string');
   D._lastModified=Date.now();localDirty=true;saveL();debouncedPush()}
-function saveDirty(){D._lastModified=Date.now();localDirty=true;saveL();debouncedPush()}
+function saveDirty(){if(D.plan)D.plan=D.plan.filter(item=>item.type!=='task'||typeof item.id==='string');D._lastModified=Date.now();localDirty=true;saveL();debouncedPush()}
 
 // ===== UTILS =====
 function id(){return Date.now().toString(36)+Math.random().toString(36).slice(2,7)}
@@ -190,12 +190,23 @@ function getGoalStreak(task){
 // Helper: streak for daily tasks without goals (start from yesterday, add today if done)
 function getDailyStreak(task){
   let streak=0;const now=new Date();let d=new Date(now);d.setDate(d.getDate()-1);
+  const skips=new Set(task.goalSkips||[]);
   for(let i=0;i<365;i++){
     const ds=localDateStr(d);
+    if(skips.has(ds)){d.setDate(d.getDate()-1);continue}
     const hasEntry=D.pointsHistory.some(h=>h.taskId===task.id&&h.type==='earned'&&h.date.slice(0,10)===ds&&h.task.includes('✅'));
     if(hasEntry){streak++}else break;
     d.setDate(d.getDate()-1);
   }
+  const todayStr=today();
+  if(!skips.has(todayStr)){const doneToday=D.pointsHistory.some(h=>h.taskId===task.id&&h.type==='earned'&&h.date.slice(0,10)===todayStr&&h.task.includes('✅'));if(doneToday)streak++}
+  return streak;
+}
+  const todayStr=today();
+  if(skips.has(todayStr)){streak++}
+  else{const doneToday=D.pointsHistory.some(h=>h.taskId===task.id&&h.type==='earned'&&h.date.slice(0,10)===todayStr&&h.task.includes('✅'));if(doneToday)streak++}
+  return streak;
+}
   // Add today if also completed
   const todayStr=today();
   const doneToday=D.pointsHistory.some(h=>h.taskId===task.id&&h.type==='earned'&&h.date.slice(0,10)===todayStr&&h.task.includes('✅'));
@@ -1396,7 +1407,7 @@ function rPM(){
 function rTech(){
   const sorted=[...D.techniques].sort((a,b)=>{const ae=a.entries.length,be=b.entries.length;const ap=ae>0?a.entries.filter(e=>e.thumbsUp).length/ae:-1;const bp=be>0?b.entries.filter(e=>e.thumbsUp).length/be:-1;if(bp!==ap)return bp-ap;return be-ae});
   const cards=sorted.map(t=>{const tot=t.entries.length,ups=t.entries.filter(e=>e.thumbsUp).length,pct=tot>0?Math.round(ups/tot*100):0;const exp=expandedTech===t.id;
-    return `<div class="fcard" style="margin-bottom:10px"><div style="display:flex;justify-content:space-between;align-items:center;cursor:pointer" class="ttog" data-id="${t.id}"><b>${t.name}</b><div style="display:flex;align-items:center;gap:8px"><span style="font-size:.8rem;color:var(--text-dim)">${tot} uses</span><span style="font-weight:bold;color:${pct>=60?'var(--success-dark)':pct>=40?'var(--warning-dark)':'var(--danger-dark)'}">${tot>0?pct+'%':'—'}</span></div></div>${exp?`<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border)">${t.entries.map((e,ei)=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;font-size:.8rem"><span>${e.thumbsUp?'👍':'👎'} ${e.note||'(no note)'}</span><span style="display:flex;align-items:center;gap:4px"><span style="color:var(--text-dim)">${new Date(e.date).toLocaleDateString()}</span><button class="tdel-entry ibtn" data-tid="${t.id}" data-ei="${ei}" style="font-size:.7rem">✕</button></span></div>`).join('')}<div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap"><input class="tni inf" data-id="${t.id}" type="text" placeholder="Note" style="flex:1;min-width:100px;margin:0"><button class="tlog btn bsuc" data-id="${t.id}" data-u="1" style="padding:8px 12px">👍</button><button class="tlog btn bdan" data-id="${t.id}" data-u="0" style="padding:8px 12px">👎</button></div><button class="tdelt" data-id="${t.id}" style="margin-top:8px;background:none;border:none;color:var(--danger-dark);font-size:.8rem;cursor:pointer">Delete technique</button></div>`:''}</div>`}).join('');
+    return `<div class="fcard" style="margin-bottom:10px"><div style="display:flex;justify-content:space-between;align-items:center;cursor:pointer" class="ttog" data-id="${t.id}"><b>${t.name}</b><div style="display:flex;align-items:center;gap:8px"><span style="font-size:.8rem;color:var(--text-dim)">${tot} uses</span><span style="font-weight:bold;color:${pct>=60?'var(--success-dark)':pct>=40?'var(--warning-dark)':'var(--danger-dark)'}">${tot>0?pct+'%':'—'}</span></div></div>${exp?`<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border)">${t.entries.map((e,ei)=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;font-size:.8rem"><span>${e.thumbsUp?'👍':'👎'} ${e.note||'(no note)'}</span><span style="display:flex;align-items:center;gap:4px"><span style="color:var(--text-dim)">${new Date(e.date.slice(0,10)+'T12:00:00').toLocaleDateString()}</span><button class="tdel-entry ibtn" data-tid="${t.id}" data-ei="${ei}" style="font-size:.7rem">✕</button></span></div>`).join('')}<div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap"><input class="tni inf" data-id="${t.id}" type="text" placeholder="Note" style="flex:1;min-width:100px;margin:0"><button class="tlog btn bsuc" data-id="${t.id}" data-u="1" style="padding:8px 12px">👍</button><button class="tlog btn bdan" data-id="${t.id}" data-u="0" style="padding:8px 12px">👎</button></div><button class="tdelt" data-id="${t.id}" style="margin-top:8px;background:none;border:none;color:var(--danger-dark);font-size:.8rem;cursor:pointer">Delete technique</button></div>`:''}</div>`}).join('');
   return `<div class="vc"><button class="tback">← Back</button><h2 style="font-size:1.1rem;color:var(--accent-dark);margin-bottom:12px">🧠 Techniques</h2>${cards||'<p style="color:var(--text-dim);font-style:italic">No techniques yet.</p>'}<div style="display:flex;gap:8px;margin-top:12px"><input id="tnn" type="text" placeholder="New technique" class="inf" autocapitalize="words" style="flex:1;margin:0"><button id="tna" class="btn bpri" style="padding:10px 16px">+</button></div></div>`}
 
 // ===== SETTINGS/DETAIL MODALS =====
@@ -3193,6 +3204,7 @@ function checkDayChange(){
         }
       });
     }
+    D.tasks.forEach(task=>{if(task.hiddenToday)task.hiddenToday=task.hiddenToday.filter(d=>d>=t);if(task.goalSkips)task.goalSkips=task.goalSkips.filter(d=>d>=t)});
     D._lastDay=t;saveL();
     return true;
   }
