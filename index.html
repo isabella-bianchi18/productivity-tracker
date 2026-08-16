@@ -24,7 +24,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-seri
 if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
 
 // ===== DATA =====
-const APP_VERSION='5.8.2';
+const APP_VERSION='5.8.3';
 const DEFAULT_DATA={tasks:[],points:0,pointsHistory:[],rewards:[],techniques:[],metrics:[],settings:{gistId:'',token:'',dailyGoal:0,theme:'default'},dailyGoalLog:{},streak:0,fractional:0,groupOrder:[],plan:[],savedPlans:[],planSectionRewards:{},groceries:[],recipes:[],pushSubscription:null};
 // Public VAPID key — safe to expose client-side, pairs with the private key held only in GitHub Actions secrets.
 const VAPID_PUBLIC_KEY='BJmb4cAGj9pEseTCWsRI6AzQV5nDwr5ln2BSbT7rEMZ7sm2Z--js3YVLM98lw1SjXO9cMQ1lrd-f9ELm-3v2ecY';
@@ -2453,6 +2453,7 @@ function bindAll(){
         const sec=secDiv?parseInt(secDiv.dataset.sec):-1;
         if(translateX>50&&sec>0){
           // Swipe right = move to section above (end of that section)
+          const tid=D.plan[gi].id;let bc=0,inTgt=false;for(let pi=0;pi<D.plan.length;pi++){if(D.plan[pi].type==='break'){bc++;continue}if(bc===sec-1&&D.plan[pi].type==='task'&&D.plan[pi].id===tid&&pi!==gi){inTgt=true;break}}if(inTgt){el.style.transform='';el.style.transition='transform 0.2s';if(upInd)upInd.style.opacity='0';swiping=false;translateX=0;toast('Already there');return}
           const item=D.plan[gi];D.plan.splice(gi,1);
           let breakCount=0,insertAt=0;
           for(let pi=0;pi<D.plan.length;pi++){if(D.plan[pi].type==='break'){breakCount++;if(breakCount>=sec){insertAt=pi;break}}}
@@ -2460,6 +2461,7 @@ function bindAll(){
           save();render();toast('Moved up');if(navigator.vibrate)navigator.vibrate(15);return;
         } else if(translateX<-50&&sec<totalSecs-1){
           // Swipe left = move to top of section below
+          const tid=D.plan[gi].id;let bc=0,inTgt=false;for(let pi=0;pi<D.plan.length;pi++){if(D.plan[pi].type==='break'){bc++;continue}if(bc===sec+1&&D.plan[pi].type==='task'&&D.plan[pi].id===tid&&pi!==gi){inTgt=true;break}}if(inTgt){el.style.transform='';el.style.transition='transform 0.2s';if(downInd)downInd.style.opacity='0';swiping=false;translateX=0;toast('Already there');return}
           const item=D.plan[gi];D.plan.splice(gi,1);
           let breakCount=0,insertAt=D.plan.length;
           for(let pi=0;pi<D.plan.length;pi++){if(D.plan[pi].type==='break'){breakCount++;if(breakCount>sec){insertAt=pi+1;break}}}
