@@ -164,6 +164,17 @@ async function main() {
     process.exit(1);
   }
   const data = JSON.parse(content);
+  const allTasks = data.tasks || [];
+  const withReminder = allTasks.filter(t => t.reminder);
+  const withReminderOn = allTasks.filter(t => t.reminder && t.reminder.on);
+  console.log(`Total tasks: ${allTasks.length}, with reminder field: ${withReminder.length}, with reminder.on=true: ${withReminderOn.length}`);
+  if (withReminder.length > 0 && withReminderOn.length === 0) {
+    console.log("Sample reminder objects (first 3):");
+    withReminder.slice(0, 3).forEach(t => console.log(`  "${t.name}": ${JSON.stringify(t.reminder)}`));
+  }
+  if (withReminderOn.length > 0) {
+    withReminderOn.forEach(t => console.log(`  ENABLED: "${t.name}" reminder=${JSON.stringify(t.reminder)}`));
+  }
 
   const subscription = data.pushSubscription;
   if (!subscription || !subscription.endpoint) {
