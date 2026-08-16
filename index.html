@@ -24,7 +24,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-seri
 if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
 
 // ===== DATA =====
-const APP_VERSION='5.8.6';
+const APP_VERSION='5.8.7';
 const DEFAULT_DATA={tasks:[],points:0,pointsHistory:[],rewards:[],techniques:[],metrics:[],settings:{gistId:'',token:'',dailyGoal:0,theme:'default'},dailyGoalLog:{},streak:0,fractional:0,groupOrder:[],plan:[],savedPlans:[],planSectionRewards:{},groceries:[],recipes:[],pushSubscription:null};
 // Public VAPID key — safe to expose client-side, pairs with the private key held only in GitHub Actions secrets.
 const VAPID_PUBLIC_KEY='BJmb4cAGj9pEseTCWsRI6AzQV5nDwr5ln2BSbT7rEMZ7sm2Z--js3YVLM98lw1SjXO9cMQ1lrd-f9ELm-3v2ecY';
@@ -2471,6 +2471,46 @@ function bindAll(){
         if(downInd)downInd.style.opacity='0';
         setTimeout(()=>{if(psc2)psc2.style.transition=''},200);
         swiping=false;translateX=0;
+      });
+    });
+    // Right-click context menu for plan items (desktop equivalent of swipe)
+    document.querySelectorAll('.plan-sec-items .plan-drag-item[data-gi]').forEach(el=>{
+      if(el.dataset.gi==='-1')return;
+      el.addEventListener('contextmenu',e=>{
+        if(e.target.closest('button'))return;
+        e.preventDefault();
+        const gi=parseInt(el.dataset.gi);
+        const secDiv=el.closest('.plan-sec-items');
+        const sec=secDiv?parseInt(secDiv.dataset.sec):-1;
+        document.querySelectorAll('.ctx-menu').forEach(m=>m.remove());
+        const menu=document.createElement('div');menu.className='ctx-menu';
+        let btns='';
+        if(sec>0)btns+='<button class="ctx-plan-up" data-gi="'+gi+'" data-sec="'+sec+'">▲ Move to section above</button>';
+        if(sec<totalSecs-1)btns+='<button class="ctx-plan-down" data-gi="'+gi+'" data-sec="'+sec+'">▼ Move to section below</button>';
+        if(!btns)return;
+        menu.innerHTML=btns;
+        menu.style.left=e.clientX+'px';menu.style.top=e.clientY+'px';
+        document.body.appendChild(menu);
+        menu.querySelector('.ctx-plan-up')?.addEventListener('click',()=>{
+          const tid=D.plan[gi].id;let bc=0,inTgt=false;for(let pi=0;pi<D.plan.length;pi++){if(D.plan[pi].type==='break'){bc++;continue}if(bc===sec-1&&D.plan[pi].type==='task'&&D.plan[pi].id===tid&&pi!==gi){inTgt=true;break}}
+          if(inTgt){menu.remove();toast('Already there');return}
+          const item=D.plan[gi];D.plan.splice(gi,1);
+          let breakCount=0,insertAt=0;
+          for(let pi=0;pi<D.plan.length;pi++){if(D.plan[pi].type==='break'){breakCount++;if(breakCount>=sec){insertAt=pi;break}}}
+          D.plan.splice(insertAt,0,item);
+          menu.remove();save();render();toast('Moved up');
+        });
+        menu.querySelector('.ctx-plan-down')?.addEventListener('click',()=>{
+          const tid=D.plan[gi].id;let bc=0,inTgt=false;for(let pi=0;pi<D.plan.length;pi++){if(D.plan[pi].type==='break'){bc++;continue}if(bc===sec+1&&D.plan[pi].type==='task'&&D.plan[pi].id===tid&&pi!==gi){inTgt=true;break}}
+          if(inTgt){menu.remove();toast('Already there');return}
+          const item=D.plan[gi];D.plan.splice(gi,1);
+          let breakCount=0,insertAt=D.plan.length;
+          for(let pi=0;pi<D.plan.length;pi++){if(D.plan[pi].type==='break'){breakCount++;if(breakCount>sec){insertAt=pi+1;break}}}
+          D.plan.splice(insertAt,0,item);
+          menu.remove();save();render();toast('Moved down');
+        });
+        const close=()=>{menu.remove();document.removeEventListener('click',close)};
+        setTimeout(()=>document.addEventListener('click',close),0);
       });
     });
   }
