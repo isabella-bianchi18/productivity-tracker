@@ -24,7 +24,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-seri
 if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
 
 // ===== DATA =====
-const APP_VERSION='5.8.3';
+const APP_VERSION='5.8.4';
 const DEFAULT_DATA={tasks:[],points:0,pointsHistory:[],rewards:[],techniques:[],metrics:[],settings:{gistId:'',token:'',dailyGoal:0,theme:'default'},dailyGoalLog:{},streak:0,fractional:0,groupOrder:[],plan:[],savedPlans:[],planSectionRewards:{},groceries:[],recipes:[],pushSubscription:null};
 // Public VAPID key — safe to expose client-side, pairs with the private key held only in GitHub Actions secrets.
 const VAPID_PUBLIC_KEY='BJmb4cAGj9pEseTCWsRI6AzQV5nDwr5ln2BSbT7rEMZ7sm2Z--js3YVLM98lw1SjXO9cMQ1lrd-f9ELm-3v2ecY';
@@ -997,7 +997,7 @@ function rPlan(){
         const goalLine=gp&&!effectiveGoal?`<div style="font-size:.7rem;color:${gp.pct>=100?'var(--success-dark)':'var(--text-dim)'}">${gp.current}/${gp.target} ${t.timeBased?'min':t.countBased?(t.countUnit||'units'):'times'} ${gp.period}${gp.pct>=100?' ✓':''}</div>`:'';
         // Global index in D.plan for this task
         const globalIdx=secGlobalIndices[si]?secGlobalIndices[si][ti]:-1;
-        html+=`<div class="tcard plan-goal-tap plan-drag-item" data-gi="${globalIdx}" style="position:relative;overflow:hidden;background:${done?'var(--card-neutral)':catBg(t.category)};${done?'opacity:.6;padding:6px 12px':''};cursor:pointer;user-select:none;-webkit-user-select:none"><div style="display:flex;align-items:center;gap:10px"><button class="plan-done-btn cbtn-plan" data-id="${t.id}" style="${done?'opacity:.4;width:24px;height:24px;font-size:.8rem':''}">${done?'✓':'○'}</button><div style="flex:1;min-width:0"><div style="font-weight:600;font-size:${done?'.8rem':'.9rem'};${done?'text-decoration:line-through;color:var(--text-dim)':''}">${t.name}</div>${done?'':planGoalLine+goalLine}</div>${done?'':`<span style="color:var(--warning-dark);font-weight:bold;font-size:.75rem">${pl}</span>`}<button class="plan-rm ibtn" data-gi="${globalIdx}" style="font-size:.7rem;color:var(--danger-dark)">✕</button></div>${isM?`<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);">${quickAddHTML(t,true)}${t.countBased?`<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><input id="imi-count" type="number" min="1" placeholder="" class="inf" style="width:70px;margin:0;text-align:center"><span class="rl">${t.countUnit||'units'}</span></div><div id="imi-preview" style="font-size:.8rem;color:var(--accent-dark);margin:6px 0;"></div>`:t.timeBased?`<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><input id="imi-h" type="number" min="0" placeholder="" class="inf" style="width:60px;margin:0;text-align:center"><span class="rl">hours</span><input id="imi-m" type="number" min="0" max="59" placeholder="" class="inf" style="width:60px;margin:0;text-align:center"><span class="rl">minutes</span></div><div id="imi-preview" style="font-size:.8rem;color:var(--accent-dark);margin:6px 0;"></div>`:''}<div style="display:flex;gap:6px;flex-wrap:wrap">${effectiveGoal?`<button id="ims-work" data-id="${t.id}" class="btn bsuc" style="padding:8px 10px;font-size:.8rem">Log</button>`:`<button id="ims-work" data-id="${t.id}" class="btn bmut" style="padding:8px 10px;font-size:.8rem">Log</button><button id="ims-done" data-id="${t.id}" class="btn bsuc" style="padding:8px 10px;font-size:.8rem">Log + Done ✅</button>`}<button id="imc" class="btn bmut" style="padding:8px 10px">✕</button></div></div>`:''}</div>`;
+        html+=rPlanSwipeWrap(globalIdx,`<div class="tcard plan-goal-tap" style="background:${done?'var(--card-neutral)':catBg(t.category)};${done?'opacity:.6;padding:6px 12px':''};cursor:pointer"><div style="display:flex;align-items:center;gap:10px"><button class="plan-done-btn cbtn-plan" data-id="${t.id}" style="${done?'opacity:.4;width:24px;height:24px;font-size:.8rem':''}">${done?'✓':'○'}</button><div style="flex:1;min-width:0"><div style="font-weight:600;font-size:${done?'.8rem':'.9rem'};${done?'text-decoration:line-through;color:var(--text-dim)':''}">${t.name}</div>${done?'':planGoalLine+goalLine}</div>${done?'':`<span style="color:var(--warning-dark);font-weight:bold;font-size:.75rem">${pl}</span>`}<button class="plan-rm ibtn" data-gi="${globalIdx}" style="font-size:.7rem;color:var(--danger-dark)">✕</button></div>${isM?`<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);">${quickAddHTML(t,true)}${t.countBased?`<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><input id="imi-count" type="number" min="1" placeholder="" class="inf" style="width:70px;margin:0;text-align:center"><span class="rl">${t.countUnit||'units'}</span></div><div id="imi-preview" style="font-size:.8rem;color:var(--accent-dark);margin:6px 0;"></div>`:t.timeBased?`<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><input id="imi-h" type="number" min="0" placeholder="" class="inf" style="width:60px;margin:0;text-align:center"><span class="rl">hours</span><input id="imi-m" type="number" min="0" max="59" placeholder="" class="inf" style="width:60px;margin:0;text-align:center"><span class="rl">minutes</span></div><div id="imi-preview" style="font-size:.8rem;color:var(--accent-dark);margin:6px 0;"></div>`:''}<div style="display:flex;gap:6px;flex-wrap:wrap">${effectiveGoal?`<button id="ims-work" data-id="${t.id}" class="btn bsuc" style="padding:8px 10px;font-size:.8rem">Log</button>`:`<button id="ims-work" data-id="${t.id}" class="btn bmut" style="padding:8px 10px;font-size:.8rem">Log</button><button id="ims-done" data-id="${t.id}" class="btn bsuc" style="padding:8px 10px;font-size:.8rem">Log + Done ✅</button>`}<button id="imc" class="btn bmut" style="padding:8px 10px">✕</button></div></div>`:''}</div>`);
       });
 
       html+='</div>';
@@ -1115,6 +1115,7 @@ function rSwipeWrap(t,cardHtml){
   const pinLabel=t.pinned?'📌 Unpin':'📌 Pin';
   return `<div class="bucket-item" data-id="${t.id}" style="user-select:none;-webkit-user-select:none;position:relative"><div class="swipe-indicator swipe-plan" style="position:absolute;left:0;top:0;bottom:0;width:100px;display:flex;align-items:center;justify-content:center;background:var(--accent);border-radius:14px;color:#fff;font-weight:600;font-size:.75rem;pointer-events:none;opacity:0">📋 Plan</div><div class="swipe-indicator swipe-pin" style="position:absolute;right:0;top:0;bottom:0;width:100px;display:flex;align-items:center;justify-content:center;background:var(--warning-dark);border-radius:14px;color:#fff;font-weight:600;font-size:.75rem;pointer-events:none;opacity:0">${pinLabel}</div><div class="swipe-card" style="position:relative">${cardHtml}</div></div>`;
 }
+function rPlanSwipeWrap(gi,cardHtml){return '<div class="plan-drag-item plan-sw-wrap" data-gi="'+gi+'" style="user-select:none;-webkit-user-select:none;position:relative">'+'<div class="plan-sw-up" style="position:absolute;right:0;top:0;bottom:0;width:80px;display:flex;align-items:center;justify-content:center;background:var(--accent);border-radius:14px;color:#fff;font-weight:600;font-size:.75rem;pointer-events:none;opacity:0">▲ Up</div>'+'<div class="plan-sw-down" style="position:absolute;left:0;top:0;bottom:0;width:80px;display:flex;align-items:center;justify-content:center;background:var(--accent);border-radius:14px;color:#fff;font-weight:600;font-size:.75rem;pointer-events:none;opacity:0">▼ Down</div>'+'<div class="plan-swipe-card" style="position:relative">'+cardHtml+'</div></div>'}
 function rCard(t,i,n){
   const isM=inlineMinId===t.id,pl=t.timeBased?`${t.ptsAmount} pts / ${t.ptsPerMinutes} min`:t.countBased?`${t.ptsAmount} pts / ${t.ptsPerCount} ${t.countUnit}`:`+${t.points}`;
   // Goal progress bar
@@ -2424,9 +2425,6 @@ function bindAll(){
     const totalSecs=document.querySelectorAll('.plan-sec-items').length;
     document.querySelectorAll('.plan-sec-items .plan-drag-item[data-gi]').forEach(el=>{
       if(el.dataset.gi==='-1')return;
-      // Add swipe indicators
-      if(!el.querySelector('.plan-sw-up')){
-        el.insertAdjacentHTML('afterbegin','<div class="plan-sw-up" style="position:absolute;right:0;top:0;bottom:0;width:80px;display:flex;align-items:center;justify-content:center;background:var(--accent);border-radius:14px;color:#fff;font-weight:600;font-size:.75rem;pointer-events:none;opacity:0;z-index:0">▲ Up</div><div class="plan-sw-down" style="position:absolute;left:0;top:0;bottom:0;width:80px;display:flex;align-items:center;justify-content:center;background:var(--accent);border-radius:14px;color:#fff;font-weight:600;font-size:.75rem;pointer-events:none;opacity:0;z-index:0">▼ Down</div>');}
       let sx=0,sy=0,swiping=false,translateX=0;
       const upInd=el.querySelector('.plan-sw-up');
       const downInd=el.querySelector('.plan-sw-down');
@@ -2441,8 +2439,8 @@ function bindAll(){
         if(!swiping)return;
         e.preventDefault();
         translateX=Math.max(-80,Math.min(dx,80));
-        el.style.transform='translateX('+translateX+'px)';
-        el.style.transition='none';el.style.position='relative';el.style.zIndex='1';
+        const psc=el.querySelector('.plan-swipe-card');if(psc)psc.style.transform='translateX('+translateX+'px)';
+        if(psc)psc.style.transition='none';
         if(upInd)upInd.style.opacity=translateX>0?Math.min(1,translateX/40):0;
         if(downInd)downInd.style.opacity=translateX<0?Math.min(1,-translateX/40):0;
       },{passive:false});
@@ -2468,10 +2466,10 @@ function bindAll(){
           D.plan.splice(insertAt,0,item);
           save();render();toast('Moved down');if(navigator.vibrate)navigator.vibrate(15);return;
         }
-        el.style.transform='';el.style.transition='transform 0.2s';el.style.zIndex='';
+        const psc2=el.querySelector('.plan-swipe-card');if(psc2){psc2.style.transform='';psc2.style.transition='transform 0.2s'}
         if(upInd)upInd.style.opacity='0';
         if(downInd)downInd.style.opacity='0';
-        setTimeout(()=>{el.style.transition=''},200);
+        setTimeout(()=>{if(psc2)psc2.style.transition=''},200);
         swiping=false;translateX=0;
       });
     });
