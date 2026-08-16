@@ -24,7 +24,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-seri
 if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
 
 // ===== DATA =====
-const APP_VERSION='5.7.4';
+const APP_VERSION='5.8.0';
 const DEFAULT_DATA={tasks:[],points:0,pointsHistory:[],rewards:[],techniques:[],metrics:[],settings:{gistId:'',token:'',dailyGoal:0,theme:'default'},dailyGoalLog:{},streak:0,fractional:0,groupOrder:[],plan:[],savedPlans:[],planSectionRewards:{},groceries:[],recipes:[],pushSubscription:null};
 // Public VAPID key — safe to expose client-side, pairs with the private key held only in GitHub Actions secrets.
 const VAPID_PUBLIC_KEY='BJmb4cAGj9pEseTCWsRI6AzQV5nDwr5ln2BSbT7rEMZ7sm2Z--js3YVLM98lw1SjXO9cMQ1lrd-f9ELm-3v2ecY';
@@ -977,6 +977,7 @@ function rPlan(){
     // Task cards for this section
     const secItems=sec.filter(i=>i.type==='task').map(i=>({task:allTasks.find(t=>t.id===i.id),planGoal:i.planGoal||null})).filter(x=>x.task);
     if(secItems.length){
+      html+='<div class="plan-sec-items" data-sec="'+si+'">';
       secItems.forEach(({task:t,planGoal:pg},ti)=>{
         const effectiveGoal=pg||(t.goal&&(t.goal.period==='daily'||t.goal.period==='hourly'||t.goal.period==='total')?t.goal:null);
         const done=isDoneToday(t,pg);
@@ -999,7 +1000,7 @@ function rPlan(){
         html+=`<div class="tcard plan-goal-tap plan-drag-item" data-gi="${globalIdx}" style="background:${done?'var(--card-neutral)':catBg(t.category)};${done?'opacity:.6;padding:6px 12px':''};cursor:pointer;user-select:none;-webkit-user-select:none"><div style="display:flex;align-items:center;gap:10px"><button class="plan-done-btn cbtn-plan" data-id="${t.id}" style="${done?'opacity:.4;width:24px;height:24px;font-size:.8rem':''}">${done?'✓':'○'}</button><div style="flex:1;min-width:0"><div style="font-weight:600;font-size:${done?'.8rem':'.9rem'};${done?'text-decoration:line-through;color:var(--text-dim)':''}">${t.name}</div>${done?'':planGoalLine+goalLine}</div>${done?'':`<span style="color:var(--warning-dark);font-weight:bold;font-size:.75rem">${pl}</span>`}<button class="plan-rm ibtn" data-gi="${globalIdx}" style="font-size:.7rem;color:var(--danger-dark)">✕</button></div>${isM?`<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);">${quickAddHTML(t,true)}${t.countBased?`<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><input id="imi-count" type="number" min="1" placeholder="" class="inf" style="width:70px;margin:0;text-align:center"><span class="rl">${t.countUnit||'units'}</span></div><div id="imi-preview" style="font-size:.8rem;color:var(--accent-dark);margin:6px 0;"></div>`:t.timeBased?`<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><input id="imi-h" type="number" min="0" placeholder="" class="inf" style="width:60px;margin:0;text-align:center"><span class="rl">hours</span><input id="imi-m" type="number" min="0" max="59" placeholder="" class="inf" style="width:60px;margin:0;text-align:center"><span class="rl">minutes</span></div><div id="imi-preview" style="font-size:.8rem;color:var(--accent-dark);margin:6px 0;"></div>`:''}<div style="display:flex;gap:6px;flex-wrap:wrap">${effectiveGoal?`<button id="ims-work" data-id="${t.id}" class="btn bsuc" style="padding:8px 10px;font-size:.8rem">Log</button>`:`<button id="ims-work" data-id="${t.id}" class="btn bmut" style="padding:8px 10px;font-size:.8rem">Log</button><button id="ims-done" data-id="${t.id}" class="btn bsuc" style="padding:8px 10px;font-size:.8rem">Log + Done ✅</button>`}<button id="imc" class="btn bmut" style="padding:8px 10px">✕</button></div></div>`:''}</div>`;
       });
 
-      html+='<div class="plan-drag-item plan-spacer" data-gi="-1" data-sec="'+si+'" style="min-height:28px;margin:-4px 0;pointer-events:none"></div>';
+      html+='</div>';
     } else if(sections.length===1){
       html+=`<p style="color:var(--text-dim);font-style:italic;font-size:.85rem;margin-bottom:8px">No tasks planned yet. Add some above!</p>`;
     }
@@ -2115,7 +2116,7 @@ function bindTasksBody(){
   // Task drag-to-reorder within each type bucket (groups + ungrouped as peers)
   document.querySelectorAll('.task-bucket').forEach(bucket=>{
     initDragList(bucket,'.bucket-item',(fromIdx,toIdx)=>{
-      const items=[...bucket.querySelectorAll('.bucket-item')];
+      const items=[...bucket.children].filter(el=>el.matches('.bucket-item'));
       const fromEl=items[fromIdx];
       if(!fromEl)return;
       // Build order from current items
@@ -2395,26 +2396,28 @@ function bindAll(){
     if(t.timeBased||t.countBased){inlineMinId=t.id;render()}
     else if(pg||(t.goal&&(t.goal.period==='daily'||t.goal.period==='hourly'||t.goal.period==='total'))){completeTask(t.id);if(view==='plan')checkPlanComplete()}
     else{completeTask(t.id);if(view==='plan')checkPlanComplete()}}));
-  // Plan drag-to-reorder
-  initDragList('#plan-drag-container','.plan-drag-item',(fromIdx,toIdx)=>{
-    const items=[...document.querySelectorAll('#plan-drag-container .plan-drag-item')];
-    const fromGi=parseInt(items[fromIdx]?.dataset.gi);
-    if(isNaN(fromGi)||fromGi<0)return;
-    const item=D.plan[fromGi];
-    D.plan.splice(fromGi,1);
-    // Adjust toIdx: dragEnd includes the hidden dragged item in its count
-    const effectiveIdx=toIdx>fromIdx?toIdx-1:toIdx;
-    const targetEl=items[effectiveIdx];if(targetEl&&targetEl.classList.contains('plan-spacer')){const secN=parseInt(targetEl.dataset.sec);let insertAt=-1;let sc=0;for(let pi=0;pi<D.plan.length;pi++){if(D.plan[pi].type==='break'){sc++;if(sc>secN){insertAt=pi;break}}}if(insertAt<0)D.plan.push(item);else D.plan.splice(insertAt,0,item);save();render();return}if(effectiveIdx>=items.length-1){
-      // Dropped at or past the last position
-      const lastGi=parseInt(items[items.length-1]?.dataset.gi);
-      if(isNaN(lastGi)||lastGi===fromGi){D.plan.push(item)}
-      else{const adj=lastGi>fromGi?lastGi-1:lastGi;D.plan.splice(adj+1,0,item)}
-    } else {
-      let toGi=parseInt(items[effectiveIdx]?.dataset.gi);
-      if(isNaN(toGi)){D.plan.push(item)}
-      else{if(toGi>fromGi)toGi--;D.plan.splice(toGi,0,item)}
-    }
-    save();render();
+  // Plan drag-to-reorder (per-section)
+  document.querySelectorAll('.plan-sec-items').forEach(secDiv=>{
+    const sec=parseInt(secDiv.dataset.sec);
+    initDragList(secDiv,'.plan-drag-item',(fromIdx,toIdx)=>{
+      const items=[...secDiv.querySelectorAll('.plan-drag-item')];
+      const fromGi=parseInt(items[fromIdx]?.dataset.gi);
+      if(isNaN(fromGi)||fromGi<0)return;
+      const toGi=toIdx<items.length?parseInt(items[toIdx]?.dataset.gi):-1;
+      if(fromGi===toGi)return;
+      const item=D.plan[fromGi];
+      D.plan.splice(fromGi,1);
+      if(toGi<0||isNaN(toGi)){
+        // Dropped at end of section: find the break after this section
+        let breakCount=0,insertAt=D.plan.length;
+        for(let pi=0;pi<D.plan.length;pi++){if(D.plan[pi].type==='break'){breakCount++;if(breakCount>sec){insertAt=pi;break}}}
+        D.plan.splice(insertAt,0,item);
+      } else {
+        let adj=toGi>fromGi?toGi-1:toGi;
+        D.plan.splice(adj,0,item);
+      }
+      save();render();
+    });
   });
   document.querySelectorAll('.plan-rm').forEach(b=>b.addEventListener('click',e=>{e.stopPropagation();const gi=parseInt(b.dataset.gi);
     // Determine which section this task is in
