@@ -25,7 +25,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-seri
 if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
 
 // ===== DATA =====
-const APP_VERSION='5.4.2';
+const APP_VERSION='5.4.3';
 const DEFAULT_DATA={tasks:[],points:0,pointsHistory:[],rewards:[],techniques:[],metrics:[],settings:{gistId:'',token:'',dailyGoal:0,theme:'default'},dailyGoalLog:{},streak:0,fractional:0,groupOrder:[],plan:[],savedPlans:[],planSectionRewards:{},groceries:[],recipes:[],pushSubscription:null};
 // Public VAPID key — safe to expose client-side, pairs with the private key held only in GitHub Actions secrets.
 const VAPID_PUBLIC_KEY='BJmb4cAGj9pEseTCWsRI6AzQV5nDwr5ln2BSbT7rEMZ7sm2Z--js3YVLM98lw1SjXO9cMQ1lrd-f9ELm-3v2ecY';
@@ -74,7 +74,7 @@ async function gistPush(){const{gistId:g,token:t}=D.settings;if(!g||!t)return fa
   try{const r=await fetch(`https://api.github.com/gists/${g}`,{method:'PATCH',headers:{'Authorization':`token ${t}`,'Content-Type':'application/json','Accept':'application/vnd.github.v3+json'},body:JSON.stringify({files:{'productivity_data.json':{content:JSON.stringify(pushData)}}})});return r.ok}catch(e){return false}}
 function debouncedPush(){if(pushTimeout)clearTimeout(pushTimeout);pushTimeout=setTimeout(()=>{gistPush()},2000)}
 let pullInProgress=false;
-async function gistPull(){const{gistId:g,token:t}=D.settings;if(!g||!t)return false;if(pullInProgress)return false;pullInProgress=true;try{const r=await fetch(`https://api.github.com/gists/${g}`,{headers:{'Authorization':`token ${t}`,'Accept':'application/vnd.github.v3+json','If-None-Match':''}});if(!r.ok){pullInProgress=false;return false}const j=await r.json();const c=j.files['productivity_data.json']?.content;if(c){const remote=JSON.parse(c);if(remote._lastModified&&D._lastModified&&remote._lastModified<=D._lastModified){pullInProgress=false;return 'current'}const ls=D.settings;D={...JSON.parse(JSON.stringify(DEFAULT_DATA)),...remote,settings:ls};saveL();pullInProgress=false;return 'updated'}pullInProgress=false}catch(e){pullInProgress=false}return false}
+async function gistPull(){const{gistId:g,token:t}=D.settings;if(!g||!t)return false;if(pullInProgress)return false;pullInProgress=true;try{const r=await fetch(`https://api.github.com/gists/${g}`,{headers:{'Authorization':`token ${t}`,'Accept':'application/vnd.github.v3+json','If-None-Match':''}});if(!r.ok){pullInProgress=false;return false}const j=await r.json();const c=j.files['productivity_data.json']?.content;if(c){const remote=JSON.parse(c);if(remote._lastModified&&D._lastModified&&remote._lastModified<=D._lastModified){pullInProgress=false;return 'current'}const ls=D.settings;D={...JSON.parse(JSON.stringify(DEFAULT_DATA)),...remote,settings:ls};{const s=new Set();D.tasks=D.tasks.filter(t=>{if(s.has(t.id))return false;s.add(t.id);return true})}saveL();pullInProgress=false;return 'updated'}pullInProgress=false}catch(e){pullInProgress=false}return false}
 let syncInterval=null;
 function startAutoSync(){if(syncInterval)return;syncInterval=setInterval(()=>{if(document.visibilityState==='visible'&&!document.querySelector('.modal-bg')&&!(document.activeElement?.matches('input,textarea,select')&&document.activeElement.value))gistPull().then(r=>{if(r==='updated')render()})},3000)}
 function save(){
@@ -3166,6 +3166,7 @@ if(!D.savedPlans)D.savedPlans=[];
   });
   if(fixedOrphan)saveL();
 }
+{const seen=new Set();const before=D.tasks.length;D.tasks=D.tasks.filter(t=>{if(seen.has(t.id))return false;seen.add(t.id);return true});if(D.tasks.length<before){console.log("Deduped "+(before-D.tasks.length)+" task(s)");saveL()}}
 // Seed achievements tracker on first run so existing achievements don't popup
 if(!D._unlockedAchievements){D._unlockedAchievements=getAchievements().filter(a=>a.done).map(a=>a.name);saveL()}
 if(!D._lastLevel){D._lastLevel=getLevel().level;saveL()}
