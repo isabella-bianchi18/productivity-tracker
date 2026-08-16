@@ -25,7 +25,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-seri
 if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
 
 // ===== DATA =====
-const APP_VERSION='5.5.1';
+const APP_VERSION='5.5.2';
 const DEFAULT_DATA={tasks:[],points:0,pointsHistory:[],rewards:[],techniques:[],metrics:[],settings:{gistId:'',token:'',dailyGoal:0,theme:'default'},dailyGoalLog:{},streak:0,fractional:0,groupOrder:[],plan:[],savedPlans:[],planSectionRewards:{},groceries:[],recipes:[],pushSubscription:null};
 // Public VAPID key — safe to expose client-side, pairs with the private key held only in GitHub Actions secrets.
 const VAPID_PUBLIC_KEY='BJmb4cAGj9pEseTCWsRI6AzQV5nDwr5ln2BSbT7rEMZ7sm2Z--js3YVLM98lw1SjXO9cMQ1lrd-f9ELm-3v2ecY';
@@ -202,18 +202,6 @@ function getDailyStreak(task){
   if(!skips.has(todayStr)){const doneToday=D.pointsHistory.some(h=>h.taskId===task.id&&h.type==='earned'&&h.date.slice(0,10)===todayStr&&h.task.includes('✅'));if(doneToday)streak++}
   return streak;
 }
-  const todayStr=today();
-  if(skips.has(todayStr)){streak++}
-  else{const doneToday=D.pointsHistory.some(h=>h.taskId===task.id&&h.type==='earned'&&h.date.slice(0,10)===todayStr&&h.task.includes('✅'));if(doneToday)streak++}
-  return streak;
-}
-  // Add today if also completed
-  const todayStr=today();
-  const doneToday=D.pointsHistory.some(h=>h.taskId===task.id&&h.type==='earned'&&h.date.slice(0,10)===todayStr&&h.task.includes('✅'));
-  if(doneToday)streak++;
-  return streak;
-}
-
 // Award points from timer, accumulating fractional remainders
 function awardTimerPts(exactPts){
   D.fractional=(D.fractional||0)+exactPts;
@@ -2515,7 +2503,7 @@ function bindAll(){
       D.planSectionRewards[newSecIdx]=[...(D.planSectionRewards[newSecIdx]||[]),...sp.rewards.filter(rid=>!(D.planSectionRewards[newSecIdx]||[]).includes(rid))];
     }
     save();render();toast(`📋 Loaded "${sp.name}"`)}));
-  document.querySelectorAll('.plan-del-saved').forEach(b=>b.addEventListener('click',e=>{e.stopPropagation();const spi=parseInt(b.dataset.spi);confirmAction(`Delete saved plan "${D.savedPlans[spi]?.name}"?`,()=>{D.savedPlans.splice(spi,1);save();render()})}));
+  document.querySelectorAll('.plan-del-saved').forEach(b=>b.addEventListener('click',e=>{e.stopPropagation();const spi=parseInt(b.dataset.spi);confirmAction(`Delete saved plan "${D.savedPlans[spi]?.name}"?`,()=>{D.savedPlans.splice(spi,1);D.plan.forEach(item=>{if(item.savedPlanIdx!=null){if(item.savedPlanIdx===spi)delete item.savedPlanIdx;else if(item.savedPlanIdx>spi)item.savedPlanIdx--}});save();render()})}));
   document.getElementById('plan-clear')?.addEventListener('click',()=>confirmAction('Clear your entire plan?',()=>{D.plan=[];D.planSectionRewards={};localStorage.removeItem('pt_firedSec_'+today());save();render()}));
   // History entries
   document.querySelectorAll('.hent-click').forEach(b=>b.addEventListener('click',()=>showHistDetail(parseInt(b.dataset.idx))));
