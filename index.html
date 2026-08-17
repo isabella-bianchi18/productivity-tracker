@@ -24,8 +24,14 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-seri
 if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
 
 // ===== DATA =====
-const APP_VERSION='5.8.11';
+const APP_VERSION='5.8.13';
 const DEFAULT_DATA={tasks:[],points:0,pointsHistory:[],rewards:[],techniques:[],metrics:[],settings:{gistId:'',token:'',dailyGoal:0,theme:'default'},dailyGoalLog:{},streak:0,fractional:0,groupOrder:[],plan:[],savedPlans:[],planSectionRewards:{},groceries:[],recipes:[],pushSubscription:null};
+// Shared task type/category emoji + sort-order maps (single source of truth).
+// typeE/catE are aliases used by the timer views; typeEmoji/catEmoji by the plan view.
+const TASK_TYPE_EMOJI={'one-time':'🎯','recurring':'🔄','daily':'📅','evergreen':'♾️'};
+const CATEGORY_EMOJI={'work':'💼','home':'🏠','growth':'🌱'};
+const TASK_TYPE_ORDER={'one-time':0,'recurring':1,'daily':2,'evergreen':3};
+const typeEmoji=TASK_TYPE_EMOJI,catEmoji=CATEGORY_EMOJI,typeE=TASK_TYPE_EMOJI,catE=CATEGORY_EMOJI,typeOrder=TASK_TYPE_ORDER;
 // Public VAPID key — safe to expose client-side, pairs with the private key held only in GitHub Actions secrets.
 const VAPID_PUBLIC_KEY='BJmb4cAGj9pEseTCWsRI6AzQV5nDwr5ln2BSbT7rEMZ7sm2Z--js3YVLM98lw1SjXO9cMQ1lrd-f9ELm-3v2ecY';
 function urlBase64ToUint8Array(base64String){
@@ -73,7 +79,12 @@ async function gistPush(){const{gistId:g,token:t}=D.settings;if(!g||!t)return fa
   try{const r=await fetch(`https://api.github.com/gists/${g}`,{method:'PATCH',headers:{'Authorization':`token ${t}`,'Content-Type':'application/json','Accept':'application/vnd.github.v3+json'},body:JSON.stringify({files:{'productivity_data.json':{content:JSON.stringify(pushData)}}})});return r.ok}catch(e){return false}}
 function debouncedPush(){if(pushTimeout)clearTimeout(pushTimeout);pushTimeout=setTimeout(()=>{gistPush()},2000)}
 let pullInProgress=false;
-async function gistPull(){const{gistId:g,token:t}=D.settings;if(!g||!t)return false;if(pullInProgress)return false;pullInProgress=true;try{const r=await fetch(`https://api.github.com/gists/${g}`,{headers:{'Authorization':`token ${t}`,'Accept':'application/vnd.github.v3+json','If-None-Match':''}});if(!r.ok){pullInProgress=false;return false}const j=await r.json();const c=j.files['productivity_data.json']?.content;if(c){const remote=JSON.parse(c);if(remote._lastModified&&D._lastModified&&remote._lastModified<=D._lastModified){pullInProgress=false;return 'current'}const ls=D.settings;D={...JSON.parse(JSON.stringify(DEFAULT_DATA)),...remote,settings:ls};{const s=new Set();D.tasks=D.tasks.filter(t=>{if(s.has(t.id))return false;s.add(t.id);return true})}saveL();pullInProgress=false;return 'updated'}pullInProgress=false}catch(e){pullInProgress=false}return false}
+async function gistPull(){const{gistId:g,token:t}=D.settings;if(!g||!t)return false;if(pullInProgress)return false;pullInProgress=true;try{const r=await fetch(`https://api.github.com/gists/${g}`,{headers:{'Authorization':`token ${t}`,'Accept':'application/vnd.github.v3+json','If-None-Match':''}});if(!r.ok){pullInProgress=false;return false}const j=await r.json();const c=j.files['productivity_data.json']?.content;if(c){const remote=JSON.parse(c);if(remote._lastModified&&D._lastModified&&remote._lastModified<=D._lastModified){pullInProgress=false;return 'current'}const ls=D.settings;D={...JSON.parse(JSON.stringify(DEFAULT_DATA)),...remote,settings:ls};{const s=new Set();D.tasks=D.tasks.filter(t=>{if(s.has(t.id))return false;s.add(t.id);return true})}
+// dailyGoal lives under settings, which we keep device-local (to protect gistId/token/theme),
+// so it wouldn't otherwise sync. Today's goal is authoritative in the synced dailyGoalLog,
+// so derive it from there: if another device set today's goal, reflect it here.
+{const tdg=D.dailyGoalLog&&D.dailyGoalLog[today()];if(tdg&&tdg!==true)D.settings.dailyGoal=tdg;}
+saveL();pullInProgress=false;return 'updated'}pullInProgress=false}catch(e){pullInProgress=false}return false}
 let syncInterval=null;
 function startAutoSync(){if(syncInterval)return;syncInterval=setInterval(()=>{if(document.visibilityState==='visible'&&!document.querySelector('.modal-bg')&&!(document.activeElement?.matches('input,textarea,select')&&document.activeElement.value))gistPull().then(r=>{if(r==='updated')render()})},3000)}
 function save(){
@@ -90,7 +101,11 @@ function localISO(){const d=new Date();return new Date(d.getTime()-d.getTimezone
 function localDateStr(d){return new Date(d.getTime()-d.getTimezoneOffset()*60000).toISOString().slice(0,10)}
 function getRecentValues(tid,isTime){const entries=D.pointsHistory.filter(h=>h.taskId===tid&&h.type==='earned');const vals=[];for(let i=entries.length-1;i>=0&&vals.length<3;i--){const v=isTime?(entries[i].minutes||0):(entries[i].count||0);if(v>0&&!vals.includes(v))vals.push(v)}return vals}
 function recurElapsed(t){const td=today();let lastDate=null;const directEntries=D.pointsHistory.filter(h=>h.taskId===t.id&&h.type==='earned'&&h.task.includes('✅'));if(directEntries.length)lastDate=directEntries[directEntries.length-1].date.slice(0,10);D.pointsHistory.forEach(h=>{if(h.type==='earned'&&h.planTasks){const pt=h.planTasks.find(p=>p.taskId===t.id&&p.completed);if(pt){const d=h.date.slice(0,10);if(!lastDate||d>lastDate)lastDate=d}}});if(!lastDate)return 9999;return Math.floor((new Date(td+'T12:00:00')-new Date(lastDate+'T12:00:00'))/864e5)}
-function oneTimeDone(t){if(t.completed)return true;if(D.pointsHistory.some(h=>h.taskId===t.id&&h.type==='earned'&&h.task.includes('✅')))return true;if(D.pointsHistory.some(h=>h.type==='earned'&&h.planTasks&&h.planTasks.some(p=>p.taskId===t.id&&p.completed)))return true;return false}
+function oneTimeDone(t){if(t.completed)return true;if(t.goal&&t.goal.period==='total'){const entries=D.pointsHistory.filter(h=>h.taskId===t.id&&h.type==='earned');const current=t.timeBased?entries.reduce((s,h)=>s+(h.minutes||0),0):t.countBased?entries.reduce((s,h)=>s+(h.count||0),0):entries.filter(h=>h.task.includes('✅')).length;return current>=t.goal.target}if(D.pointsHistory.some(h=>h.taskId===t.id&&h.type==='earned'&&h.task.includes('✅')))return true;if(D.pointsHistory.some(h=>h.type==='earned'&&h.planTasks&&h.planTasks.some(p=>p.taskId===t.id&&p.completed)))return true;return false}
+// Shared "is this task done in the plan context" check. Used by both checkPlanComplete()
+// and rPlan() (previously duplicated inline as isTaskDone/isDoneToday). planGoal is the
+// optional per-plan goal override for this task.
+function planTaskDone(t,planGoal){const td=today();const effectiveGoal=planGoal||(t.goal&&(t.goal.period==='daily'||t.goal.period==='hourly'||t.goal.period==='total')?t.goal:null);if(effectiveGoal){const entries=effectiveGoal.period==='total'?D.pointsHistory.filter(h=>h.taskId===t.id&&h.type==='earned'):D.pointsHistory.filter(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td);const current=t.timeBased?entries.reduce((s,h)=>s+(h.minutes||0),0)+(T.planMode?Math.floor((T.planTimes?.[t.id]||0)/60):0):t.countBased?entries.reduce((s,h)=>s+(h.count||0),0)+(T.planMode?(T.planCounts?.[t.id]||0):0):entries.filter(h=>h.task.includes('✅')).length+(T.planMode?(T.planFlatDone?.[t.id]||0):0);return current>=effectiveGoal.target}if(t.type==='one-time')return t.completed;if(t.type==='daily')return(t.lastCompleted&&t.lastCompleted.slice(0,10)===td)||D.pointsHistory.some(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td&&h.task.includes('✅'))||(T.planMode&&T.planFlatDone?.[t.id]>0);if(t.type==='recurring')return recurElapsed(t)<t.cadenceDays;if(t.type==='evergreen')return(t.lastCompleted&&t.lastCompleted.slice(0,10)===td)||D.pointsHistory.some(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td&&h.task.includes('✅'))||(T.planMode&&T.planFlatDone?.[t.id]>0);return false}
 function quickAddHTML(t,fillOnly){const vals=getRecentValues(t.id,t.timeBased);if(!vals.length)return '';const singleAction=!fillOnly&&(t.type==='evergreen'||(t.type==='one-time'&&t.goal));const btns=vals.slice(0,3).map(v=>{let label;if(t.timeBased){const h=Math.floor(v/60),m=v%60;label=h&&m?h+'h '+m+'m':h?h+'h':m+'m'}else{label=v+' '+(t.countUnit||'units')}return '<button class="qab" data-val="'+v+'" data-sa="'+(singleAction?'1':'0')+'" style="padding:4px 10px;font-size:.75rem;border-radius:6px;border:1px solid var(--accent);background:var(--surface);color:var(--accent-dark);cursor:pointer;font-weight:600">'+label+'</button>'}).join('');return '<div class="quick-adds" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">'+btns+'</div>'}
 function ptsToday(){return D.pointsHistory.filter(h=>h.date.slice(0,10)===today()&&h.type==='earned').reduce((s,h)=>s+h.points,0)}
 function getLevel(){
@@ -209,8 +224,8 @@ function awardTimerPts(exactPts){
   D.fractional-=whole;
   return whole;
 }
-function visibleTasks(){const n=new Date();const td=today();return D.tasks.filter(t=>{if(t.archived)return false;if(t.hiddenToday&&t.hiddenToday.includes(td))return false;if(t.goalSkips&&t.goalSkips.includes(td))return false;if(t.type==='one-time'){if(t.goal&&t.goal.period==='total'){const entries=D.pointsHistory.filter(h=>h.taskId===t.id&&h.type==='earned');const current=t.timeBased?entries.reduce((s,h)=>s+(h.minutes||0),0):t.countBased?entries.reduce((s,h)=>s+(h.count||0),0):entries.filter(h=>h.task.includes('✅')).length;return current<t.goal.target}return!oneTimeDone(t)}if(t.type==='recurring'){if(t.dueEarly===td)return true;return recurElapsed(t)>=t.cadenceDays}if(t.type==='daily'){if(t.dueEarly===td)return true;if(!t.lastCompleted){const completedToday=D.pointsHistory.some(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td&&h.task.includes('✅'));return!completedToday}const completedToday=D.pointsHistory.some(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td&&h.task.includes('✅'));return!completedToday}return true})}
-function sleepingTasks(){const n=new Date();const td=today();return D.tasks.filter(t=>{if(t.archived)return false;if(t.type==='one-time'&&t.completed)return false;if(t.hiddenToday&&t.hiddenToday.includes(td))return true;if(t.goalSkips&&t.goalSkips.includes(td))return true;if(t.type==='recurring'&&t.dueEarly!==td&&recurElapsed(t)<t.cadenceDays)return true;if(t.type==='daily'&&t.dueEarly!==td){const completedToday=D.pointsHistory.some(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td&&h.task.includes('✅'));if(completedToday)return true}return false}).map(t=>{if(t.hiddenToday&&t.hiddenToday.includes(td))return{...t,left:'hidden'};if(t.goalSkips&&t.goalSkips.includes(td)&&t.type!=='daily'&&t.type!=='recurring')return{...t,left:'skipped'};if(t.type==='daily'){const skippedToday=t.goalSkips&&t.goalSkips.includes(td);return{...t,left:skippedToday?'skipped':1}}if(t.type==='recurring')return{...t,left:Math.ceil(t.cadenceDays-recurElapsed(t))};return{...t,left:'skipped'}}).sort((a,b)=>(typeof a.left==='string'?0:a.left)-(typeof b.left==='string'?0:b.left))}
+function visibleTasks(){const n=new Date();const td=today();return D.tasks.filter(t=>{if(t.archived)return false;if(t.hiddenToday&&t.hiddenToday.includes(td))return false;if(t.goalSkips&&t.goalSkips.includes(td))return false;if(t.type==='one-time')return!oneTimeDone(t);if(t.type==='recurring'){if(t.dueEarly===td)return true;return recurElapsed(t)>=t.cadenceDays}if(t.type==='daily'){if(t.dueEarly===td)return true;if(!t.lastCompleted){const completedToday=D.pointsHistory.some(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td&&h.task.includes('✅'));return!completedToday}const completedToday=D.pointsHistory.some(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td&&h.task.includes('✅'));return!completedToday}return true})}
+function sleepingTasks(){const n=new Date();const td=today();return D.tasks.filter(t=>{if(t.archived)return false;if(t.type==='one-time'&&oneTimeDone(t))return false;if(t.hiddenToday&&t.hiddenToday.includes(td))return true;if(t.goalSkips&&t.goalSkips.includes(td))return true;if(t.type==='recurring'&&t.dueEarly!==td&&recurElapsed(t)<t.cadenceDays)return true;if(t.type==='daily'&&t.dueEarly!==td){const completedToday=D.pointsHistory.some(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td&&h.task.includes('✅'));if(completedToday)return true}return false}).map(t=>{if(t.hiddenToday&&t.hiddenToday.includes(td))return{...t,left:'hidden'};if(t.goalSkips&&t.goalSkips.includes(td)&&t.type!=='daily'&&t.type!=='recurring')return{...t,left:'skipped'};if(t.type==='daily'){const skippedToday=t.goalSkips&&t.goalSkips.includes(td);return{...t,left:skippedToday?'skipped':1}}if(t.type==='recurring')return{...t,left:Math.ceil(t.cadenceDays-recurElapsed(t))};return{...t,left:'skipped'}}).sort((a,b)=>(typeof a.left==='string'?0:a.left)-(typeof b.left==='string'?0:b.left))}
 function checkGoal(){const t=today(),g=D.settings.dailyGoal;if(!g||g<=0)return;
   // Store what goal was set for today
   if(!D.dailyGoalLog[t]||D.dailyGoalLog[t]===true)D.dailyGoalLog[t]=g;
@@ -829,11 +844,23 @@ function rNav(){
   return `<nav class="bnav">${tabs.map(t=>`<button class="nbtn ${view===t.v?'nact':''}" data-v="${t.v}"><span style="font-size:1.3rem">${t.i}</span><span>${t.l}</span></button>`).join('')}</nav>`}
 
 // ===== PLAN =====
+// Split D.plan into sections by 'break' items, preserving non-break items (incl. headers)
+// in each section and tracking each section's saved-plan link. Single source of truth for
+// the section-splitting loop that was previously copied across syncSavedPlan/rPlan/handlers.
+// Returns {sections:[[item,...],...], links:[savedPlanIdx|null,...]} (equal length).
+function getPlanSections(){
+  const sections=[];const links=[];let cur=[];let cl=null;
+  D.plan.forEach(item=>{
+    if(item.type==='break'){sections.push(cur);links.push(cl);cur=[];cl=item.savedPlanIdx!=null?item.savedPlanIdx:null}
+    else if(item.type==='header'){cl=item.savedPlanIdx!=null?item.savedPlanIdx:null}
+    else{cur.push(item)}
+  });
+  sections.push(cur);links.push(cl);
+  return {sections,links};
+}
 function syncSavedPlan(secIdx){
   // Get section links and update the saved plan if this section is linked
-  const sections=[];let cur=[];const sLinks=[];let cl=null;
-  D.plan.forEach(item=>{if(item.type==='break'){sections.push(cur);sLinks.push(cl);cur=[];cl=item.savedPlanIdx!=null?item.savedPlanIdx:null}else if(item.type==='header'){cl=item.savedPlanIdx!=null?item.savedPlanIdx:null}else{cur.push(item)}});
-  sections.push(cur);sLinks.push(cl);
+  const {sections,links:sLinks}=getPlanSections();
   const linkedIdx=sLinks[secIdx];
   if(linkedIdx!=null&&D.savedPlans[linkedIdx]){
     D.savedPlans[linkedIdx].items=sections[secIdx].filter(i=>i.type==='task').map(i=>i.id);
@@ -859,16 +886,8 @@ function checkPlanComplete(){
   const planSections=[];let curSec=[];
   D.plan.forEach(item=>{if(item.type==='break'){planSections.push(curSec);curSec=[]}else if(item.type==='task'){curSec.push(item)}});
   planSections.push(curSec);
-  // Helper to check if a task is done
-  function isTaskDone(t,pg){
-    const effectiveGoal=pg||(t.goal&&(t.goal.period==='daily'||t.goal.period==='hourly'||t.goal.period==='total')?t.goal:null);
-    if(effectiveGoal){const entries=effectiveGoal.period==='total'?D.pointsHistory.filter(h=>h.taskId===t.id&&h.type==='earned'):D.pointsHistory.filter(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td);const current=t.timeBased?entries.reduce((s,h)=>s+(h.minutes||0),0)+(T.planMode?Math.floor((T.planTimes?.[t.id]||0)/60):0):t.countBased?entries.reduce((s,h)=>s+(h.count||0),0)+(T.planMode?(T.planCounts?.[t.id]||0):0):entries.filter(h=>h.task.includes('✅')).length+(T.planMode?(T.planFlatDone?.[t.id]||0):0);return current>=effectiveGoal.target}
-    if(t.type==='one-time')return t.completed;
-    if(t.type==='daily')return(t.lastCompleted&&t.lastCompleted.slice(0,10)===td)||D.pointsHistory.some(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td&&h.task.includes('✅'))||(T.planMode&&T.planFlatDone?.[t.id]>0);
-    if(t.type==='recurring')return recurElapsed(t)<t.cadenceDays;
-    if(t.type==='evergreen')return(t.lastCompleted&&t.lastCompleted.slice(0,10)===td)||D.pointsHistory.some(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td&&h.task.includes('✅'))||(T.planMode&&T.planFlatDone?.[t.id]>0);
-    return false;
-  }
+  // Helper to check if a task is done (delegates to shared planTaskDone)
+  const isTaskDone=(t,pg)=>planTaskDone(t,pg);
   // Per-section completion check
   const firedSections=JSON.parse(localStorage.getItem('pt_firedSec_'+td)||'[]');
   let newlyCompleted=null;
@@ -909,45 +928,15 @@ function rPlan(){
   if(!D.plan)D.plan=[];
   const td=today();
   const allTasks=D.tasks.filter(t=>!t.archived);
-  function isDoneToday(t,planGoal){
-    // If plan goal exists, completion = goal met
-    const effectiveGoal=planGoal||(t.goal&&(t.goal.period==='daily'||t.goal.period==='hourly'||t.goal.period==='total')?t.goal:null);
-    if(effectiveGoal){
-      const entries=effectiveGoal.period==='total'?D.pointsHistory.filter(h=>h.taskId===t.id&&h.type==='earned'):D.pointsHistory.filter(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td);
-      const current=t.timeBased?entries.reduce((s,h)=>s+(h.minutes||0),0)+(T.planMode?Math.floor((T.planTimes?.[t.id]||0)/60):0):t.countBased?entries.reduce((s,h)=>s+(h.count||0),0)+(T.planMode?(T.planCounts?.[t.id]||0):0):entries.filter(h=>h.task.includes('✅')).length+(T.planMode?(T.planFlatDone?.[t.id]||0):0);
-      return current>=effectiveGoal.target;
-    }
-    if(t.type==='one-time')return t.completed;
-    if(t.type==='daily')return(t.lastCompleted&&t.lastCompleted.slice(0,10)===td)||D.pointsHistory.some(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td&&h.task.includes('✅'))||(T.planMode&&T.planFlatDone?.[t.id]>0);
-    if(t.type==='recurring')return recurElapsed(t)<t.cadenceDays;
-    if(t.type==='evergreen')return(t.lastCompleted&&t.lastCompleted.slice(0,10)===td)||D.pointsHistory.some(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td&&h.task.includes('✅'))||(T.planMode&&T.planFlatDone?.[t.id]>0);
-    return false;
-  }
-  // Split plan into sections by breaks/headers
-  const sections=[];let cur=[];const sectionLinks=[];let curLink=null;
-  D.plan.forEach(item=>{
-    if(item.type==='break'){sections.push(cur);sectionLinks.push(curLink);cur=[];curLink=item.savedPlanIdx!=null?item.savedPlanIdx:null}
-    else if(item.type==='header'){curLink=item.savedPlanIdx!=null?item.savedPlanIdx:null}
-    else{cur.push(item)}
-  });
-  sections.push(cur);sectionLinks.push(curLink);
+  const isDoneToday=(t,planGoal)=>planTaskDone(t,planGoal);
+  // Split plan into sections by breaks/headers (shared helper)
+  const {sections,links:sectionLinks}=getPlanSections();
   // Available tasks (not completed, not skipped/hidden today, not sleeping recurring)
-  // One-time "done" check must match visibleTasks (task tab): use oneTimeDone() so
-  // tasks completed via the plan timer (logged as planTasks entries, no t.completed flag)
-  // are excluded here too. For total-goal one-time tasks, "done" = goal target reached.
-  const oneTimeCompletedForPlan=t=>{
-    if(t.goal&&t.goal.period==='total'){
-      const entries=D.pointsHistory.filter(h=>h.taskId===t.id&&h.type==='earned');
-      const current=t.timeBased?entries.reduce((s,h)=>s+(h.minutes||0),0):t.countBased?entries.reduce((s,h)=>s+(h.count||0),0):entries.filter(h=>h.task.includes('✅')).length;
-      return current>=t.goal.target;
-    }
-    return oneTimeDone(t);
-  };
-  const available=allTasks.filter(t=>{if(t.dueEarly===td)return true;return!(t.type==='one-time'&&oneTimeCompletedForPlan(t))&&!(t.goalSkips&&t.goalSkips.includes(td))&&!(t.hiddenToday&&t.hiddenToday.includes(td))&&!(t.type==='recurring'&&recurElapsed(t)<t.cadenceDays)&&!(t.type==='daily'&&(t.lastCompleted&&t.lastCompleted.slice(0,10)===td||(!(t.goal&&(t.goal.period==='daily'||t.goal.period==='hourly'))&&D.pointsHistory.some(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td&&h.task.includes('✅')))))});
-  const typeOrder={'one-time':0,'recurring':1,'daily':2,'evergreen':3};
+  // One-time "done" check uses the shared oneTimeDone() helper (matches the task tab),
+  // which now also handles total-goal tasks (done = goal target reached) and plan-timer
+  // completions (planTasks entries, no t.completed flag).
+  const available=allTasks.filter(t=>{if(t.dueEarly===td)return true;return!(t.type==='one-time'&&oneTimeDone(t))&&!(t.goalSkips&&t.goalSkips.includes(td))&&!(t.hiddenToday&&t.hiddenToday.includes(td))&&!(t.type==='recurring'&&recurElapsed(t)<t.cadenceDays)&&!(t.type==='daily'&&(t.lastCompleted&&t.lastCompleted.slice(0,10)===td||(!(t.goal&&(t.goal.period==='daily'||t.goal.period==='hourly'))&&D.pointsHistory.some(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td&&h.task.includes('✅')))))});
   const sortedAvailable=[...available].sort((a,b)=>{const td2=((typeOrder[a.type]??9)-(typeOrder[b.type]??9));if(td2!==0)return td2;return D.tasks.indexOf(a)-D.tasks.indexOf(b)});
-  const typeEmoji={'one-time':'🎯','recurring':'🔄','daily':'📅','evergreen':'♾️'};
-  const catEmoji={'work':'💼','home':'🏠','growth':'🌱'};
   const optsList=sortedAvailable.map(t=>`<option value="${t.id}">${typeEmoji[t.type]||''}${catEmoji[t.category]||''} ${t.name}</option>`).join('');
   // Overall stats
   const allPlanItems=D.plan.filter(i=>i.type==='task');
@@ -1268,14 +1257,11 @@ function rTools(){if(toolsView==='menu')return rToolsMenu();if(toolsView==='sw')
 function rToolsMenu(){const a=T.running||T.paused,m=T.mode;return `<div class="vc"><h2 style="font-size:1.1rem;color:var(--accent-dark);margin-bottom:16px">🧰 Tools</h2><button class="tlcard${a&&m!=='sw'?' dis':''}" data-t="sw" ${a&&m!=='sw'?'disabled':''}>⏱️ <b>Stopwatch</b><br><span class="tdesc">Open-ended timer</span>${a&&m==='sw'?'<br><span style="font-size:.75rem;color:var(--success-dark)">Running...</span>':''}${a&&m!=='sw'?'<br><span style="font-size:.75rem;color:var(--danger-dark)">Stop timer first</span>':''}</button><button class="tlcard${a&&m!=='pm'?' dis':''}" data-t="pm" ${a&&m!=='pm'?'disabled':''}>🍅 <b>Pomodoro</b><br><span class="tdesc">Work/break cycles</span>${a&&m==='pm'?'<br><span style="font-size:.75rem;color:var(--success-dark)">Running...</span>':''}${a&&m!=='pm'?'<br><span style="font-size:.75rem;color:var(--danger-dark)">Stop timer first</span>':''}</button><button class="tlcard" data-t="rewards">🍭 <b>Rewards</b><br><span class="tdesc">Redeem points for treats</span></button><button class="tlcard" data-t="tech">🧠 <b>Techniques</b><br><span class="tdesc">Anti-procrastination tracker</span></button><button class="tlcard" data-t="metrics">📊 <b>Metrics</b><br><span class="tdesc">Track daily habits & feelings</span></button><button class="tlcard" data-t="insights">🔍 <b>Insights</b><br><span class="tdesc">Best days & times analysis</span></button><button class="tlcard" data-t="achieve">🏅 <b>Achievements</b><br><span class="tdesc">Milestones and badges</span></button><button class="tlcard" data-t="grocery">🛒 <b>Grocery List</b><br><span class="tdesc">Shopping list with notes</span></button></div>`}
 
 function rSW(){
-  const typeE={'one-time':'🎯','recurring':'🔄','daily':'📅','evergreen':'♾️'},catE={'work':'💼','home':'🏠','growth':'🌱'};
-  const typeOrder={'one-time':0,'recurring':1,'daily':2,'evergreen':3};
   const sorted=[...visibleTasks()].sort((a,b)=>{const td2=((typeOrder[a.type]??9)-(typeOrder[b.type]??9));if(td2!==0)return td2;return D.tasks.indexOf(a)-D.tasks.indexOf(b)});
   const opts=sorted.map(t=>`<option value="${t.id}">${typeE[t.type]||''}${catE[t.category]||''} ${t.name}</option>`).join('');
   const td=today();const firstSecIds=getPlanFirstSection();const planIncomplete=firstSecIds.filter(tid=>{const t=D.tasks.find(x=>x.id===tid);if(!t||t.archived)return false;
-    const pi=D.plan.find(i=>i.type==='task'&&i.id===tid);const eg=pi?.planGoal||(t.goal&&(t.goal.period==='daily'||t.goal.period==='hourly'||t.goal.period==='total')?t.goal:null);
-    if(eg){const entries=eg.period==='total'?D.pointsHistory.filter(h=>h.taskId===t.id&&h.type==='earned'):D.pointsHistory.filter(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td);const cur=t.timeBased?entries.reduce((s,h)=>s+(h.minutes||0),0):t.countBased?entries.reduce((s,h)=>s+(h.count||0),0):entries.filter(h=>h.task.includes('✅')).length;return cur<eg.target}
-    if(t.type==='one-time')return!t.completed;if(t.type==='daily')return!D.pointsHistory.some(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td&&h.task.includes('✅'));if(t.type==='recurring')return recurElapsed(t)>=t.cadenceDays;if(t.type==='evergreen')return!D.pointsHistory.some(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td&&h.task.includes('✅'));return true}).length;
+    const pi=D.plan.find(i=>i.type==='task'&&i.id===tid);
+    return!planTaskDone(t,pi?.planGoal);}).length;
   const planOpt=planIncomplete>0?`<option value="__plan__">📋 Plan (${planIncomplete} tasks)</option>`:'';
   const e=elapsed(),m=Math.floor(e/60),s=e%60,a=T.running||T.paused;
   const pts=a&&!T.planMode?Math.floor(e*T.pts/(T.per*60)):0;
@@ -1336,14 +1322,11 @@ function rSW(){
   return `<div class="vc" style="text-align:center"><button class="tback">← Back</button><h2 style="color:var(--accent-dark);margin:12px 0">⏱️ Stopwatch</h2><div id="tld" class="tdis">${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}</div>${a?`<div id="tlp" style="font-size:.9rem;color:var(--success-dark);margin-bottom:8px">${T.planMode?planTotalPts+` Point${planTotalPts!==1?'s':''} Earned`:pts+' Point'+(pts!==1?'s':'')+' Earned so far'}</div>${!T.planMode?`<div style="font-size:.85rem;color:var(--text-dim);margin-bottom:16px">Working on: <b>${label||'—'}</b></div>`:''}<div style="display:flex;gap:10px;justify-content:center">${T.running?`<button id="swpa" class="btn bwar btn-lg">Pause</button>`:`<button id="swre" class="btn bsuc btn-lg">Resume</button>`}<button id="swst" class="btn bdan btn-lg">Stop</button></div>${planDisplay}`:`<select id="swt" class="inf" style="text-align:left"><option value="">-- Select a task --</option>${planOpt}${opts}</select><input id="swn" type="text" placeholder="Or type what you're working on" class="inf" style="text-align:left" autocomplete="off"><div id="sw-autocomplete" style="display:none;max-height:150px;overflow-y:auto;border:1px solid var(--border);border-radius:8px;margin-top:-8px;margin-bottom:8px;background:var(--surface)"></div><div id="sw-rate-row" style="display:flex;gap:6px;align-items:center;justify-content:center;margin-bottom:16px"><input id="swp" type="number" min="1" class="inf" style="width:70px;margin:0;text-align:center"><span class="rl">pts per</span><input id="swr" type="number" min="1" class="inf" style="width:70px;margin:0;text-align:center"><span class="rl">min</span></div><button id="sws" class="btn bsuc btn-lg" disabled style="opacity:.5">Start</button><div id="swe" style="margin-top:8px;font-size:.8rem;color:var(--danger-dark)"></div>`}</div>`}
 
 function rPM(){
-  const typeE={'one-time':'🎯','recurring':'🔄','daily':'📅','evergreen':'♾️'},catE={'work':'💼','home':'🏠','growth':'🌱'};
-  const typeOrder={'one-time':0,'recurring':1,'daily':2,'evergreen':3};
   const sorted=[...visibleTasks()].sort((a,b)=>{const td2=((typeOrder[a.type]??9)-(typeOrder[b.type]??9));if(td2!==0)return td2;return D.tasks.indexOf(a)-D.tasks.indexOf(b)});
   const opts=sorted.map(t=>`<option value="${t.id}">${typeE[t.type]||''}${catE[t.category]||''} ${t.name}</option>`).join('');
   const td=today();const firstSecIds=getPlanFirstSection();const planIncomplete=firstSecIds.filter(tid=>{const t=D.tasks.find(x=>x.id===tid);if(!t||t.archived)return false;
-    const pi=D.plan.find(i=>i.type==='task'&&i.id===tid);const eg=pi?.planGoal||(t.goal&&(t.goal.period==='daily'||t.goal.period==='hourly'||t.goal.period==='total')?t.goal:null);
-    if(eg){const entries=eg.period==='total'?D.pointsHistory.filter(h=>h.taskId===t.id&&h.type==='earned'):D.pointsHistory.filter(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td);const cur=t.timeBased?entries.reduce((s,h)=>s+(h.minutes||0),0):t.countBased?entries.reduce((s,h)=>s+(h.count||0),0):entries.filter(h=>h.task.includes('✅')).length;return cur<eg.target}
-    if(t.type==='one-time')return!t.completed;if(t.type==='daily')return!D.pointsHistory.some(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td&&h.task.includes('✅'));if(t.type==='recurring')return recurElapsed(t)>=t.cadenceDays;if(t.type==='evergreen')return!D.pointsHistory.some(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td&&h.task.includes('✅'));return true}).length;
+    const pi=D.plan.find(i=>i.type==='task'&&i.id===tid);
+    return!planTaskDone(t,pi?.planGoal);}).length;
   const planOpt=planIncomplete>0?`<option value="__plan__">📋 Plan (${planIncomplete} tasks)</option>`:'';
   const e=elapsed(),a=T.running||T.paused;
   const tgt=(T.phase==='work'?T.workDur:T.breakDur)*60,rem=a?Math.max(0,tgt-e):(T.workDur||25)*60;
@@ -1902,7 +1885,19 @@ function taskViz(task,hist){
     const yTop=fmtAxis(maxVal);
     const midVal=Math.round(maxVal/2);
     const yMid=midVal>0&&midVal!==maxVal?fmtAxis(midVal):'';
-    return `<div style="margin-bottom:14px">${nav}<div style="position:relative;padding-left:20px"><svg viewBox="0 0 ${w} ${h+16}" style="width:100%;height:100px;"><line x1="0" y1="0" x2="${w}" y2="0" stroke="var(--border)" stroke-width="0.5" stroke-dasharray="3"/><line x1="0" y1="${h/2}" x2="${w}" y2="${h/2}" stroke="var(--border)" stroke-width="0.5" stroke-dasharray="3"/><line x1="0" y1="${h}" x2="${w}" y2="${h}" stroke="var(--border)" stroke-width="1"/>${goalLine}${cumGoalLine}${barSvg}${cumOverlay}<text x="0" y="${h+12}" font-size="7" fill="var(--text-dim)">1</text><text x="${w/2}" y="${h+12}" font-size="7" fill="var(--text-dim)" text-anchor="middle">${Math.ceil(dim/2)}</text><text x="${w}" y="${h+12}" font-size="7" fill="var(--text-dim)" text-anchor="end">${dim}</text></svg><div style="position:absolute;top:0;left:0;font-size:.55rem;color:var(--text-dim)">${yTop}</div><div style="position:absolute;top:45%;left:0;font-size:.55rem;color:var(--text-dim)">${yMid}</div>${goalLabel}${cumLabel}</div></div>`;
+    // X-axis day ticks: label every 3rd day (1,4,7,...) plus the last day, so the axis
+    // shows ~11 evenly spaced labels instead of just 1/mid/last. Labels sit at bar centers;
+    // first is left-anchored, last right-anchored, middle centered, to avoid edge clipping.
+    const tickStep=3;
+    const tickDays=[];for(let d=1;d<=dim;d+=tickStep)tickDays.push(d);
+    if(tickDays[tickDays.length-1]!==dim)tickDays.push(dim);
+    const xTicks=tickDays.map(d=>{
+      const cx=(d-0.5)*bw;
+      const anchor=d===1?'start':d===dim?'end':'middle';
+      const x=d===1?0:d===dim?w:cx;
+      return `<text x="${x.toFixed(1)}" y="${h+12}" font-size="7" fill="var(--text-dim)" text-anchor="${anchor}">${d}</text>`;
+    }).join('');
+    return `<div style="margin-bottom:14px">${nav}<div style="position:relative;padding-left:20px"><svg viewBox="0 0 ${w} ${h+16}" style="width:100%;height:100px;"><line x1="0" y1="0" x2="${w}" y2="0" stroke="var(--border)" stroke-width="0.5" stroke-dasharray="3"/><line x1="0" y1="${h/2}" x2="${w}" y2="${h/2}" stroke="var(--border)" stroke-width="0.5" stroke-dasharray="3"/><line x1="0" y1="${h}" x2="${w}" y2="${h}" stroke="var(--border)" stroke-width="1"/>${goalLine}${cumGoalLine}${barSvg}${cumOverlay}${xTicks}</svg><div style="position:absolute;top:0;left:0;font-size:.55rem;color:var(--text-dim)">${yTop}</div><div style="position:absolute;top:45%;left:0;font-size:.55rem;color:var(--text-dim)">${yMid}</div>${goalLabel}${cumLabel}</div></div>`;
   } else {
     // Mini calendar for selected month with checkmarks
     const dim=new Date(vizYear,vizMonth+1,0).getDate(),fd=new Date(vizYear,vizMonth,1).getDay();
@@ -2560,10 +2555,8 @@ function bindAll(){
     localStorage.removeItem('pt_firedSec_'+today());
     save();render()}));
   document.querySelectorAll('.plan-sec-move').forEach(b=>b.addEventListener('click',e=>{e.stopPropagation();const si=parseInt(b.dataset.sec),dir=b.dataset.d;
-    // Parse sections with their links
-    const sections=[];let cur=[];const sLinks=[];let cl=null;
-    D.plan.forEach(item=>{if(item.type==='break'){sections.push(cur);sLinks.push(cl);cur=[];cl=item.savedPlanIdx!=null?item.savedPlanIdx:null}else if(item.type==='header'){cl=item.savedPlanIdx!=null?item.savedPlanIdx:null}else{cur.push(item)}});
-    sections.push(cur);sLinks.push(cl);
+    // Parse sections with their links (shared helper)
+    const {sections,links:sLinks}=getPlanSections();
     const ti=dir==='up'?si-1:si+1;
     if(ti<0||ti>=sections.length)return;
     // Swap sections and their links
@@ -2576,9 +2569,7 @@ function bindAll(){
       sec.forEach(item=>D.plan.push(item))});
     save();render()}));
   document.querySelectorAll('.plan-sec-save').forEach(b=>b.addEventListener('click',e=>{e.stopPropagation();const si=parseInt(b.dataset.sec);
-    const sections=[];let cur=[];const sLinks=[];let cl=null;
-    D.plan.forEach(item=>{if(item.type==='break'){sections.push(cur);sLinks.push(cl);cur=[];cl=item.savedPlanIdx!=null?item.savedPlanIdx:null}else if(item.type==='header'){cl=item.savedPlanIdx!=null?item.savedPlanIdx:null}else{cur.push(item)}});
-    sections.push(cur);sLinks.push(cl);
+    const {sections,links:sLinks}=getPlanSections();
     const secTasks=sections[si]||[];if(!secTasks.length)return;
     const ids=secTasks.filter(i=>i.type==='task').map(i=>i.id);
     const linkedIdx=sLinks[si];
@@ -2821,7 +2812,6 @@ function valSW(){
 }
 function showTimerAutocomplete(prefix,query){
   const ac=document.getElementById(prefix+'-autocomplete');if(!ac)return;
-  const typeE={'one-time':'🎯','recurring':'🔄','daily':'📅','evergreen':'♾️'},catE={'work':'💼','home':'🏠','growth':'🌱'};
   const q=query.toLowerCase();
   const matches=D.tasks.filter(t=>!t.archived&&t.name.toLowerCase().includes(q)).slice(0,5);
   if(!matches.length){ac.style.display='none';return}
@@ -2873,11 +2863,9 @@ function startSW(){
   const selTask=document.getElementById('swt')?.value||'';
   const isPlan=selTask==='__plan__';
   const p=isPlan?1:(parseInt(document.getElementById('swp').value)||0),r=isPlan?1:(parseInt(document.getElementById('swr').value)||1);
-  const planQueue=isPlan?getPlanFirstSection().filter(tid=>{const t=D.tasks.find(x=>x.id===tid);if(!t)return false;const td=today();
+  const planQueue=isPlan?getPlanFirstSection().filter(tid=>{const t=D.tasks.find(x=>x.id===tid);if(!t)return false;
     const pi=D.plan.find(i=>i.type==='task'&&i.id===tid);
-    const eg=pi?.planGoal||(t.goal&&(t.goal.period==='daily'||t.goal.period==='hourly'||t.goal.period==='total')?t.goal:null);
-    if(eg){const entries=eg.period==='total'?D.pointsHistory.filter(h=>h.taskId===t.id&&h.type==='earned'):D.pointsHistory.filter(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td);const cur=t.timeBased?entries.reduce((s,h)=>s+(h.minutes||0),0):t.countBased?entries.reduce((s,h)=>s+(h.count||0),0):entries.filter(h=>h.task.includes('✅')).length;return cur<eg.target}
-    if(t.type==='one-time')return!t.completed;if(t.type==='daily')return!D.pointsHistory.some(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td&&h.task.includes('✅'));if(t.type==='recurring')return recurElapsed(t)>=t.cadenceDays;if(t.type==='evergreen')return!D.pointsHistory.some(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td&&h.task.includes('✅'));return true}):[];
+    return!planTaskDone(t,pi?.planGoal);}):[];
   T={running:true,paused:false,mode:'sw',start:Date.now(),elapsed:0,workDur:25,breakDur:5,phase:'work',
     note:isPlan?'':document.getElementById('swn')?.value||'',taskId:isPlan?(planQueue[0]||''):selTask,pts:p,per:r,
     planMode:isPlan,planQueue:planQueue,planTimes:isPlan?{}:{},planCurrentStart:isPlan?Date.now():0,planCompleted:[],planCounts:{}};
@@ -2887,11 +2875,9 @@ function startPM(){
   const selTask=document.getElementById('pmt')?.value||'';
   const isPlan=selTask==='__plan__';
   const p=isPlan?1:(parseInt(document.getElementById('pmp').value)||0),r=isPlan?1:(parseInt(document.getElementById('pmr').value)||1);
-  const planQueue=isPlan?getPlanFirstSection().filter(tid=>{const t=D.tasks.find(x=>x.id===tid);if(!t)return false;const td=today();
+  const planQueue=isPlan?getPlanFirstSection().filter(tid=>{const t=D.tasks.find(x=>x.id===tid);if(!t)return false;
     const pi=D.plan.find(i=>i.type==='task'&&i.id===tid);
-    const eg=pi?.planGoal||(t.goal&&(t.goal.period==='daily'||t.goal.period==='hourly'||t.goal.period==='total')?t.goal:null);
-    if(eg){const entries=eg.period==='total'?D.pointsHistory.filter(h=>h.taskId===t.id&&h.type==='earned'):D.pointsHistory.filter(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td);const cur=t.timeBased?entries.reduce((s,h)=>s+(h.minutes||0),0):t.countBased?entries.reduce((s,h)=>s+(h.count||0),0):entries.filter(h=>h.task.includes('✅')).length;return cur<eg.target}
-    if(t.type==='one-time')return!t.completed;if(t.type==='daily')return!D.pointsHistory.some(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td&&h.task.includes('✅'));if(t.type==='recurring')return recurElapsed(t)>=t.cadenceDays;if(t.type==='evergreen')return!D.pointsHistory.some(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td&&h.task.includes('✅'));return true}):[];
+    return!planTaskDone(t,pi?.planGoal);}):[];
   T={running:true,paused:false,mode:'pm',start:Date.now(),elapsed:0,workDur:w,breakDur:b,phase:'work',
     note:isPlan?'':document.getElementById('pmn')?.value||'',taskId:isPlan?(planQueue[0]||''):selTask,pts:p,per:r,
     planMode:isPlan,planQueue:planQueue,planTimes:isPlan?{}:{},planCurrentStart:isPlan?Date.now():0,planCompleted:[],planCounts:{},totalWork:0,totalBreak:0,awaitingAck:false};
@@ -3288,8 +3274,10 @@ else{render();showStartupModals()}
 function checkDayChange(){
   const t=today();
   if(D._lastDay!==t){
+    // Reset today's active goal to force re-entry, but do NOT delete dailyGoalLog[t]:
+    // that log is the synced source of truth for today's goal. If another device already
+    // set today's goal, gistPull derives dailyGoal from the log to keep devices consistent.
     D.settings.dailyGoal=0;
-    if(D.dailyGoalLog&&D.dailyGoalLog[t])delete D.dailyGoalLog[t];
     // Auto skip/hide work tasks on weekends
     const wd=new Date().getDay();
     if(wd===0||wd===6){
