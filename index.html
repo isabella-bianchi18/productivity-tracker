@@ -24,7 +24,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-seri
 if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
 
 // ===== DATA =====
-const APP_VERSION='5.8.13';
+const APP_VERSION='5.8.15';
 const DEFAULT_DATA={tasks:[],points:0,pointsHistory:[],rewards:[],techniques:[],metrics:[],settings:{gistId:'',token:'',dailyGoal:0,theme:'default'},dailyGoalLog:{},streak:0,fractional:0,groupOrder:[],plan:[],savedPlans:[],planSectionRewards:{},groceries:[],recipes:[],pushSubscription:null};
 // Shared task type/category emoji + sort-order maps (single source of truth).
 // typeE/catE are aliases used by the timer views; typeEmoji/catEmoji by the plan view.
@@ -453,7 +453,10 @@ function initDragList(containerSelector,itemSelector,onReorder,opts){
     },{passive:true});
     item.addEventListener('touchend',()=>{if(pressTimer){clearTimeout(pressTimer);pressTimer=null}if(dragState&&dragState.item===item)dragEnd()});
     item.addEventListener('touchcancel',()=>{if(pressTimer){clearTimeout(pressTimer);pressTimer=null}if(dragState&&dragState.item===item)dragEnd()});
-    item.addEventListener('mousedown',e=>{if(e.button!==0)return;if(!e.target.closest('button')&&!e.target.closest('input,textarea,select')&&!(nestedGuard&&e.target.closest(nestedGuard))){e.preventDefault();startDrag(e)}});
+    item.addEventListener('mousedown',e=>{if(e.button!==0)return;if(!e.target.closest('button')&&!e.target.closest('input,textarea,select')&&!(nestedGuard&&e.target.closest(nestedGuard))){startDrag(e);
+      const cancelDrag=()=>{if(pressTimer){clearTimeout(pressTimer);pressTimer=null}document.removeEventListener('mouseup',cancelDrag)};
+      document.addEventListener('mouseup',cancelDrag);
+    }});
   });
 }
 function dragMove(e){
@@ -2361,7 +2364,7 @@ function bindAll(){
     D.plan.splice(insertIdx,0,{type:'task',id:e.target.value});syncSavedPlan(si);save();render()}));
   document.querySelectorAll('.plan-goal-tap').forEach(b=>b.addEventListener('click',e=>{
     if(e.target.closest('button')||e.target.closest('input')||e.target.closest('select'))return;
-    const gi=parseInt(b.dataset.gi);const item=D.plan[gi];if(!item||item.type!=='task')return;
+    const gi=parseInt(b.closest('[data-gi]')?.dataset.gi);const item=D.plan[gi];if(!item||item.type!=='task')return;
     const t=D.tasks.find(x=>x.id===item.id);if(!t)return;
     const pg=item.planGoal;
     const unit=t.timeBased?'min':t.countBased?(t.countUnit||'units'):'times';
@@ -2496,7 +2499,7 @@ function bindAll(){
         let btns='';
         if(sec>0)btns+='<button class="ctx-plan-up" data-gi="'+gi+'" data-sec="'+sec+'">▲ Move to section above</button>';
         if(sec<totalSecs-1)btns+='<button class="ctx-plan-down" data-gi="'+gi+'" data-sec="'+sec+'">▼ Move to section below</button>';
-        if(!btns)return;
+        if(!btns){toast('Only 1 section — nowhere to move');return}
         menu.innerHTML=btns;
         menu.style.left=e.clientX+'px';menu.style.top=e.clientY+'px';
         document.body.appendChild(menu);
