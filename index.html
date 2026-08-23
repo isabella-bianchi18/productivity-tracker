@@ -25,7 +25,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-seri
 if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
 
 // ===== DATA =====
-const APP_VERSION='5.12.0';
+const APP_VERSION='5.13.0';
 // Ledger rows the app generates itself. Any "how many points did X earn" sum must exclude these or
 // a bonus ends up inflating the figure the next bonus is calculated from.
 const GOAL_BONUS_LABEL='🎯 Daily goal bonus';
@@ -74,7 +74,9 @@ const scrollPos={};const scrollTime={};const SCROLL_TIMEOUT=60000;
 
 // ===== STORAGE =====
 const SK='pt_v3';
-function saveL(){localStorage.setItem(SK,JSON.stringify(D))}
+// Every mutation funnels through here, so it's the single choke point for invalidating the
+// render-pass streak memo.
+function saveL(){clearStreakMemo();localStorage.setItem(SK,JSON.stringify(D))}
 function loadL(){const s=localStorage.getItem(SK);if(s)D={...JSON.parse(JSON.stringify(DEFAULT_DATA)),...JSON.parse(s)}}
 let pushTimeout=null;
 let localDirty=false;
@@ -312,7 +314,17 @@ function getGoalProgress(task){
 // that had only ever been skipped reported a 365-day streak.
 // An incomplete CURRENT period doesn't break the streak either; it just doesn't count yet.
 // All boundaries come from localDateStr()/periodEndStr() so they line up with localISO() dates.
-function getGoalStreak(task){
+// ===== RENDER-PASS STREAK MEMO =====
+// rCard calls getGoalStreak up to 3x per card and each call walks up to 365 periods, so with ~40
+// tasks and a few thousand history rows this dominated every render(). Results are cached per render
+// pass. Invalidation hangs off saveL(), which every mutation funnels through, plus the top of
+// render() to cover a sync replacing D. The cached value is only ever reused within a single pass
+// over unchanged data, so the numbers are identical — this is purely a cost fix.
+let _streakMemo={goal:{},daily:{}};
+function clearStreakMemo(){_streakMemo={goal:{},daily:{}}}
+function getGoalStreak(task){const k=task.id;if(_streakMemo.goal[k]===undefined)_streakMemo.goal[k]=computeGoalStreak(task);return _streakMemo.goal[k]}
+function getDailyStreak(task){const k=task.id;if(_streakMemo.daily[k]===undefined)_streakMemo.daily[k]=computeDailyStreak(task);return _streakMemo.daily[k]}
+function computeGoalStreak(task){
   if(!task.goal)return 0;
   const period=task.goal.period;
   // Only these periods have a backward walk implemented; hourly/annually/total report bank only.
@@ -329,10 +341,20 @@ function getGoalStreak(task){
     if(period==='weekly')return new Date(y,m,dd-7);
     return new Date(y,m-1,1);
   };
+  // This task's per-day total, built ONCE. The old version re-filtered all of pointsHistory for
+  // every period it walked, i.e. up to 365 full scans per call. Same arithmetic, same numbers:
+  // minutes for time-based, counts for count-based, row count for flat.
+  const byDay={};
+  D.pointsHistory.forEach(h=>{
+    if(h.taskId!==task.id||h.type!=='earned')return;
+    const d=h.date.slice(0,10);
+    byDay[d]=(byDay[d]||0)+(task.timeBased?(h.minutes||0):task.countBased?(h.count||0):1);
+  });
   const met=(p)=>{
     const psStr=localDateStr(p),peStr=periodEndStr(period,p);
-    const entries=D.pointsHistory.filter(h=>h.taskId===task.id&&h.type==='earned'&&h.date.slice(0,10)>=psStr&&h.date.slice(0,10)<peStr);
-    const val=task.timeBased?entries.reduce((s,h)=>s+(h.minutes||0),0):task.countBased?entries.reduce((s,h)=>s+(h.count||0),0):entries.length;
+    let val=0;
+    if(period==='daily')val=byDay[psStr]||0;
+    else for(const d in byDay){if(d>=psStr&&d<peStr)val+=byDay[d]}
     return val>=task.goal.target;
   };
   let streak=0,p=startOf(new Date()),isCurrent=true;
@@ -346,18 +368,22 @@ function getGoalStreak(task){
 }
 
 // Helper: streak for daily tasks without goals (start from yesterday, add today if done)
-function getDailyStreak(task){
+function computeDailyStreak(task){
   let streak=0;const now=new Date();let d=new Date(now);d.setDate(d.getDate()-1);
   const skips=new Set(task.goalSkips||[]);
+  // Completion days collected once instead of re-scanning history for each of up to 365 days.
+  // NOTE: deliberately still marker-only (no planTasks), so the numbers stay byte-identical to
+  // before. Making streaks plan-aware is a separate behaviour change — see DESIGN §11.2.
+  const days=new Set();
+  D.pointsHistory.forEach(h=>{if(h.taskId===task.id&&h.type==='earned'&&typeof h.task==='string'&&h.task.includes('✅'))days.add(h.date.slice(0,10))});
   for(let i=0;i<365;i++){
     const ds=localDateStr(d);
     if(skips.has(ds)){d.setDate(d.getDate()-1);continue}
-    const hasEntry=D.pointsHistory.some(h=>h.taskId===task.id&&h.type==='earned'&&h.date.slice(0,10)===ds&&h.task.includes('✅'));
-    if(hasEntry){streak++}else break;
+    if(days.has(ds)){streak++}else break;
     d.setDate(d.getDate()-1);
   }
   const todayStr=today();
-  if(!skips.has(todayStr)){const doneToday=D.pointsHistory.some(h=>h.taskId===task.id&&h.type==='earned'&&h.date.slice(0,10)===todayStr&&h.task.includes('✅'));if(doneToday)streak++}
+  if(!skips.has(todayStr)&&days.has(todayStr))streak++;
   return streak;
 }
 // Award points from timer, accumulating fractional remainders
@@ -1008,7 +1034,7 @@ function showSurpriseModal(){
 }
 
 // ===== RENDER =====
-function render(){document.getElementById('app').innerHTML=rHeader()+(view==='tasks'?rTasks():'')+(view==='plan'?rPlan():'')+(view==='history'?rHistory():'')+(view==='tools'?rTools():'')+rNav();bindAll()}
+function render(){clearStreakMemo();document.getElementById('app').innerHTML=rHeader()+(view==='tasks'?rTasks():'')+(view==='plan'?rPlan():'')+(view==='history'?rHistory():'')+(view==='tools'?rTools():'')+rNav();bindAll()}
 function tickRender(){const el=document.getElementById('tld'),pl=document.getElementById('tlp');if(!el){render();return}const e=elapsed();if(T.mode==='sw'){const m=Math.floor(e/60),s=e%60;el.textContent=`${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;if(pl){if(T.planMode){let planPts=0;const liveCurId=T.planQueue[0];const liveCurExtra=T.running?Math.floor((Date.now()-T.planCurrentStart)/1000):0;T.planQueue.forEach(tid=>{const t=D.tasks.find(x=>x.id===tid);if(!t)return;const secs=(T.planTimes[tid]||0)+(tid===liveCurId?liveCurExtra:0);if(t.timeBased){planPts+=Math.floor((secs/60)*t.ptsAmount/t.ptsPerMinutes)}else if(t.countBased){planPts+=Math.floor((T.planCounts?.[tid]||0)*t.ptsAmount/t.ptsPerCount)}else if(T.planFlatDone?.[tid]){planPts+=(T.planFlatDone[tid]*(t.points||0))}});pl.textContent=planPts+` Point${planPts!==1?'s':''} Earned`}else{const p=Math.floor(e*T.pts/(T.per*60));pl.textContent=`${p} Point${p!==1?'s':''} Earned so far`}}}else if(T.mode==='pm'){const tgt=(T.phase==='work'?T.workDur:T.breakDur)*60;if(T.awaitingAck){const over=e-tgt;const m=Math.floor(over/60),s=over%60;el.textContent=`+${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;if(pl)pl.textContent=T.phase==='work'?'☕ Break time! Tap to start':'💪 Ready? Tap to start'}else{const rem=Math.max(0,tgt-e),m=Math.floor(rem/60),s=rem%60;el.textContent=`${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;if(pl&&T.phase==='work'){if(T.planMode){let planPts=0;const liveCurId=T.planQueue[0];const liveCurExtra=T.running?Math.floor((Date.now()-T.planCurrentStart)/1000):0;T.planQueue.forEach(tid=>{const t=D.tasks.find(x=>x.id===tid);if(!t)return;const secs=(T.planTimes[tid]||0)+(tid===liveCurId?liveCurExtra:0);if(t.timeBased){planPts+=Math.floor((secs/60)*t.ptsAmount/t.ptsPerMinutes)}else if(t.countBased){planPts+=Math.floor((T.planCounts?.[tid]||0)*t.ptsAmount/t.ptsPerCount)}else if(T.planFlatDone?.[tid]){planPts+=(T.planFlatDone[tid]*(t.points||0))}});pl.textContent=planPts+` Point${planPts!==1?'s':''} Earned`}else{const p=Math.floor(e*T.pts/(T.per*60));pl.textContent=`${p} Point${p!==1?'s':''} this session`}}}}}
 
 function rHeader(){
@@ -1099,6 +1125,44 @@ function planSectionPtsToday(secTaskIds){
     if(h.taskId&&secTaskIds.has(h.taskId))sum+=(h.points||0);
   });
   return sum;
+}
+// Per-section state (paid-bonus tracker + rewards) is keyed by POSITION, so it has to be maintained
+// whenever sections move or disappear. These two are the only sanctioned way to do that.
+function swapPlanSectionState(si,ti){
+  const fired=planFiredToday(),hadSi=fired.includes(si),hadTi=fired.includes(ti);
+  const next=fired.filter(x=>x!==si&&x!==ti);
+  if(hadSi)next.push(ti);
+  if(hadTi)next.push(si);
+  setPlanFiredToday(next.sort((a,b)=>a-b));
+  const R=D.planSectionRewards||{},a=R[si],b=R[ti];
+  if(b!==undefined)R[si]=b;else delete R[si];
+  if(a!==undefined)R[ti]=a;else delete R[ti];
+  D.planSectionRewards=R;
+}
+function removePlanSectionState(si){
+  const R=D.planSectionRewards||{},next={};
+  Object.keys(R).forEach(k=>{const ki=parseInt(k);if(ki<si)next[ki]=R[ki];else if(ki>si)next[ki-1]=R[ki]});
+  D.planSectionRewards=next;
+  // Reindex rather than wipe: wiping would let an already-paid section pay its bonus again.
+  setPlanFiredToday(planFiredToday().filter(x=>x!==si).map(x=>x>si?x-1:x));
+}
+// Goal progress is driven by a sub-task's sibling 0-point `_tracking` row, NOT by planTasks. Editing
+// planTasks alone left the goal bar stuck on the pre-edit value forever while history showed the new
+// one, and the two never reconciled (old issue C1). Matched the same way deleteHistEntry matches
+// them: same task, same day, within 5s of the grouped row.
+function syncPlanTrackingRow(entry,st){
+  if(!st.timeBased&&!st.countBased)return;
+  const planMs=new Date(entry.date).getTime(),dayStr=entry.date.slice(0,10);
+  let tr=D.pointsHistory.find(h=>h._tracking&&h.taskId===st.taskId&&h.date.slice(0,10)===dayStr&&Math.abs(new Date(h.date).getTime()-planMs)<=5000);
+  // A sub-task logged with no time/count has no tracking row yet, so editing it upward has to create
+  // one or the goal still wouldn't see the change.
+  if(!tr&&((st.timeBased&&st.seconds>0)||(st.countBased&&st.count>0))){
+    tr={date:entry.date,task:((entry.task||'').startsWith('🍅')?'🍅 ':'⏱️ ')+st.name,taskId:st.taskId,points:0,type:'earned',_tracking:true};
+    D.pointsHistory.push(tr);
+  }
+  if(!tr)return;
+  if(st.timeBased){tr.minutes=st.minutes;tr.seconds=st.seconds}
+  if(st.countBased){tr.count=st.count;tr.countUnit=st.countUnit}
 }
 function checkPlanComplete(){
   if(!D.plan||!D.plan.length)return;
@@ -2018,6 +2082,8 @@ function showHistDetail(idx){
         const ptsDiff=newPts-st.points;
         st.seconds=newSecs;st.minutes=newMin;st.points=newPts;
         if(st.countBased){st.count=parseInt(document.getElementById('pse-count')?.value)||0}
+        // Keep the row that actually drives goal progress in step with this edit (old issue C1).
+        syncPlanTrackingRow(entry,st);
         // Update parent entry totals
         entry.points=entry.planTasks.reduce((s,x)=>s+x.points,0);
         entry.seconds=entry.planTasks.reduce((s,x)=>s+(x.seconds||0),0);
@@ -2808,10 +2874,8 @@ function bindAll(){
     }
     // Remove indices in reverse order
     toRemove.sort((a,b2)=>b2-a).forEach(i=>D.plan.splice(i,1));
-    // Clear section rewards for this section and reindex remaining
-    if(D.planSectionRewards){const newRewards={};Object.keys(D.planSectionRewards).forEach(k=>{const ki=parseInt(k);if(ki<si)newRewards[ki]=D.planSectionRewards[ki];else if(ki>si)newRewards[ki-1]=D.planSectionRewards[ki]});D.planSectionRewards=newRewards}
-    // Reset fired section tracker (indices shifted)
-    if(D._planFired)delete D._planFired[today()];
+    // Rewards and the paid-bonus tracker both shift down along with the sections.
+    removePlanSectionState(si);
     save();render()}));
   document.querySelectorAll('.plan-sec-move').forEach(b=>b.addEventListener('click',e=>{e.stopPropagation();const si=parseInt(b.dataset.sec),dir=b.dataset.d;
     // Parse sections with their links (shared helper)
@@ -2821,6 +2885,9 @@ function bindAll(){
     // Swap sections and their links
     [sections[si],sections[ti]]=[sections[ti],sections[si]];
     [sLinks[si],sLinks[ti]]=[sLinks[ti],sLinks[si]];
+    // Without this, a section moved into an already-paid slot silently loses its bonus and the one
+    // moved out of it can be paid twice; rewards were likewise left behind (old C17 and C8).
+    swapPlanSectionState(si,ti);
     // Rebuild D.plan preserving links
     D.plan=[];sections.forEach((sec,i)=>{
       if(i===0&&sLinks[i]!=null)D.plan.push({type:'header',savedPlanIdx:sLinks[i]});

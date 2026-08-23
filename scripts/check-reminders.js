@@ -1,12 +1,20 @@
 // Checks every task's reminder settings against the current time (in the user's
 // timezone) and sends a push for anything that's due. Designed to run on a
 // schedule (see .github/workflows/check-reminders.yml) — safe to run as often
-// as every few minutes since it de-dupes by writing `lastSent` back to the Gist.
+// as every few minutes since it de-dupes per day via a separate Gist file.
 //
 // Required environment variables (GitHub Actions secrets):
 //   GIST_ID, GIST_TOKEN, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY, VAPID_SUBJECT
 
 const webpush = require('web-push');
+
+// Reminder de-dupe state lives in its OWN Gist file, separate from productivity_data.json.
+// See the write-back section of main() for why that matters.
+const STATE_FILE = 'reminder_state.json';
+// Push delivery options. `urgency: 'high'` asks the push service to deliver promptly rather than
+// batching for battery, and the TTL tells it to give up after an hour instead of holding the message
+// for the default four weeks — a 9pm reminder that lands after midnight is worse than none.
+const PUSH_OPTS = { urgency: 'high', TTL: 3600 };
 
 // ===== Timezone-aware date/time helpers =====
 // D.settings.timezone is an IANA name (e.g. "America/New_York"), captured
@@ -147,10 +155,16 @@ function scheduleMatchesToday(task, parts, pointsHistory) {
 }
 
 // ===== Full eligibility check for one task =====
-function isEligibleNow(task, data, parts) {
+// Where "already sent today" is recorded. The map from reminder_state.json wins; task.reminder.lastSent
+// is the legacy location and is still read so switching over doesn't re-send something already sent.
+function lastSentFor(task, lastSentMap) {
+  if (lastSentMap && lastSentMap[task.id] != null) return lastSentMap[task.id];
+  return task.reminder && task.reminder.lastSent;
+}
+function isEligibleNow(task, data, parts, lastSentMap) {
   const r = task.reminder;
   if (!r || !r.on || !r.time) return false;
-  if (r.lastSent === parts.dateStr) return false; // already sent today, don't repeat
+  if (lastSentFor(task, lastSentMap) === parts.dateStr) return false; // already sent today
   if (parts.hhmm < r.time) return false; // not time yet
   if (!scheduleMatchesToday(task, parts, data.pointsHistory)) return false;
   if (task.type === 'recurring') {
@@ -163,7 +177,7 @@ function isEligibleNow(task, data, parts) {
   return true;
 }
 
-module.exports = { tzParts, isEligibleNow, computeRecurringDueDateStr, lastCompletionDateStr, isTaskDone, getGoalProgress, taskCompletedInEntry, completedOnDate };
+module.exports = { tzParts, isEligibleNow, computeRecurringDueDateStr, lastCompletionDateStr, isTaskDone, getGoalProgress, taskCompletedInEntry, completedOnDate, lastSentFor, STATE_FILE, PUSH_OPTS };
 
 // ===== Main (only runs when executed directly, not when required for tests) =====
 if (require.main === module) {
@@ -198,6 +212,17 @@ async function main() {
     process.exit(1);
   }
   const data = JSON.parse(content);
+  // Load reminder state from its own file. This script must NEVER PATCH productivity_data.json:
+  // doing so bumped `_lastModified`, and the app's gistPull() accepts any newer remote without
+  // consulting `localDirty`, so every single run opened a window in which unpushed edits made on a
+  // device could be silently discarded. Keeping de-dupe state in a separate file removes the write
+  // entirely, which is what closes that hole.
+  const stateRaw = gist.files && gist.files[STATE_FILE] && gist.files[STATE_FILE].content;
+  let remState = {};
+  if (stateRaw) {
+    try { remState = JSON.parse(stateRaw) } catch (e) { console.warn(`${STATE_FILE} is not valid JSON — starting fresh.`) }
+  }
+  if (!remState.lastSent || typeof remState.lastSent !== 'object') remState.lastSent = {};
   const allTasks = data.tasks || [];
   const withReminder = allTasks.filter(t => t.reminder);
   const withReminderOn = allTasks.filter(t => t.reminder && t.reminder.on);
@@ -224,7 +249,7 @@ async function main() {
 
   const tasks = (data.tasks || []).filter((t) => !t.archived && t.reminder && t.reminder.on);
   let sentCount = 0;
-  let dataChanged = false;
+  let stateChanged = false;
   let subscriptionDead = false;
 
   console.log(`Found ${tasks.length} task(s) with reminders enabled.`);
@@ -232,7 +257,7 @@ async function main() {
     try {
       const r = task.reminder;
       const reasons = [];
-      if (r.lastSent === parts.dateStr) reasons.push("already sent today (lastSent="+r.lastSent+")");
+      if (lastSentFor(task, remState.lastSent) === parts.dateStr) reasons.push("already sent today (lastSent="+lastSentFor(task, remState.lastSent)+")");
       else if (parts.hhmm < r.time) reasons.push("not time yet (now="+parts.hhmm+", scheduled="+r.time+")");
       else if (!scheduleMatchesToday(task, parts, data.pointsHistory)) {
         if (task.type === "recurring") reasons.push("recurring not due (dueDate="+computeRecurringDueDateStr(task, data.pointsHistory)+", today="+parts.dateStr+", lastCompletion="+lastCompletionDateStr(task, data.pointsHistory)+", createdAt="+(task.createdAt||'').slice(0,10)+", cadence="+task.cadenceDays+"d)");
@@ -240,15 +265,15 @@ async function main() {
       } else if (task.type === "recurring" && lastCompletionDateStr(task, data.pointsHistory) === parts.dateStr) reasons.push("recurring completed today already");
       else if (task.type !== "recurring" && isTaskDone(task, data.pointsHistory, parts)) reasons.push("task done for period");
       if (reasons.length) { console.log("  SKIP \""+task.name+"\": "+reasons.join("; ")); continue; }
-      if (!isEligibleNow(task, data, parts)) { console.log("  SKIP \""+task.name+"\": passed manual checks but isEligibleNow=false"); continue; }
+      if (!isEligibleNow(task, data, parts, remState.lastSent)) { console.log("  SKIP \""+task.name+"\": passed manual checks but isEligibleNow=false"); continue; }
       console.log(`Sending reminder for "${task.name}"...`);
       const payload = JSON.stringify({
         title: '⏰ ' + task.name,
         body: task.type === 'recurring' ? 'This is due again today.' : 'Reminder from your task list.',
       });
-      await webpush.sendNotification(subscription, payload);
-      task.reminder.lastSent = parts.dateStr;
-      dataChanged = true;
+      await webpush.sendNotification(subscription, payload, PUSH_OPTS);
+      remState.lastSent[task.id] = parts.dateStr;
+      stateChanged = true;
       sentCount++;
     } catch (err) {
       console.error(`Failed to send for "${task.name}":`, err.statusCode || '', err.body || err.message);
@@ -259,14 +284,22 @@ async function main() {
   }
 
   if (subscriptionDead) {
-    console.log('Push subscription is no longer valid — clearing it (re-enable reminders in the app to fix).');
-    data.pushSubscription = null;
-    dataChanged = true;
+    // Deliberately NOT clearing data.pushSubscription — that would mean writing
+    // productivity_data.json, which is exactly the data-loss risk this design removes. Recorded in
+    // the state file instead; reminders simply stop until re-enabled in Settings.
+    console.log('Push subscription is no longer valid. Re-enable reminders in the app Settings to fix.');
+    remState.subscriptionDead = new Date().toISOString();
+    stateChanged = true;
+  } else if (remState.subscriptionDead) {
+    delete remState.subscriptionDead;
+    stateChanged = true;
   }
 
-  if (dataChanged) {
-    data._lastModified = Date.now();
-    console.log('Writing updated data back to the Gist...');
+  if (stateChanged) {
+    remState.updatedAt = new Date().toISOString();
+    // Drop entries for tasks that no longer exist, so this file can't grow without bound.
+    { const live = new Set(allTasks.map((t) => t.id)); Object.keys(remState.lastSent).forEach((k) => { if (!live.has(k)) delete remState.lastSent[k] }) }
+    console.log(`Writing ${STATE_FILE} — productivity_data.json is never modified by this script.`);
     const patchRes = await fetch(`https://api.github.com/gists/${GIST_ID}`, {
       method: 'PATCH',
       headers: {
@@ -274,7 +307,7 @@ async function main() {
         'Content-Type': 'application/json',
         Accept: 'application/vnd.github.v3+json',
       },
-      body: JSON.stringify({ files: { 'productivity_data.json': { content: JSON.stringify(data) } } }),
+      body: JSON.stringify({ files: { [STATE_FILE]: { content: JSON.stringify(remState, null, 2) } } }),
     });
     if (!patchRes.ok) {
       console.error(`Failed to write back to Gist: ${patchRes.status} ${patchRes.statusText}`);
