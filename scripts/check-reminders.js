@@ -84,19 +84,39 @@ function isTaskDone(task, pointsHistory, parts) {
 }
 
 // ===== Recurring tasks: detect the exact day it becomes due again =====
-function computeRecurringDueDateStr(task) {
+// Mirror of recurElapsed()/recurIsDue() in index.html — KEEP THE TWO IN SYNC. The app's notion of
+// "last completed" is the most recent ✅ entry in pointsHistory, which includes completions
+// recorded inside a grouped plan-timer entry (planTasks). It is deliberately NOT task.lastCompleted:
+// that field can be stale or, for plan-timer completions, never written as a standalone row.
+// Reading lastCompleted here made the script disagree with the app about which day a task is due.
+function lastCompletionDateStr(task, pointsHistory) {
+  let last = null;
+  const bump = (iso) => { const d = iso.slice(0, 10); if (!last || d > last) last = d };
+  for (const h of pointsHistory || []) {
+    if (h.type !== 'earned') continue;
+    if (h.taskId === task.id && typeof h.task === 'string' && h.task.includes('✅')) bump(h.date);
+    else if (h.planTasks && h.planTasks.some((p) => p.taskId === task.id && p.completed)) bump(h.date);
+  }
+  return last;
+}
+function computeRecurringDueDateStr(task, pointsHistory) {
   if (task.dueEarly) return task.dueEarly.slice(0, 10);
-  if (!task.lastCompleted) return null; // never completed yet — no due-transition to detect
-  const d = new Date(`${task.lastCompleted.slice(0, 10)}T00:00:00Z`);
+  // Never completed: fall back to createdAt so there is still exactly ONE transition day to fire
+  // on. Previously this returned null, so a recurring task that had never been completed got no
+  // reminder at all — ever — even though the app lists it as due. Anchoring on createdAt keeps the
+  // "fires once, on the day it becomes due" promise instead of nagging every outstanding day.
+  const base = lastCompletionDateStr(task, pointsHistory) || (task.createdAt ? task.createdAt.slice(0, 10) : null);
+  if (!base) return null; // legacy task with no createdAt and no completions — nothing to anchor to
+  const d = new Date(`${base}T00:00:00Z`);
   d.setUTCDate(d.getUTCDate() + (task.cadenceDays || 1));
   return d.toISOString().slice(0, 10);
 }
 
 // ===== Does today match this task's configured schedule? =====
-function scheduleMatchesToday(task, parts) {
+function scheduleMatchesToday(task, parts, pointsHistory) {
   const r = task.reminder;
   if (task.type === 'recurring') {
-    return computeRecurringDueDateStr(task) === parts.dateStr;
+    return computeRecurringDueDateStr(task, pointsHistory) === parts.dateStr;
   }
   switch (r.freq) {
     case 'daily':
@@ -119,17 +139,18 @@ function isEligibleNow(task, data, parts) {
   if (!r || !r.on || !r.time) return false;
   if (r.lastSent === parts.dateStr) return false; // already sent today, don't repeat
   if (parts.hhmm < r.time) return false; // not time yet
-  if (!scheduleMatchesToday(task, parts)) return false;
+  if (!scheduleMatchesToday(task, parts, data.pointsHistory)) return false;
   if (task.type === 'recurring') {
-    // Skip if they already did it today (e.g. completed it right when it became due).
-    if (task.lastCompleted && task.lastCompleted.slice(0, 10) === parts.dateStr) return false;
+    // Skip if they already did it today (e.g. completed it right when it became due). Uses the
+    // same history-based reckoning as computeRecurringDueDateStr, not task.lastCompleted.
+    if (lastCompletionDateStr(task, data.pointsHistory) === parts.dateStr) return false;
   } else if (isTaskDone(task, data.pointsHistory, parts)) {
     return false;
   }
   return true;
 }
 
-module.exports = { tzParts, isEligibleNow, computeRecurringDueDateStr, isTaskDone, getGoalProgress };
+module.exports = { tzParts, isEligibleNow, computeRecurringDueDateStr, lastCompletionDateStr, isTaskDone, getGoalProgress };
 
 // ===== Main (only runs when executed directly, not when required for tests) =====
 if (require.main === module) {
@@ -200,10 +221,10 @@ async function main() {
       const reasons = [];
       if (r.lastSent === parts.dateStr) reasons.push("already sent today (lastSent="+r.lastSent+")");
       else if (parts.hhmm < r.time) reasons.push("not time yet (now="+parts.hhmm+", scheduled="+r.time+")");
-      else if (!scheduleMatchesToday(task, parts)) {
-        if (task.type === "recurring") reasons.push("recurring not due (dueDate="+computeRecurringDueDateStr(task)+", today="+parts.dateStr+", lastCompleted="+task.lastCompleted+", cadence="+task.cadenceDays+"d)");
+      else if (!scheduleMatchesToday(task, parts, data.pointsHistory)) {
+        if (task.type === "recurring") reasons.push("recurring not due (dueDate="+computeRecurringDueDateStr(task, data.pointsHistory)+", today="+parts.dateStr+", lastCompletion="+lastCompletionDateStr(task, data.pointsHistory)+", createdAt="+(task.createdAt||'').slice(0,10)+", cadence="+task.cadenceDays+"d)");
         else reasons.push("schedule mismatch (freq="+r.freq+", days="+JSON.stringify(r.days)+", weekday="+r.weekday+", todayDow="+parts.weekday+")");
-      } else if (task.type === "recurring" && task.lastCompleted && task.lastCompleted.slice(0,10) === parts.dateStr) reasons.push("recurring completed today already");
+      } else if (task.type === "recurring" && lastCompletionDateStr(task, data.pointsHistory) === parts.dateStr) reasons.push("recurring completed today already");
       else if (task.type !== "recurring" && isTaskDone(task, data.pointsHistory, parts)) reasons.push("task done for period");
       if (reasons.length) { console.log("  SKIP \""+task.name+"\": "+reasons.join("; ")); continue; }
       if (!isEligibleNow(task, data, parts)) { console.log("  SKIP \""+task.name+"\": passed manual checks but isEligibleNow=false"); continue; }

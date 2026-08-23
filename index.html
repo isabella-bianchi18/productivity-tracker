@@ -1,3 +1,4 @@
+<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -24,7 +25,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-seri
 if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
 
 // ===== DATA =====
-const APP_VERSION='5.8.15';
+const APP_VERSION='5.11.0';
 const DEFAULT_DATA={tasks:[],points:0,pointsHistory:[],rewards:[],techniques:[],metrics:[],settings:{gistId:'',token:'',dailyGoal:0,theme:'default'},dailyGoalLog:{},streak:0,fractional:0,groupOrder:[],plan:[],savedPlans:[],planSectionRewards:{},groceries:[],recipes:[],pushSubscription:null};
 // Shared task type/category emoji + sort-order maps (single source of truth).
 // typeE/catE are aliases used by the timer views; typeEmoji/catEmoji by the plan view.
@@ -73,13 +74,29 @@ function saveL(){localStorage.setItem(SK,JSON.stringify(D))}
 function loadL(){const s=localStorage.getItem(SK);if(s)D={...JSON.parse(JSON.stringify(DEFAULT_DATA)),...JSON.parse(s)}}
 let pushTimeout=null;
 let localDirty=false;
+// Incremented whenever gistPull() replaces D wholesale. Deferred actions that captured
+// snapshots of D (notably the Undo toast) compare against it and refuse to run if the data
+// was swapped out underneath them.
+let dataGen=0;
+// Remove specific history rows by object identity and return the net amount they had added to
+// the balance, so callers can back it out without restoring an absolute snapshot.
+function removeHistoryRows(rows){
+  let delta=0;
+  rows.forEach(r=>{const i=D.pointsHistory.indexOf(r);if(i>=0){delta+=D.pointsHistory[i].points||0;D.pointsHistory.splice(i,1)}});
+  return delta;
+}
 async function gistPush(){const{gistId:g,token:t}=D.settings;if(!g||!t)return false;
-  localDirty=false;
   const pushData=JSON.parse(JSON.stringify(D));delete pushData.settings.token;delete pushData.settings.gistId;
-  try{const r=await fetch(`https://api.github.com/gists/${g}`,{method:'PATCH',headers:{'Authorization':`token ${t}`,'Content-Type':'application/json','Accept':'application/vnd.github.v3+json'},body:JSON.stringify({files:{'productivity_data.json':{content:JSON.stringify(pushData)}}})});return r.ok}catch(e){return false}}
+  const stampPushed=pushData._lastModified;
+  try{const r=await fetch(`https://api.github.com/gists/${g}`,{method:'PATCH',headers:{'Authorization':`token ${t}`,'Content-Type':'application/json','Accept':'application/vnd.github.v3+json'},body:JSON.stringify({files:{'productivity_data.json':{content:JSON.stringify(pushData)}}})});
+  // Clear the dirty flag only on a confirmed write, and only if nothing changed locally while
+  // the request was in flight. Clearing it up front meant a failed push (offline, expired
+  // token, 5xx) left changes unpushed with nothing left to retrigger them.
+  if(r.ok&&D._lastModified===stampPushed)localDirty=false;
+  return r.ok}catch(e){return false}}
 function debouncedPush(){if(pushTimeout)clearTimeout(pushTimeout);pushTimeout=setTimeout(()=>{gistPush()},2000)}
 let pullInProgress=false;
-async function gistPull(){const{gistId:g,token:t}=D.settings;if(!g||!t)return false;if(pullInProgress)return false;pullInProgress=true;try{const r=await fetch(`https://api.github.com/gists/${g}`,{headers:{'Authorization':`token ${t}`,'Accept':'application/vnd.github.v3+json','If-None-Match':''}});if(!r.ok){pullInProgress=false;return false}const j=await r.json();const c=j.files['productivity_data.json']?.content;if(c){const remote=JSON.parse(c);if(remote._lastModified&&D._lastModified&&remote._lastModified<=D._lastModified){pullInProgress=false;return 'current'}const ls=D.settings;D={...JSON.parse(JSON.stringify(DEFAULT_DATA)),...remote,settings:ls};{const s=new Set();D.tasks=D.tasks.filter(t=>{if(s.has(t.id))return false;s.add(t.id);return true})}
+async function gistPull(){const{gistId:g,token:t}=D.settings;if(!g||!t)return false;if(pullInProgress)return false;pullInProgress=true;try{const r=await fetch(`https://api.github.com/gists/${g}`,{headers:{'Authorization':`token ${t}`,'Accept':'application/vnd.github.v3+json','If-None-Match':''}});if(!r.ok){pullInProgress=false;return false}const j=await r.json();const c=j.files['productivity_data.json']?.content;if(c){const remote=JSON.parse(c);if(remote._lastModified&&D._lastModified&&remote._lastModified<=D._lastModified){pullInProgress=false;return 'current'}const ls=D.settings;D={...JSON.parse(JSON.stringify(DEFAULT_DATA)),...remote,settings:ls};dataGen++;{const s=new Set();D.tasks=D.tasks.filter(t=>{if(s.has(t.id))return false;s.add(t.id);return true})}
 // dailyGoal lives under settings, which we keep device-local (to protect gistId/token/theme),
 // so it wouldn't otherwise sync. Today's goal is authoritative in the synced dailyGoalLog,
 // so derive it from there: if another device set today's goal, reflect it here.
@@ -94,19 +111,120 @@ function save(){
 function saveDirty(){if(D.plan)D.plan=D.plan.filter(item=>item.type!=='task'||typeof item.id==='string');D._lastModified=Date.now();localDirty=true;saveL();debouncedPush()}
 
 // ===== UTILS =====
+// User-entered text (task/reward/grocery/recipe/group names, notes, count units, search terms)
+// is interpolated straight into HTML strings throughout this file. Unescaped, a value
+// containing a double quote truncates whatever attribute it lands in — a grocery item named
+// `6" shaft` breaks its own edit form and loses the rest of the field — and `<` can swallow a
+// whole card. Wrap every interpolation of user text in esc().
+function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;')}
 function id(){return Date.now().toString(36)+Math.random().toString(36).slice(2,7)}
 function today(){return localISO().slice(0,10)}
 function daysAgoCal(dateStr){const td=today();const d=dateStr.slice(0,10);if(d===td)return 0;const t1=new Date(td+'T00:00:00');const t2=new Date(d+'T00:00:00');return Math.round((t1-t2)/864e5)}
 function localISO(){const d=new Date();return new Date(d.getTime()-d.getTimezoneOffset()*60000).toISOString()}
 function localDateStr(d){return new Date(d.getTime()-d.getTimezoneOffset()*60000).toISOString().slice(0,10)}
+// ===== PERIOD BOUNDARIES =====
+// CRITICAL: localISO() stores LOCAL wall-clock time with a trailing 'Z'. So any period-boundary
+// string compared against h.date must ALSO be built from local components. Using
+// Date#toISOString() converts to real UTC and shifts the boundary by the timezone offset:
+// for hourly goals in a negative offset (e.g. 14:00 EDT -> "T18") the comparison
+// `h.date.slice(0,13) >= psStr` was always false, so hourly progress sat at 0 forever; for
+// daily and coarser periods it silently shifted the boundary a day in positive offsets.
+// Never reintroduce toISOString() for boundary strings — use these helpers.
+function localHourStr(d){const dd=d||new Date();return localDateStr(dd)+'T'+String(dd.getHours()).padStart(2,'0')}
+// Start of the period containing `now`, as a prefix comparable against h.date.
+// Length is 13 for 'hourly' (date + hour) and 10 otherwise, so callers slice by psStr.length.
+function periodStartStr(period,now){
+  const n=now||new Date();
+  if(period==='hourly')return localHourStr(n);
+  if(period==='weekly'){const d=new Date(n);d.setDate(d.getDate()-((d.getDay()+6)%7));return localDateStr(d)}
+  if(period==='monthly')return localDateStr(new Date(n.getFullYear(),n.getMonth(),1));
+  if(period==='annually')return localDateStr(new Date(n.getFullYear(),0,1));
+  return localDateStr(n); // 'daily' and anything unrecognised
+}
+// Exclusive end of the period starting at local midnight `pStart`. Built with calendar
+// arithmetic rather than +864e5 so it stays correct across DST transitions (a 25-hour fall-back
+// day would otherwise land back on the same date and collapse the range to nothing).
+function periodEndStr(period,pStart){
+  const y=pStart.getFullYear(),m=pStart.getMonth(),d=pStart.getDate();
+  if(period==='weekly')return localDateStr(new Date(y,m,d+7));
+  if(period==='monthly')return localDateStr(new Date(y,m+1,1));
+  if(period==='annually')return localDateStr(new Date(y+1,0,1));
+  return localDateStr(new Date(y,m,d+1)); // 'daily'
+}
 function getRecentValues(tid,isTime){const entries=D.pointsHistory.filter(h=>h.taskId===tid&&h.type==='earned');const vals=[];for(let i=entries.length-1;i>=0&&vals.length<3;i--){const v=isTime?(entries[i].minutes||0):(entries[i].count||0);if(v>0&&!vals.includes(v))vals.push(v)}return vals}
 function recurElapsed(t){const td=today();let lastDate=null;const directEntries=D.pointsHistory.filter(h=>h.taskId===t.id&&h.type==='earned'&&h.task.includes('✅'));if(directEntries.length)lastDate=directEntries[directEntries.length-1].date.slice(0,10);D.pointsHistory.forEach(h=>{if(h.type==='earned'&&h.planTasks){const pt=h.planTasks.find(p=>p.taskId===t.id&&p.completed);if(pt){const d=h.date.slice(0,10);if(!lastDate||d>lastDate)lastDate=d}}});if(!lastDate)return 9999;return Math.floor((new Date(td+'T12:00:00')-new Date(lastDate+'T12:00:00'))/864e5)}
+// ===== CANONICAL "IS THIS RECURRING TASK DUE?" =====
+// Single source of truth. Cadence is measured in CALENDAR days since the last completion via
+// recurElapsed(), which reads the ✅ history (including plan-grouped completions) rather than
+// task.lastCompleted. Never compare raw elapsed milliseconds against lastCompleted: cadence 1
+// completed yesterday at 23:00 is due today by calendar reckoning but only "0.5 days ago" by wall
+// clock, so the two disagree every evening. `dueEarly` forces a task due regardless of cadence.
+function recurIsResting(t){return t.dueEarly!==today()&&recurElapsed(t)<t.cadenceDays}
+function recurIsDue(t){return !recurIsResting(t)}
 function oneTimeDone(t){if(t.completed)return true;if(t.goal&&t.goal.period==='total'){const entries=D.pointsHistory.filter(h=>h.taskId===t.id&&h.type==='earned');const current=t.timeBased?entries.reduce((s,h)=>s+(h.minutes||0),0):t.countBased?entries.reduce((s,h)=>s+(h.count||0),0):entries.filter(h=>h.task.includes('✅')).length;return current>=t.goal.target}if(D.pointsHistory.some(h=>h.taskId===t.id&&h.type==='earned'&&h.task.includes('✅')))return true;if(D.pointsHistory.some(h=>h.type==='earned'&&h.planTasks&&h.planTasks.some(p=>p.taskId===t.id&&p.completed)))return true;return false}
 // Shared "is this task done in the plan context" check. Used by both checkPlanComplete()
 // and rPlan() (previously duplicated inline as isTaskDone/isDoneToday). planGoal is the
 // optional per-plan goal override for this task.
-function planTaskDone(t,planGoal){const td=today();const effectiveGoal=planGoal||(t.goal&&(t.goal.period==='daily'||t.goal.period==='hourly'||t.goal.period==='total')?t.goal:null);if(effectiveGoal){const entries=effectiveGoal.period==='total'?D.pointsHistory.filter(h=>h.taskId===t.id&&h.type==='earned'):D.pointsHistory.filter(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td);const current=t.timeBased?entries.reduce((s,h)=>s+(h.minutes||0),0)+(T.planMode?Math.floor((T.planTimes?.[t.id]||0)/60):0):t.countBased?entries.reduce((s,h)=>s+(h.count||0),0)+(T.planMode?(T.planCounts?.[t.id]||0):0):entries.filter(h=>h.task.includes('✅')).length+(T.planMode?(T.planFlatDone?.[t.id]||0):0);return current>=effectiveGoal.target}if(t.type==='one-time')return t.completed;if(t.type==='daily')return(t.lastCompleted&&t.lastCompleted.slice(0,10)===td)||D.pointsHistory.some(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td&&h.task.includes('✅'))||(T.planMode&&T.planFlatDone?.[t.id]>0);if(t.type==='recurring')return recurElapsed(t)<t.cadenceDays;if(t.type==='evergreen')return(t.lastCompleted&&t.lastCompleted.slice(0,10)===td)||D.pointsHistory.some(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td&&h.task.includes('✅'))||(T.planMode&&T.planFlatDone?.[t.id]>0);return false}
+function planTaskDone(t,planGoal){const td=today();const effectiveGoal=planGoal||(t.goal&&(t.goal.period==='daily'||t.goal.period==='hourly'||t.goal.period==='total')?t.goal:null);if(effectiveGoal){const entries=effectiveGoal.period==='total'?D.pointsHistory.filter(h=>h.taskId===t.id&&h.type==='earned'):D.pointsHistory.filter(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td);const current=t.timeBased?entries.reduce((s,h)=>s+(h.minutes||0),0)+(T.planMode?Math.floor((T.planTimes?.[t.id]||0)/60):0):t.countBased?entries.reduce((s,h)=>s+(h.count||0),0)+(T.planMode?(T.planCounts?.[t.id]||0):0):entries.filter(h=>h.task.includes('✅')).length+(T.planMode?(T.planFlatDone?.[t.id]||0):0);return current>=effectiveGoal.target}if(t.type==='one-time')return t.completed;if(t.type==='daily')return(t.lastCompleted&&t.lastCompleted.slice(0,10)===td)||D.pointsHistory.some(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td&&h.task.includes('✅'))||(T.planMode&&T.planFlatDone?.[t.id]>0);if(t.type==='recurring')return recurIsResting(t);if(t.type==='evergreen')return(t.lastCompleted&&t.lastCompleted.slice(0,10)===td)||D.pointsHistory.some(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td&&h.task.includes('✅'))||(T.planMode&&T.planFlatDone?.[t.id]>0);return false}
+// ===== RETIREMENT (SLEEP) THRESHOLD =====
+// "Done" is SCOPED TO A SURFACE — do not collapse these into one flag:
+//   Tasks tab  -> the TASK's own goal            (this function; drives lastCompleted/completed)
+//   Plan tab   -> the PLAN's goal                (planTaskDone(t, planGoal))
+//   Timer      -> whichever context it was started from: plan goal in plan mode, task goal for a
+//                 single selected task
+// So a task can legitimately read as done on one surface and still open on another: hitting an
+// in-plan goal of 1 on a 3/day task finishes it *in the plan* while the Tasks tab correctly still
+// shows 1/3. An in-plan goal is a statement about today's commitment, not about the task itself,
+// and must never touch lastCompleted/completed.
+// How much progress retires a task for its period, i.e. drops it out of the Tasks tab.
+// Returns null when the task has no goal of its own — then a single completion retires it.
+const SLEEP_GOAL_PERIODS=['daily','hourly','total'];
+function sleepTarget(task){
+  if(!task.goal||!task.goal.target||!SLEEP_GOAL_PERIODS.includes(task.goal.period))return null;
+  return task.goal.target;
+}
+// Progress toward that threshold. A plan session's own contribution is passed in explicitly
+// because stopSW/stopPM decide whether to retire BEFORE pushing this session's ✅ markers and
+// _tracking rows. Mirrors markDoneIfGoalMet()'s arithmetic.
+function taskProgressWithSession(task,sessionSecs,sessionCount,sessionFlatDone){
+  const period=task.goal?task.goal.period:'daily';
+  let entries;
+  if(period==='total')entries=D.pointsHistory.filter(h=>h.taskId===task.id&&h.type==='earned');
+  else{const ps=periodStartStr(period);entries=D.pointsHistory.filter(h=>h.taskId===task.id&&h.type==='earned'&&h.date.slice(0,ps.length)>=ps)}
+  if(task.timeBased)return entries.reduce((s,h)=>s+(h.minutes||0),0)+Math.floor((sessionSecs||0)/60);
+  if(task.countBased)return entries.reduce((s,h)=>s+(h.count||0),0)+(sessionCount||0);
+  return entries.filter(h=>h.task.includes('✅')).length+(sessionFlatDone||0);
+}
 function quickAddHTML(t,fillOnly){const vals=getRecentValues(t.id,t.timeBased);if(!vals.length)return '';const singleAction=!fillOnly&&(t.type==='evergreen'||(t.type==='one-time'&&t.goal));const btns=vals.slice(0,3).map(v=>{let label;if(t.timeBased){const h=Math.floor(v/60),m=v%60;label=h&&m?h+'h '+m+'m':h?h+'h':m+'m'}else{label=v+' '+(t.countUnit||'units')}return '<button class="qab" data-val="'+v+'" data-sa="'+(singleAction?'1':'0')+'" style="padding:4px 10px;font-size:.75rem;border-radius:6px;border:1px solid var(--accent);background:var(--surface);color:var(--accent-dark);cursor:pointer;font-weight:600">'+label+'</button>'}).join('');return '<div class="quick-adds" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">'+btns+'</div>'}
+// ===== LEDGER HELPERS =====
+// A plan-timer session writes bookkeeping rows alongside the real grouped entry: one 0-point
+// `_tracking` row per time/count task (drives goal progress) and one 0-point "name ✅" marker
+// per completion (drives isDoneToday/recurElapsed). Those rows carry minutes and counts that
+// the grouped entry already accounts for, so any aggregation over raw pointsHistory
+// double-counts time and multiplies row counts. Everything user-facing must aggregate over
+// realEntries(). This is the same filter showTaskDetail() already applied locally.
+function isBookkeepingEntry(h){return !!h._tracking||(h.points===0&&typeof h.task==='string'&&h.task.includes('✅'))}
+function realEntries(list){return (list||D.pointsHistory).filter(h=>!isBookkeepingEntry(h))}
+// A grouped plan entry counts as the number of sub-tasks actually completed, not as one row.
+function entryTaskCount(h){return h.planTasks&&h.planTasks.length?h.planTasks.filter(st=>st.completed).length:1}
+
+// Category attribution. Timer and grouped plan entries carry no `category` of their own:
+// a grouped entry's points and minutes belong to its planTasks, which can span categories.
+// Under a category filter a grouped entry therefore contributes only its matching sub-tasks,
+// instead of dropping out of the totals entirely.
+function entryCategory(e){if(e.category)return e.category;if(e.taskId){const t=D.tasks.find(x=>x.id===e.taskId);if(t)return t.category||''}return ''}
+function entryMatchesCat(e,cat){
+  if(cat==='all')return true;
+  if(entryCategory(e)===cat)return true;
+  if(e.planTasks&&e.planTasks.length)return e.planTasks.some(st=>{const t=D.tasks.find(x=>x.id===st.taskId);return t&&t.category===cat});
+  return false;
+}
+function entryFieldForCat(e,cat,field){
+  if(cat==='all'||entryCategory(e)===cat)return e[field]||0;
+  if(e.planTasks&&e.planTasks.length)return e.planTasks.reduce((s,st)=>{const t=D.tasks.find(x=>x.id===st.taskId);return s+(t&&t.category===cat?(st[field]||0):0)},0);
+  return 0;
+}
+
 function ptsToday(){return D.pointsHistory.filter(h=>h.date.slice(0,10)===today()&&h.type==='earned').reduce((s,h)=>s+h.points,0)}
 function getLevel(){
   const totalEarned=D.pointsHistory.filter(h=>h.type==='earned').reduce((s,h)=>s+h.points,0);
@@ -141,64 +259,53 @@ function catBg(cat){
 
 function getGoalProgress(task){
   if(!task.goal||!task.goal.target||task.goal.target<1)return null;
-  const now=new Date();let periodStart;let entries;
+  let entries;
   if(task.goal.period==='total'){
     entries=D.pointsHistory.filter(h=>h.taskId===task.id&&h.type==='earned');
   } else {
-    if(task.goal.period==='hourly'){periodStart=new Date(now);periodStart.setMinutes(0,0,0)}
-    else if(task.goal.period==='daily'){periodStart=new Date(now.getFullYear(),now.getMonth(),now.getDate())}
-    else if(task.goal.period==='weekly'){const d=new Date(now);d.setDate(d.getDate()-((d.getDay()+6)%7));periodStart=new Date(d.getFullYear(),d.getMonth(),d.getDate())}
-    else if(task.goal.period==='monthly'){periodStart=new Date(now.getFullYear(),now.getMonth(),1)}
-    else if(task.goal.period==='annually'){periodStart=new Date(now.getFullYear(),0,1)}
-    const psStr=periodStart.toISOString().slice(0,task.goal.period==='hourly'?13:10);
+    const psStr=periodStartStr(task.goal.period);
     entries=D.pointsHistory.filter(h=>h.taskId===task.id&&h.type==='earned'&&h.date.slice(0,psStr.length)>=psStr);
   }
   const current=task.timeBased?entries.reduce((s,h)=>s+(h.minutes||0),0)+(T.planMode?Math.floor((T.planTimes?.[task.id]||0)/60):0):task.countBased?entries.reduce((s,h)=>s+(h.count||0),0)+(T.planMode?(T.planCounts?.[task.id]||0):0):entries.length+(T.planMode?(T.planFlatDone?.[task.id]||0):0);
   return{current,target:task.goal.target,pct:Math.min(100,Math.round(current/task.goal.target*100)),period:task.goal.period};
 }
 
+// Consecutive periods in which the goal was met, walking backwards from the current period.
+// Skip semantics (matches getDailyStreak): a skipped period NEITHER counts toward the streak NOR
+// breaks it — it is stepped over. The old version did `streak++` on a skip, which meant a task
+// that had only ever been skipped reported a 365-day streak.
+// An incomplete CURRENT period doesn't break the streak either; it just doesn't count yet.
+// All boundaries come from localDateStr()/periodEndStr() so they line up with localISO() dates.
 function getGoalStreak(task){
   if(!task.goal)return 0;
+  const period=task.goal.period;
+  // Only these periods have a backward walk implemented; hourly/annually/total report bank only.
+  if(period!=='daily'&&period!=='weekly'&&period!=='monthly')return task.goalStreakBank||0;
   const skips=new Set(task.goalSkips||[]);
-  const now=new Date();let streak=0;
-  // Determine the start of the CURRENT period (to exclude from backward loop)
-  let currentPeriodStart;
-  if(task.goal.period==='daily'){currentPeriodStart=today()}
-  else if(task.goal.period==='weekly'){const wd=new Date(now);wd.setDate(wd.getDate()-((wd.getDay()+6)%7));currentPeriodStart=new Date(wd.getFullYear(),wd.getMonth(),wd.getDate()).toISOString().slice(0,10)}
-  else if(task.goal.period==='monthly'){currentPeriodStart=new Date(now.getFullYear(),now.getMonth(),1).toISOString().slice(0,10)}
-  // Start backward loop from the period BEFORE the current one
-  let d=new Date(now);
-  if(task.goal.period==='daily'){d.setDate(d.getDate()-1)}
-  else if(task.goal.period==='weekly'){d.setDate(d.getDate()-((d.getDay()+6)%7));d.setDate(d.getDate()-1)}
-  else if(task.goal.period==='monthly'){d.setDate(0)}
-  for(let i=0;i<365;i++){
-    let pStart,psStr;
-    if(task.goal.period==='daily'){pStart=new Date(d.getFullYear(),d.getMonth(),d.getDate());d.setDate(d.getDate()-1)}
-    else if(task.goal.period==='weekly'){const wd=new Date(d);wd.setDate(wd.getDate()-((wd.getDay()+6)%7));pStart=new Date(wd.getFullYear(),wd.getMonth(),wd.getDate());d.setDate(d.getDate()-7)}
-    else if(task.goal.period==='monthly'){pStart=new Date(d.getFullYear(),d.getMonth(),1);d.setMonth(d.getMonth()-1)}
-    else break;
-    psStr=pStart.toISOString().slice(0,10);
-    // Don't double-count the current period
-    if(psStr===currentPeriodStart)continue;
-    // Skip days preserve streak
-    if(skips.has(psStr)){streak++;continue}
-    const pEndD=task.goal.period==='daily'?new Date(pStart.getTime()+864e5):task.goal.period==='weekly'?new Date(pStart.getTime()+7*864e5):new Date(pStart.getFullYear(),pStart.getMonth()+1,1);
-    const entries=D.pointsHistory.filter(h=>h.taskId===task.id&&h.type==='earned'&&h.date.slice(0,10)>=psStr&&h.date.slice(0,10)<pEndD.toISOString().slice(0,10));
+  const startOf=(d)=>{
+    if(period==='daily')return new Date(d.getFullYear(),d.getMonth(),d.getDate());
+    if(period==='weekly'){const w=new Date(d);w.setDate(w.getDate()-((w.getDay()+6)%7));return new Date(w.getFullYear(),w.getMonth(),w.getDate())}
+    return new Date(d.getFullYear(),d.getMonth(),1);
+  };
+  const prevOf=(p)=>{
+    const y=p.getFullYear(),m=p.getMonth(),dd=p.getDate();
+    if(period==='daily')return new Date(y,m,dd-1);
+    if(period==='weekly')return new Date(y,m,dd-7);
+    return new Date(y,m-1,1);
+  };
+  const met=(p)=>{
+    const psStr=localDateStr(p),peStr=periodEndStr(period,p);
+    const entries=D.pointsHistory.filter(h=>h.taskId===task.id&&h.type==='earned'&&h.date.slice(0,10)>=psStr&&h.date.slice(0,10)<peStr);
     const val=task.timeBased?entries.reduce((s,h)=>s+(h.minutes||0),0):task.countBased?entries.reduce((s,h)=>s+(h.count||0),0):entries.length;
-    if(val>=task.goal.target)streak++;else break;
+    return val>=task.goal.target;
+  };
+  let streak=0,p=startOf(new Date()),isCurrent=true;
+  for(let i=0;i<365;i++){
+    if(skips.has(localDateStr(p))){p=prevOf(p);isCurrent=false;continue}
+    if(met(p))streak++;
+    else if(!isCurrent)break; // current period merely unfinished; earlier miss ends the run
+    p=prevOf(p);isCurrent=false;
   }
-  // Add +1 if the CURRENT period is also completed
-  if(!skips.has(currentPeriodStart)){
-    let todayStart=currentPeriodStart,todayEnd;
-    if(task.goal.period==='daily'){todayEnd=new Date(new Date(todayStart+'T00:00:00').getTime()+864e5).toISOString().slice(0,10)}
-    else if(task.goal.period==='weekly'){todayEnd=new Date(new Date(todayStart+'T00:00:00').getTime()+7*864e5).toISOString().slice(0,10)}
-    else if(task.goal.period==='monthly'){const ps=new Date(todayStart+'T00:00:00');todayEnd=new Date(ps.getFullYear(),ps.getMonth()+1,1).toISOString().slice(0,10)}
-    if(todayStart&&todayEnd){
-      const todayEntries=D.pointsHistory.filter(h=>h.taskId===task.id&&h.type==='earned'&&h.date.slice(0,10)>=todayStart&&h.date.slice(0,10)<todayEnd);
-      const todayVal=task.timeBased?todayEntries.reduce((s,h)=>s+(h.minutes||0),0):task.countBased?todayEntries.reduce((s,h)=>s+(h.count||0),0):todayEntries.length;
-      if(todayVal>=task.goal.target)streak++;
-    }
-  } else {streak++}
   return streak+(task.goalStreakBank||0);
 }
 
@@ -224,8 +331,19 @@ function awardTimerPts(exactPts){
   D.fractional-=whole;
   return whole;
 }
-function visibleTasks(){const n=new Date();const td=today();return D.tasks.filter(t=>{if(t.archived)return false;if(t.hiddenToday&&t.hiddenToday.includes(td))return false;if(t.goalSkips&&t.goalSkips.includes(td))return false;if(t.type==='one-time')return!oneTimeDone(t);if(t.type==='recurring'){if(t.dueEarly===td)return true;return recurElapsed(t)>=t.cadenceDays}if(t.type==='daily'){if(t.dueEarly===td)return true;if(!t.lastCompleted){const completedToday=D.pointsHistory.some(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td&&h.task.includes('✅'));return!completedToday}const completedToday=D.pointsHistory.some(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td&&h.task.includes('✅'));return!completedToday}return true})}
-function sleepingTasks(){const n=new Date();const td=today();return D.tasks.filter(t=>{if(t.archived)return false;if(t.type==='one-time'&&oneTimeDone(t))return false;if(t.hiddenToday&&t.hiddenToday.includes(td))return true;if(t.goalSkips&&t.goalSkips.includes(td))return true;if(t.type==='recurring'&&t.dueEarly!==td&&recurElapsed(t)<t.cadenceDays)return true;if(t.type==='daily'&&t.dueEarly!==td){const completedToday=D.pointsHistory.some(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td&&h.task.includes('✅'));if(completedToday)return true}return false}).map(t=>{if(t.hiddenToday&&t.hiddenToday.includes(td))return{...t,left:'hidden'};if(t.goalSkips&&t.goalSkips.includes(td)&&t.type!=='daily'&&t.type!=='recurring')return{...t,left:'skipped'};if(t.type==='daily'){const skippedToday=t.goalSkips&&t.goalSkips.includes(td);return{...t,left:skippedToday?'skipped':1}}if(t.type==='recurring')return{...t,left:Math.ceil(t.cadenceDays-recurElapsed(t))};return{...t,left:'skipped'}}).sort((a,b)=>(typeof a.left==='string'?0:a.left)-(typeof b.left==='string'?0:b.left))}
+// Canonical "is this daily task finished for today?" AS THE TASKS TAB SEES IT: the task's own
+// goal when it has one, otherwise a single ✅ today.
+// Without the goal branch a 3-per-day task disappeared from the Tasks tab after the FIRST
+// completion, so reps 2 and 3 were unreachable there — visibility was testing "any ✅ today" and
+// silently overrode completeTask()'s careful lastCompleted gating.
+function dailyRetiredToday(t){
+  const st=sleepTarget(t);
+  if(st!=null){const gp=getGoalProgress(t);return !!gp&&gp.current>=st}
+  const td=today();
+  return !!(t.lastCompleted&&t.lastCompleted.slice(0,10)===td)||D.pointsHistory.some(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td&&h.task.includes('✅'));
+}
+function visibleTasks(){const td=today();return D.tasks.filter(t=>{if(t.archived)return false;if(t.hiddenToday&&t.hiddenToday.includes(td))return false;if(t.goalSkips&&t.goalSkips.includes(td))return false;if(t.type==='one-time')return!oneTimeDone(t);if(t.type==='recurring')return recurIsDue(t);if(t.type==='daily'){if(t.dueEarly===td)return true;return!dailyRetiredToday(t)}return true})}
+function sleepingTasks(){const td=today();return D.tasks.filter(t=>{if(t.archived)return false;if(t.type==='one-time'&&oneTimeDone(t))return false;if(t.hiddenToday&&t.hiddenToday.includes(td))return true;if(t.goalSkips&&t.goalSkips.includes(td))return true;if(t.type==='recurring'&&recurIsResting(t))return true;if(t.type==='daily'&&t.dueEarly!==td&&dailyRetiredToday(t))return true;return false}).map(t=>{if(t.hiddenToday&&t.hiddenToday.includes(td))return{...t,left:'hidden'};if(t.goalSkips&&t.goalSkips.includes(td)&&t.type!=='daily'&&t.type!=='recurring')return{...t,left:'skipped'};if(t.type==='daily'){const skippedToday=t.goalSkips&&t.goalSkips.includes(td);return{...t,left:skippedToday?'skipped':1}}if(t.type==='recurring')return{...t,left:Math.ceil(t.cadenceDays-recurElapsed(t))};return{...t,left:'skipped'}}).sort((a,b)=>(typeof a.left==='string'?0:a.left)-(typeof b.left==='string'?0:b.left))}
 function checkGoal(){const t=today(),g=D.settings.dailyGoal;if(!g||g<=0)return;
   // Store what goal was set for today
   if(!D.dailyGoalLog[t]||D.dailyGoalLog[t]===true)D.dailyGoalLog[t]=g;
@@ -270,7 +388,7 @@ function updateStreak(){
 function completeTask(tid,mins,finished){
   const task=D.tasks.find(t=>t.id===tid);if(!task)return;
   if(navigator.vibrate)navigator.vibrate(15);
-  const now=localISO(),prev=JSON.parse(JSON.stringify(task)),prevP=D.points;
+  const now=localISO(),prev=JSON.parse(JSON.stringify(task)),genAtAction=dataGen;
   // Only mark complete if not time-based, or if finished=true for time-based
   const shouldComplete=(!task.timeBased&&!task.countBased)||((task.timeBased||task.countBased)&&finished!==false);
   if(shouldComplete){
@@ -297,7 +415,7 @@ function completeTask(tid,mins,finished){
   if(task.timeBased&&mins)h.minutes=mins;
   if(task.countBased&&mins){h.count=mins;h.countUnit=task.countUnit}
   if(task.timeBased){h.rate=`${task.ptsAmount} points per ${task.ptsPerMinutes} minute${task.ptsPerMinutes>1?'s':''}`}
-  if(task.countBased){h.rate=`${task.ptsAmount} points per ${task.ptsPerCount} ${task.countUnit}`}
+  if(task.countBased){h.rate=`${task.ptsAmount} points per ${task.ptsPerCount} ${esc(task.countUnit)}`}
   const prevHistLen=D.pointsHistory.length;
   D.pointsHistory.push(h);
   inlineMinId=null;saveDirty();confetti();checkGoal();
@@ -305,14 +423,26 @@ function completeTask(tid,mins,finished){
   if(task.goal){const gp=getGoalProgress(task);if(gp&&gp.pct>=100){const contribution=task.timeBased?(mins||0):task.countBased?(mins||0):1;if(gp.current-contribution<task.goal.target)setTimeout(()=>{const tc=document.getElementById('toast-container');const goalToast=document.createElement('div');goalToast.className='toast';goalToast.style.cssText='bottom:auto;top:80px';goalToast.textContent='🎯 '+task.name+' goal hit!';tc.appendChild(goalToast);setTimeout(()=>goalToast.remove(),3000)},500)}
     // Auto-complete one-time tasks when total goal is met
     if(task.type==='one-time'&&task.goal.period==='total'&&gp.current>=task.goal.target){task.completed=true;task.completedAt=localISO()}
-    // Auto-complete daily/recurring flat tasks when daily/hourly goal is met
-    if((task.type==='daily'||task.type==='recurring')&&!task.timeBased&&!task.countBased&&(task.goal.period==='daily'||task.goal.period==='hourly')&&gp.current>=task.goal.target){task.lastCompleted=localISO()}
+    // Retire daily/recurring flat tasks once the TASK's own daily/hourly goal is met. An in-plan
+    // goal deliberately has no say here — it scopes the Plan tab only (see sleepTarget).
+    if((task.type==='daily'||task.type==='recurring')&&!task.timeBased&&!task.countBased&&(task.goal.period==='daily'||task.goal.period==='hourly')){
+      const st=sleepTarget(task);
+      if(st!=null&&gp.current>=st)task.lastCompleted=localISO();
+    }
   }
   render();
-  const bonusMsg=bonus>0?` (includes +${bonus} completion bonus!)`:'';
+  // Rows this action appended: h, plus any '🎯 Daily goal bonus' checkGoal() added. Held by
+  // reference so undo removes exactly these.
+  const addedRows=D.pointsHistory.slice(prevHistLen);
   showUndo(()=>{
+    // A background pull can replace D entirely during the 4s undo window. The old code set
+    // pointsHistory.length to an absolute snapshot, which would truncate freshly synced
+    // history. Refuse instead — the completion stays, which is the safe failure mode.
+    if(dataGen!==genAtAction){toast('🔄 Synced from another device — undo cancelled');return}
     const idx=D.tasks.findIndex(x=>x.id===tid);if(idx>=0)D.tasks[idx]=prev;
-    D.points=prevP;D.pointsHistory.length=prevHistLen;saveDirty();
+    // Back the balance out by what these rows actually contributed, rather than restoring an
+    // absolute snapshot that would clobber anything else logged in the meantime.
+    D.points-=removeHistoryRows(addedRows);saveDirty();
     // Clear fired section tracker if this task is in the plan
     if(D.plan&&D.plan.some(i=>i.type==='task'&&i.id===tid)){let secI=0;for(let pi=0;pi<D.plan.length;pi++){if(D.plan[pi].type==='break')secI++;if(D.plan[pi].type==='task'&&D.plan[pi].id===tid)break}const td2=today();const fired=JSON.parse(localStorage.getItem('pt_firedSec_'+td2)||'[]');const fi=fired.indexOf(secI);if(fi>=0){fired.splice(fi,1);localStorage.setItem('pt_firedSec_'+td2,JSON.stringify(fired))}}
     render()});
@@ -553,7 +683,18 @@ function applyTheme(){
 }
 
 // ===== THEME SOUNDS =====
-function ac(){return new(window.AudioContext||window.webkitAudioContext)()}
+// One shared AudioContext for the whole session. Constructing a new one per sound leaked
+// contexts until the browser hit its cap (~6 in Chrome/Safari), after which the constructor
+// threw and the try/catch inside each sound function silently swallowed it — completion
+// sounds just stopped working partway through a session.
+let _audioCtx=null;
+function ac(){
+  if(!_audioCtx){const C=window.AudioContext||window.webkitAudioContext;if(!C)throw new Error('Web Audio unsupported');_audioCtx=new C()}
+  // Autoplay policies start the context suspended; every sound here fires from a user
+  // gesture (tap/click), so resuming at play time is allowed.
+  if(_audioCtx.state==='suspended')_audioCtx.resume();
+  return _audioCtx;
+}
 function osc(c,type,freq,t,dur,vol){const o=c.createOscillator(),g=c.createGain();o.connect(g);g.connect(c.destination);o.type=type;o.frequency.setValueAtTime(freq,t);g.gain.setValueAtTime(vol||0.3,t);g.gain.exponentialRampToValueAtTime(0.01,t+dur);o.start(t);o.stop(t+dur);return o}
 function noiseBurst(c,dur,filterType,filterFreq,vol,curve){
   const bufferSize=Math.floor(c.sampleRate*dur);
@@ -938,9 +1079,9 @@ function rPlan(){
   // One-time "done" check uses the shared oneTimeDone() helper (matches the task tab),
   // which now also handles total-goal tasks (done = goal target reached) and plan-timer
   // completions (planTasks entries, no t.completed flag).
-  const available=allTasks.filter(t=>{if(t.dueEarly===td)return true;return!(t.type==='one-time'&&oneTimeDone(t))&&!(t.goalSkips&&t.goalSkips.includes(td))&&!(t.hiddenToday&&t.hiddenToday.includes(td))&&!(t.type==='recurring'&&recurElapsed(t)<t.cadenceDays)&&!(t.type==='daily'&&(t.lastCompleted&&t.lastCompleted.slice(0,10)===td||(!(t.goal&&(t.goal.period==='daily'||t.goal.period==='hourly'))&&D.pointsHistory.some(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td&&h.task.includes('✅')))))});
+  const available=allTasks.filter(t=>{if(t.dueEarly===td)return true;return!(t.type==='one-time'&&oneTimeDone(t))&&!(t.goalSkips&&t.goalSkips.includes(td))&&!(t.hiddenToday&&t.hiddenToday.includes(td))&&!(t.type==='recurring'&&recurIsResting(t))&&!(t.type==='daily'&&(t.lastCompleted&&t.lastCompleted.slice(0,10)===td||(!(t.goal&&(t.goal.period==='daily'||t.goal.period==='hourly'))&&D.pointsHistory.some(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td&&h.task.includes('✅')))))});
   const sortedAvailable=[...available].sort((a,b)=>{const td2=((typeOrder[a.type]??9)-(typeOrder[b.type]??9));if(td2!==0)return td2;return D.tasks.indexOf(a)-D.tasks.indexOf(b)});
-  const optsList=sortedAvailable.map(t=>`<option value="${t.id}">${typeEmoji[t.type]||''}${catEmoji[t.category]||''} ${t.name}</option>`).join('');
+  const optsList=sortedAvailable.map(t=>`<option value="${t.id}">${typeEmoji[t.type]||''}${catEmoji[t.category]||''} ${esc(t.name)}</option>`).join('');
   // Overall stats
   const allPlanItems=D.plan.filter(i=>i.type==='task');
   const allPlanTasks=allPlanItems.map(i=>allTasks.find(t=>t.id===i.id)).filter(Boolean);
@@ -974,9 +1115,9 @@ function rPlan(){
     const linkedIdx=sectionLinks[si];
     const linkedName=linkedIdx!=null&&D.savedPlans[linkedIdx]?D.savedPlans[linkedIdx].name:null;
     const secTaskIds=new Set(sec.filter(i=>i.type==='task').map(i=>i.id));
-    const secOpts=sortedAvailable.filter(t=>!secTaskIds.has(t.id)).map(t=>`<option value="${t.id}">${typeEmoji[t.type]||''}${catEmoji[t.category]||''} ${t.name}</option>`).join('');
+    const secOpts=sortedAvailable.filter(t=>!secTaskIds.has(t.id)).map(t=>`<option value="${t.id}">${typeEmoji[t.type]||''}${catEmoji[t.category]||''} ${esc(t.name)}</option>`).join('');
     // Section header with name and add
-    if(linkedName){html+=`<div style="font-size:.8rem;font-weight:600;color:var(--accent-dark);margin-bottom:4px">📋 ${linkedName}</div>`}
+    if(linkedName){html+=`<div style="font-size:.8rem;font-weight:600;color:var(--accent-dark);margin-bottom:4px">📋 ${esc(linkedName)}</div>`}
     html+=`<div style="margin-bottom:4px"><select class="plan-sec-add inf" data-sec="${si}" style="margin:0;margin-bottom:8px"><option value="">+ Add task...</option>${secOpts}</select></div>`;
     // Task cards for this section
     const secItems=sec.filter(i=>i.type==='task').map(i=>({task:allTasks.find(t=>t.id===i.id),planGoal:i.planGoal||null})).filter(x=>x.task);
@@ -985,7 +1126,7 @@ function rPlan(){
       secItems.forEach(({task:t,planGoal:pg},ti)=>{
         const effectiveGoal=pg||(t.goal&&(t.goal.period==='daily'||t.goal.period==='hourly'||t.goal.period==='total')?t.goal:null);
         const done=isDoneToday(t,pg);
-        const pl=t.timeBased?`${t.ptsAmount} pts / ${t.ptsPerMinutes} min`:t.countBased?`${t.ptsAmount} pts / ${t.ptsPerCount} ${t.countUnit}`:`+${t.points}`;
+        const pl=t.timeBased?`${t.ptsAmount} pts / ${t.ptsPerMinutes} min`:t.countBased?`${t.ptsAmount} pts / ${t.ptsPerCount} ${esc(t.countUnit)}`:`+${t.points}`;
         const isM=inlineMinId===t.id;
         const gp=t.goal&&(t.goal.period==='daily'||t.goal.period==='hourly'||t.goal.period==='total')?getGoalProgress(t):null;
         // Plan goal progress
@@ -1001,7 +1142,7 @@ function rPlan(){
         const goalLine=gp&&!effectiveGoal?`<div style="font-size:.7rem;color:${gp.pct>=100?'var(--success-dark)':'var(--text-dim)'}">${gp.current}/${gp.target} ${t.timeBased?'min':t.countBased?(t.countUnit||'units'):'times'} ${gp.period}${gp.pct>=100?' ✓':''}</div>`:'';
         // Global index in D.plan for this task
         const globalIdx=secGlobalIndices[si]?secGlobalIndices[si][ti]:-1;
-        html+=rPlanSwipeWrap(globalIdx,`<div class="tcard plan-goal-tap" style="background:${done?'var(--card-neutral)':catBg(t.category)};${done?'opacity:.6;padding:6px 12px':''};cursor:pointer"><div style="display:flex;align-items:center;gap:10px"><button class="plan-done-btn cbtn-plan" data-id="${t.id}" style="${done?'opacity:.4;width:24px;height:24px;font-size:.8rem':''}">${done?'✓':'○'}</button><div style="flex:1;min-width:0"><div style="font-weight:600;font-size:${done?'.8rem':'.9rem'};${done?'text-decoration:line-through;color:var(--text-dim)':''}">${t.name}</div>${done?'':planGoalLine+goalLine}</div>${done?'':`<span style="color:var(--warning-dark);font-weight:bold;font-size:.75rem">${pl}</span>`}<button class="plan-rm ibtn" data-gi="${globalIdx}" style="font-size:.7rem;color:var(--danger-dark)">✕</button></div>${isM?`<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);">${quickAddHTML(t,true)}${t.countBased?`<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><input id="imi-count" type="number" min="1" placeholder="" class="inf" style="width:70px;margin:0;text-align:center"><span class="rl">${t.countUnit||'units'}</span></div><div id="imi-preview" style="font-size:.8rem;color:var(--accent-dark);margin:6px 0;"></div>`:t.timeBased?`<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><input id="imi-h" type="number" min="0" placeholder="" class="inf" style="width:60px;margin:0;text-align:center"><span class="rl">hours</span><input id="imi-m" type="number" min="0" max="59" placeholder="" class="inf" style="width:60px;margin:0;text-align:center"><span class="rl">minutes</span></div><div id="imi-preview" style="font-size:.8rem;color:var(--accent-dark);margin:6px 0;"></div>`:''}<div style="display:flex;gap:6px;flex-wrap:wrap">${effectiveGoal?`<button id="ims-work" data-id="${t.id}" class="btn bsuc" style="padding:8px 10px;font-size:.8rem">Log</button>`:`<button id="ims-work" data-id="${t.id}" class="btn bmut" style="padding:8px 10px;font-size:.8rem">Log</button><button id="ims-done" data-id="${t.id}" class="btn bsuc" style="padding:8px 10px;font-size:.8rem">Log + Done ✅</button>`}<button id="imc" class="btn bmut" style="padding:8px 10px">✕</button></div></div>`:''}</div>`);
+        html+=rPlanSwipeWrap(globalIdx,`<div class="tcard plan-goal-tap" style="background:${done?'var(--card-neutral)':catBg(t.category)};${done?'opacity:.6;padding:6px 12px':''};cursor:pointer"><div style="display:flex;align-items:center;gap:10px"><button class="plan-done-btn cbtn-plan" data-id="${t.id}" style="${done?'opacity:.4;width:24px;height:24px;font-size:.8rem':''}">${done?'✓':'○'}</button><div style="flex:1;min-width:0"><div style="font-weight:600;font-size:${done?'.8rem':'.9rem'};${done?'text-decoration:line-through;color:var(--text-dim)':''}">${esc(t.name)}</div>${done?'':planGoalLine+goalLine}</div>${done?'':`<span style="color:var(--warning-dark);font-weight:bold;font-size:.75rem">${pl}</span>`}<button class="plan-rm ibtn" data-gi="${globalIdx}" style="font-size:.7rem;color:var(--danger-dark)">✕</button></div>${isM?`<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);">${quickAddHTML(t,true)}${t.countBased?`<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><input id="imi-count" type="number" min="1" placeholder="" class="inf" style="width:70px;margin:0;text-align:center"><span class="rl">${esc(t.countUnit||'units')}</span></div><div id="imi-preview" style="font-size:.8rem;color:var(--accent-dark);margin:6px 0;"></div>`:t.timeBased?`<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><input id="imi-h" type="number" min="0" placeholder="" class="inf" style="width:60px;margin:0;text-align:center"><span class="rl">hours</span><input id="imi-m" type="number" min="0" max="59" placeholder="" class="inf" style="width:60px;margin:0;text-align:center"><span class="rl">minutes</span></div><div id="imi-preview" style="font-size:.8rem;color:var(--accent-dark);margin:6px 0;"></div>`:''}<div style="display:flex;gap:6px;flex-wrap:wrap">${effectiveGoal?`<button id="ims-work" data-id="${t.id}" class="btn bsuc" style="padding:8px 10px;font-size:.8rem">Log</button>`:`<button id="ims-work" data-id="${t.id}" class="btn bmut" style="padding:8px 10px;font-size:.8rem">Log</button><button id="ims-done" data-id="${t.id}" class="btn bsuc" style="padding:8px 10px;font-size:.8rem">Log + Done ✅</button>`}<button id="imc" class="btn bmut" style="padding:8px 10px">✕</button></div></div>`:''}</div>`);
       });
 
       html+='</div>';
@@ -1012,9 +1153,9 @@ function rPlan(){
     if(secItems.length){
       // Section reward selector
       const secRewards=(D.planSectionRewards||{})[si]||[];
-      const secRewardChips=secRewards.map(rid=>{const r=D.rewards?.find(x=>x.id===rid);return r?`<div style="display:inline-flex;align-items:center;gap:5px;padding:4px 10px;background:linear-gradient(135deg,#fef3c7,#fde68a);border-radius:20px;font-size:.75rem;font-weight:500"><span>🎁 ${r.name}</span><button class="plan-sec-reward-rm ibtn" data-sec="${si}" data-rid="${rid}" style="font-size:.65rem;color:var(--danger-dark);margin-left:2px">✕</button></div>`:''}).join('');
+      const secRewardChips=secRewards.map(rid=>{const r=D.rewards?.find(x=>x.id===rid);return r?`<div style="display:inline-flex;align-items:center;gap:5px;padding:4px 10px;background:linear-gradient(135deg,#fef3c7,#fde68a);border-radius:20px;font-size:.75rem;font-weight:500"><span>🎁 ${esc(r.name)}</span><button class="plan-sec-reward-rm ibtn" data-sec="${si}" data-rid="${rid}" style="font-size:.65rem;color:var(--danger-dark);margin-left:2px">✕</button></div>`:''}).join('');
       const secAvailRewards=(D.rewards||[]).filter(r=>!secRewards.includes(r.id));
-      const secRewardSelect=secAvailRewards.length?`<select class="plan-sec-reward-add inf" data-sec="${si}" style="margin:0;font-size:.75rem;padding:4px 10px;border-radius:20px;background:var(--card-neutral);border:1px dashed var(--border)"><option value="">+ Add reward</option>${secAvailRewards.map(r=>`<option value="${r.id}">🎁 ${r.name}</option>`).join('')}</select>`:'';
+      const secRewardSelect=secAvailRewards.length?`<select class="plan-sec-reward-add inf" data-sec="${si}" style="margin:0;font-size:.75rem;padding:4px 10px;border-radius:20px;background:var(--card-neutral);border:1px dashed var(--border)"><option value="">+ Add reward</option>${secAvailRewards.map(r=>`<option value="${r.id}">🎁 ${esc(r.name)}</option>`).join('')}</select>`:'';
       const secRewardHtml=(secRewardChips||secRewardSelect)?`<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px;align-items:center">${secRewardChips}${secRewardSelect}</div>`:'';
       html+=`<div style="display:flex;gap:6px;margin:4px 0 8px;flex-wrap:wrap"><button class="plan-sec-clear btn bmut" data-sec="${si}" style="font-size:.7rem;padding:4px 8px">🗑️ Clear</button><button class="plan-sec-save btn bmut" data-sec="${si}" style="font-size:.7rem;padding:4px 8px">💾 Save</button><div style="flex:1"></div>${si>0?`<button class="plan-sec-move btn bmut" data-sec="${si}" data-d="up" style="font-size:.7rem;padding:4px 8px">▲ Section</button>`:''}${si<sections.length-1?`<button class="plan-sec-move btn bmut" data-sec="${si}" data-d="down" style="font-size:.7rem;padding:4px 8px">▼ Section</button>`:''}</div>${secRewardHtml}`}
     else if(sections.length>1){html+=`<div style="display:flex;gap:6px;margin:4px 0 8px"><button class="plan-sec-clear btn bmut" data-sec="${si}" style="font-size:.7rem;padding:4px 8px">🗑️ Delete section</button></div>`}
@@ -1031,7 +1172,7 @@ function rPlan(){
   let savedHtml='';
   if(D.savedPlans&&D.savedPlans.length){
     const loadedIdxs=new Set(sectionLinks.filter(x=>x!=null));
-    savedHtml=`<div style="margin-top:16px;border-top:1px solid var(--border);padding-top:12px"><div style="font-size:.85rem;font-weight:600;color:var(--accent-dark);margin-bottom:8px">💾 Saved Plans</div>${D.savedPlans.map((sp,spi)=>{const validCount=sp.items.filter(id=>allTasks.find(t=>t.id===id&&!(t.type==='one-time'&&t.completed))).length;const isLoaded=loadedIdxs.has(spi);return `<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px"><button class="plan-load btn ${isLoaded?'bpri':'bmut'}" data-spi="${spi}" style="flex:1;font-size:.8rem;padding:6px 10px;text-align:left" ${isLoaded?'disabled':''}>${sp.name} (${validCount} task${validCount!==1?'s':''})${isLoaded?' ✓':''}</button><button class="plan-del-saved ibtn" data-spi="${spi}" style="font-size:.7rem;color:var(--danger-dark)">🗑️</button></div>`}).join('')}</div>`;
+    savedHtml=`<div style="margin-top:16px;border-top:1px solid var(--border);padding-top:12px"><div style="font-size:.85rem;font-weight:600;color:var(--accent-dark);margin-bottom:8px">💾 Saved Plans</div>${D.savedPlans.map((sp,spi)=>{const validCount=sp.items.filter(id=>allTasks.find(t=>t.id===id&&!(t.type==='one-time'&&t.completed))).length;const isLoaded=loadedIdxs.has(spi);return `<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px"><button class="plan-load btn ${isLoaded?'bpri':'bmut'}" data-spi="${spi}" style="flex:1;font-size:.8rem;padding:6px 10px;text-align:left" ${isLoaded?'disabled':''}>${esc(sp.name)} (${validCount} task${validCount!==1?'s':''})${isLoaded?' ✓':''}</button><button class="plan-del-saved ibtn" data-spi="${spi}" style="font-size:.7rem;color:var(--danger-dark)">🗑️</button></div>`}).join('')}</div>`;
   }
   return `<div class="vc"><h2 style="font-size:1.1rem;color:var(--accent-dark);margin-bottom:12px">📋 Today's Plan</h2>${progressBar}<div id="plan-drag-container">${html}</div>${addBreakBtn}${savedHtml}</div>`;
 }
@@ -1063,7 +1204,7 @@ function rTasksBody(){
 }
 function rTasks(){
   const content=rTasksBody();
-  const fb=`<div style="display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap;align-items:center"><button class="cat-btn ${categoryFilter==='all'?'cat-active':''}" data-cat="all" style="background:var(--card-neutral)">All</button><button class="cat-btn ${categoryFilter==='work'?'cat-active':''}" data-cat="work" style="background:#dbeafe">💼 Work</button><button class="cat-btn ${categoryFilter==='home'?'cat-active':''}" data-cat="home" style="background:#d1fae5">🏠 Home</button><button class="cat-btn ${categoryFilter==='growth'?'cat-active':''}" data-cat="growth" style="background:#fef3c7">🌱 Growth</button><button class="cat-btn ${categoryFilter==='archived'?'cat-active':''}" data-cat="archived" style="background:#e5e7eb">📦 Archived</button><button id="task-search-btn" class="cat-btn" style="background:var(--card-neutral);margin-left:auto">🔍</button></div>${taskSearch!==''?`<input id="task-search-input" type="text" value="${taskSearch==='__open__'?'':taskSearch}" placeholder="Search tasks..." class="inf" style="margin-bottom:12px" autocomplete="off" autofocus>`:''}`;
+  const fb=`<div style="display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap;align-items:center"><button class="cat-btn ${categoryFilter==='all'?'cat-active':''}" data-cat="all" style="background:var(--card-neutral)">All</button><button class="cat-btn ${categoryFilter==='work'?'cat-active':''}" data-cat="work" style="background:#dbeafe">💼 Work</button><button class="cat-btn ${categoryFilter==='home'?'cat-active':''}" data-cat="home" style="background:#d1fae5">🏠 Home</button><button class="cat-btn ${categoryFilter==='growth'?'cat-active':''}" data-cat="growth" style="background:#fef3c7">🌱 Growth</button><button class="cat-btn ${categoryFilter==='archived'?'cat-active':''}" data-cat="archived" style="background:#e5e7eb">📦 Archived</button><button id="task-search-btn" class="cat-btn" style="background:var(--card-neutral);margin-left:auto">🔍</button></div>${taskSearch!==''?`<input id="task-search-input" type="text" value="${esc(taskSearch==='__open__'?'':taskSearch)}" placeholder="Search tasks..." class="inf" style="margin-bottom:12px" autocomplete="off" autofocus>`:''}`;
   return `<div class="vc">${fb}<div id="task-body">${content}</div></div>`}
 function rBucket(title,tasks,sortable){
   const sortBtn=sortable?`<button id="rsort" class="ibtn" style="font-size:.75rem;margin-left:6px">${recurSort==='custom'?'↕️ by due':'↕️ custom'}</button>`:'';
@@ -1099,12 +1240,14 @@ function rBucket(title,tasks,sortable){
       const grpPtsToday=D.pointsHistory.filter(h=>h.date.slice(0,10)===td&&h.type==='earned'&&gTasks.some(t=>t.id===h.taskId)).reduce((s,h)=>s+h.points,0);
       const progressText=`${doneToday}/${gTasks.length}`;
       const ptsText=grpPtsToday>0?` · ${grpPtsToday}pts`:'';
-      cards+=`<div class="bucket-item" data-grp="${g}" style="user-select:none;-webkit-user-select:none">`;
-      cards+=`<div class="grp-hdr" data-grp="${g}" style="margin:4px 0;font-size:.8rem;color:var(--accent-dark);font-weight:600;padding:8px 10px;background:${gColor};border-radius:8px;cursor:pointer"><div style="display:flex;justify-content:space-between;align-items:center"><span>${collapsed?'▶':'▼'} 📁 ${g}</span><span style="font-size:.7rem;color:var(--text-dim);font-weight:normal">${progressText}${ptsText}</span></div></div>`;
+      // esc() on data-grp is transparent to the handlers: dataset.grp reads back the decoded
+      // value, so it still compares equal to t.group.
+      cards+=`<div class="bucket-item" data-grp="${esc(g)}" style="user-select:none;-webkit-user-select:none">`;
+      cards+=`<div class="grp-hdr" data-grp="${esc(g)}" style="margin:4px 0;font-size:.8rem;color:var(--accent-dark);font-weight:600;padding:8px 10px;background:${gColor};border-radius:8px;cursor:pointer"><div style="display:flex;justify-content:space-between;align-items:center"><span>${collapsed?'▶':'▼'} 📁 ${esc(g)}</span><span style="font-size:.7rem;color:var(--text-dim);font-weight:normal">${progressText}${ptsText}</span></div></div>`;
       if(!collapsed){
-        cards+=`<div class="grp-content" data-grp="${g}" style="padding-left:10px;border-left:3px solid ${gColor};margin-left:4px">`;
+        cards+=`<div class="grp-content" data-grp="${esc(g)}" style="padding-left:10px;border-left:3px solid ${gColor};margin-left:4px">`;
         cards+=gTasks.map((t,i)=>rSwipeWrap(t,rCard(t,i,gTasks.length))).join('');
-        cards+=`<div style="display:flex;gap:6px;margin:4px 0 8px;flex-wrap:wrap" onclick="event.stopPropagation()"><button class="grp-done btn bsuc" data-grp="${g}" style="font-size:.7rem;padding:4px 8px">✓ All</button><button class="grp-skip btn ${skippedAll?'bwar':'bmut'}" data-grp="${g}" style="font-size:.7rem;padding:4px 8px">⏭️ Skip</button><button class="grp-hide btn ${hiddenAll?'bdan':'bmut'}" data-grp="${g}" style="font-size:.7rem;padding:4px 8px">🚫 Not today</button></div>`;
+        cards+=`<div style="display:flex;gap:6px;margin:4px 0 8px;flex-wrap:wrap" onclick="event.stopPropagation()"><button class="grp-done btn bsuc" data-grp="${esc(g)}" style="font-size:.7rem;padding:4px 8px">✓ All</button><button class="grp-skip btn ${skippedAll?'bwar':'bmut'}" data-grp="${esc(g)}" style="font-size:.7rem;padding:4px 8px">⏭️ Skip</button><button class="grp-hide btn ${hiddenAll?'bdan':'bmut'}" data-grp="${esc(g)}" style="font-size:.7rem;padding:4px 8px">🚫 Not today</button></div>`;
         cards+=`</div>`;
       }
       cards+=`</div>`;
@@ -1121,7 +1264,7 @@ function rSwipeWrap(t,cardHtml){
 }
 function rPlanSwipeWrap(gi,cardHtml){return '<div class="plan-drag-item plan-sw-wrap" data-gi="'+gi+'" style="user-select:none;-webkit-user-select:none;position:relative;overflow:hidden;border-radius:14px">'+'<div class="plan-sw-up" style="position:absolute;left:0;top:0;bottom:0;width:80px;display:flex;align-items:center;justify-content:center;background:var(--accent);border-radius:14px;color:#fff;font-weight:600;font-size:.75rem;pointer-events:none;opacity:0">▲ Up</div>'+'<div class="plan-sw-down" style="position:absolute;right:0;top:0;bottom:0;width:80px;display:flex;align-items:center;justify-content:center;background:var(--accent);border-radius:14px;color:#fff;font-weight:600;font-size:.75rem;pointer-events:none;opacity:0">▼ Down</div>'+'<div class="plan-swipe-card" style="position:relative;background:var(--bg);border-radius:14px">'+cardHtml+'</div></div>'}
 function rCard(t,i,n){
-  const isM=inlineMinId===t.id,pl=t.timeBased?`${t.ptsAmount} pts / ${t.ptsPerMinutes} min`:t.countBased?`${t.ptsAmount} pts / ${t.ptsPerCount} ${t.countUnit}`:`+${t.points}`;
+  const isM=inlineMinId===t.id,pl=t.timeBased?`${t.ptsAmount} pts / ${t.ptsPerMinutes} min`:t.countBased?`${t.ptsAmount} pts / ${t.ptsPerCount} ${esc(t.countUnit)}`:`+${t.points}`;
   // Goal progress bar
   const gp=getGoalProgress(t);
   const goalBar=gp?`<div style="margin-top:6px"><div style="display:flex;justify-content:space-between;font-size:.6rem;color:var(--text-dim);margin-bottom:2px"><span>${gp.current}/${gp.target} ${t.timeBased?'min':t.countBased?(t.countUnit||'units'):'times'} ${gp.period}${getGoalStreak(t)>0?' · 🔥'+getGoalStreak(t):''}</span><span>${gp.pct}%</span></div><div style="height:4px;background:var(--card-neutral);border-radius:2px;overflow:hidden"><div style="height:100%;width:${gp.pct}%;background:${gp.pct>=100?'var(--success)':'var(--accent)'};border-radius:2px"></div></div></div>`:'';
@@ -1137,7 +1280,7 @@ function rCard(t,i,n){
   // Time invested for time-based incomplete tasks
   let investedBadge='';
   if(t.timeBased&&!(t.type==='one-time'&&t.completed)){const totalMins=D.pointsHistory.filter(h=>h.taskId===t.id&&h.type==='earned'&&!h.task.includes('✅')).reduce((s,h)=>s+(h.minutes||0),0);if(totalMins>0){const ih=Math.floor(totalMins/60),im=totalMins%60;investedBadge=` · ${ih?ih+'h ':''}${im}m invested`}}
-  return `<div class="tcard task-drag-item" data-id="${t.id}" style="background:${catBg(t.category)};user-select:none;-webkit-user-select:none"><div style="display:flex;align-items:center;gap:10px"><button class="cbtn" data-id="${t.id}">✓</button><div style="flex:1;min-width:0;cursor:pointer" class="tdet" data-id="${t.id}"><div style="font-weight:600;font-size:.9rem">${t.name}</div>${ageBadge}${t.type==='recurring'?`<div style="font-size:.7rem;color:var(--text-dim)">Every ${t.cadenceDays}d</div>`:''}${t.type==='daily'&&!t.goal&&getDailyStreak(t)>0?`<div style="font-size:.7rem;color:var(--warning-dark)">🔥 ${getDailyStreak(t)} day streak</div>`:''}${t.timeBased?`<div style="font-size:.7rem;color:var(--accent-dark)">${investedBadge?'⏱'+investedBadge:''}</div>`:''}${t.countBased?'':''}</div><span style="color:var(--warning-dark);font-weight:bold;font-size:.8rem">${pl}</span></div>${goalBar}${isM?`<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);">${quickAddHTML(t)}${t.countBased?`<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><input id="imi-count" type="number" min="1" placeholder="" class="inf" style="width:70px;margin:0;text-align:center"><span class="rl">${t.countUnit||'units'}</span></div><div id="imi-preview" style="font-size:.8rem;color:var(--accent-dark);margin:6px 0;"></div>`:`<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><input id="imi-h" type="number" min="0" placeholder="" class="inf" style="width:60px;margin:0;text-align:center"><span class="rl">hours</span><input id="imi-m" type="number" min="0" max="59" placeholder="" class="inf" style="width:60px;margin:0;text-align:center"><span class="rl">minutes</span></div><div id="imi-preview" style="font-size:.8rem;color:var(--accent-dark);margin:6px 0;"></div>`}<div style="display:flex;gap:6px;flex-wrap:wrap">${t.type==='evergreen'||(t.type==='one-time'&&t.goal)?`<button id="ims" data-id="${t.id}" class="btn bsuc" style="padding:8px 12px;font-size:.8rem">Log</button>`:`<button id="ims-work" data-id="${t.id}" class="btn bmut" style="padding:8px 10px;font-size:.8rem">Worked on it</button><button id="ims-done" data-id="${t.id}" class="btn bsuc" style="padding:8px 10px;font-size:.8rem">Finished! 🎉</button>`}<button id="imc" class="btn bmut" style="padding:8px 10px">✕</button></div></div>`:''}</div>`}
+  return `<div class="tcard task-drag-item" data-id="${t.id}" style="background:${catBg(t.category)};user-select:none;-webkit-user-select:none"><div style="display:flex;align-items:center;gap:10px"><button class="cbtn" data-id="${t.id}">✓</button><div style="flex:1;min-width:0;cursor:pointer" class="tdet" data-id="${t.id}"><div style="font-weight:600;font-size:.9rem">${esc(t.name)}</div>${ageBadge}${t.type==='recurring'?`<div style="font-size:.7rem;color:var(--text-dim)">Every ${t.cadenceDays}d</div>`:''}${t.type==='daily'&&!t.goal&&getDailyStreak(t)>0?`<div style="font-size:.7rem;color:var(--warning-dark)">🔥 ${getDailyStreak(t)} day streak</div>`:''}${t.timeBased?`<div style="font-size:.7rem;color:var(--accent-dark)">${investedBadge?'⏱'+investedBadge:''}</div>`:''}${t.countBased?'':''}</div><span style="color:var(--warning-dark);font-weight:bold;font-size:.8rem">${pl}</span></div>${goalBar}${isM?`<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);">${quickAddHTML(t)}${t.countBased?`<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><input id="imi-count" type="number" min="1" placeholder="" class="inf" style="width:70px;margin:0;text-align:center"><span class="rl">${esc(t.countUnit||'units')}</span></div><div id="imi-preview" style="font-size:.8rem;color:var(--accent-dark);margin:6px 0;"></div>`:`<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><input id="imi-h" type="number" min="0" placeholder="" class="inf" style="width:60px;margin:0;text-align:center"><span class="rl">hours</span><input id="imi-m" type="number" min="0" max="59" placeholder="" class="inf" style="width:60px;margin:0;text-align:center"><span class="rl">minutes</span></div><div id="imi-preview" style="font-size:.8rem;color:var(--accent-dark);margin:6px 0;"></div>`}<div style="display:flex;gap:6px;flex-wrap:wrap">${t.type==='evergreen'||(t.type==='one-time'&&t.goal)?`<button id="ims" data-id="${t.id}" class="btn bsuc" style="padding:8px 12px;font-size:.8rem">Log</button>`:`<button id="ims-work" data-id="${t.id}" class="btn bmut" style="padding:8px 10px;font-size:.8rem">Worked on it</button><button id="ims-done" data-id="${t.id}" class="btn bsuc" style="padding:8px 10px;font-size:.8rem">Finished! 🎉</button>`}<button id="imc" class="btn bmut" style="padding:8px 10px">✕</button></div></div>`:''}</div>`}
 function rSleep(tasks,title){const td=today();
   // Separate into actual upcoming (numeric days) vs skipped/hidden (string left)
   const upcoming=tasks.filter(t=>typeof t.left==='number').sort((a,b)=>a.left-b.left);
@@ -1148,7 +1291,7 @@ function rSleep(tasks,title){const td=today();
   const folderItems=[...rest,...dismissed];
   const sectionId=title||'upcoming';
   const isExpanded=expandedSleep.has(sectionId);
-  function renderItem(t){const streak=t.goal?getGoalStreak(t):(t.type==='daily'?getDailyStreak(t):0);const streakBadge=streak>0?`<span style="color:var(--warning-dark);font-size:.75rem;margin-left:4px">🔥${streak}</span>`:'';const leftLabel=t.left==='skipped'?'⏭️ skipped':t.left==='hidden'?'🚫 not today':`↻ ${t.left}d`;return `<div class="slcard sldet" data-id="${t.id}" style="cursor:pointer"><span>${t.name}${streakBadge}</span><span style="color:var(--accent-dark);font-weight:600">${leftLabel}</span></div>`}
+  function renderItem(t){const streak=t.goal?getGoalStreak(t):(t.type==='daily'?getDailyStreak(t):0);const streakBadge=streak>0?`<span style="color:var(--warning-dark);font-size:.75rem;margin-left:4px">🔥${streak}</span>`:'';const leftLabel=t.left==='skipped'?'⏭️ skipped':t.left==='hidden'?'🚫 not today':`↻ ${t.left}d`;return `<div class="slcard sldet" data-id="${t.id}" style="cursor:pointer"><span>${esc(t.name)}${streakBadge}</span><span style="color:var(--accent-dark);font-weight:600">${leftLabel}</span></div>`}
   let html=`<div style="margin-bottom:18px"><h3 style="font-size:.85rem;color:var(--text-dim);margin-bottom:6px">${title||'💤 Upcoming'}</h3>`;
   html+=top3.map(renderItem).join('');
   if(folderItems.length>0){
@@ -1160,7 +1303,7 @@ function rSleep(tasks,title){const td=today();
 }
 function getGroups(){const groups=new Set();D.tasks.forEach(t=>{if(t.group)groups.add(t.group)});return[...groups].sort()}
 function moveInArr(arr,idx,dir){const si=dir==='up'?idx-1:idx+1;if(si<0||si>=arr.length)return;[arr[idx],arr[si]]=[arr[si],arr[idx]]}
-function rGroupSelect(id,selected){const groups=getGroups();const opts=groups.map(g=>`<option value="${g}" ${g===selected?'selected':''}>${g}</option>`).join('');return `<div style="display:flex;gap:6px;align-items:center;margin-bottom:8px"><select id="${id}" class="inf" style="flex:1;margin:0"><option value="">No group</option>${opts}<option value="__new__">+ New group...</option></select><input id="${id}-new" type="text" placeholder="Group name" class="inf" autocapitalize="words" style="flex:1;margin:0;display:none"></div>`}
+function rGroupSelect(id,selected){const groups=getGroups();const opts=groups.map(g=>`<option value="${esc(g)}" ${g===selected?'selected':''}>${esc(g)}</option>`).join('');return `<div style="display:flex;gap:6px;align-items:center;margin-bottom:8px"><select id="${id}" class="inf" style="flex:1;margin:0"><option value="">No group</option>${opts}<option value="__new__">+ New group...</option></select><input id="${id}-new" type="text" placeholder="Group name" class="inf" autocapitalize="words" style="flex:1;margin:0;display:none"></div>`}
 function bindGroupSelect(id){
   document.getElementById(id)?.addEventListener('change',e=>{const ni=document.getElementById(id+'-new');if(e.target.value==='__new__'){ni.style.display='';ni.focus()}else{ni.style.display='none';ni.value=''}});
 }
@@ -1169,7 +1312,7 @@ function rAddForm(){return `<div class="fcard" style="margin-top:12px"><h3 style
 
 // ===== REWARDS =====
 function rRewards(){
-  const cards=D.rewards.map((r,i)=>`<div class="rcard"><div style="display:flex;align-items:center;gap:10px"><div style="flex:1;cursor:pointer" class="rdet" data-id="${r.id}"><strong>${r.name}</strong></div><span style="color:var(--warning-dark);font-weight:bold;font-size:.85rem">${r.cost}pts</span><button class="rbtn btn bsuc" data-id="${r.id}" ${D.points<r.cost?'disabled style="opacity:.4"':''}style="padding:6px 12px;font-size:.8rem">Redeem</button><div style="display:flex;flex-direction:column;gap:1px">${i>0?`<button class="mrbtn" data-id="${r.id}" data-d="up">▲</button>`:'<div style="height:16px"></div>'}${i<D.rewards.length-1?`<button class="mrbtn" data-id="${r.id}" data-d="down">▼</button>`:'<div style="height:16px"></div>'}</div></div></div>`).join('');
+  const cards=D.rewards.map((r,i)=>`<div class="rcard"><div style="display:flex;align-items:center;gap:10px"><div style="flex:1;cursor:pointer" class="rdet" data-id="${r.id}"><strong>${esc(r.name)}</strong></div><span style="color:var(--warning-dark);font-weight:bold;font-size:.85rem">${r.cost}pts</span><button class="rbtn btn bsuc" data-id="${r.id}" ${D.points<r.cost?'disabled style="opacity:.4"':''}style="padding:6px 12px;font-size:.8rem">Redeem</button><div style="display:flex;flex-direction:column;gap:1px">${i>0?`<button class="mrbtn" data-id="${r.id}" data-d="up">▲</button>`:'<div style="height:16px"></div>'}${i<D.rewards.length-1?`<button class="mrbtn" data-id="${r.id}" data-d="down">▼</button>`:'<div style="height:16px"></div>'}</div></div></div>`).join('');
   return `<div class="vc"><button class="tback">← Back</button><h2 style="font-size:1.1rem;color:var(--accent-dark);margin-bottom:4px">🍭 Rewards</h2><p style="font-size:.8rem;color:var(--text-dim);margin-bottom:12px">Available: <b>${D.points}</b> pts</p>${cards||'<p style="color:var(--text-dim);font-style:italic;font-size:.85rem">No rewards yet.</p>'}<button id="show-arf" class="abtn" style="margin-top:12px">+ Add Reward</button><div id="arfc"></div></div>`}
 function rAddReward(){return `<div class="fcard" style="margin-top:12px"><h3 style="margin-bottom:10px;color:var(--accent-dark)">New Reward</h3><input id="rfn" type="text" placeholder="Reward name" class="inf" autocapitalize="words"><input id="rfc" type="number" min="1" placeholder="Cost" class="inf"><div id="rfe" class="err"></div><button id="rfs" class="btn bac2" style="width:100%;opacity:.5" disabled>Add Reward</button></div>`}
 
@@ -1181,7 +1324,7 @@ function rGroceryBody(){
   const checked=filtered.filter(g=>g.checked);
   const renderItem=(g,i)=>{
     const idx=D.groceries.indexOf(g);
-    return `<div class="tcard groc-item" data-idx="${idx}" style="background:${g.checked?'var(--card-neutral)':'var(--card-task)'};display:flex;align-items:flex-start;gap:10px;padding:10px 12px;cursor:pointer;user-select:none;-webkit-user-select:none"><button class="groc-check cbtn" data-idx="${idx}" style="${g.checked?'opacity:.5':''}">${g.checked?'✓':'○'}</button><div style="flex:1;min-width:0"><div style="font-weight:600;font-size:.9rem;${g.checked?'text-decoration:line-through;color:var(--text-dim)':''}">${g.name}</div>${g.notes?`<div style="font-size:.8rem;color:var(--text-dim);margin-top:2px;padding-left:8px;font-style:italic">${g.notes}</div>`:''}</div><button class="groc-del ibtn" data-idx="${idx}" style="font-size:.7rem;color:var(--danger-dark)">🗑️</button></div>`;
+    return `<div class="tcard groc-item" data-idx="${idx}" style="background:${g.checked?'var(--card-neutral)':'var(--card-task)'};display:flex;align-items:flex-start;gap:10px;padding:10px 12px;cursor:pointer;user-select:none;-webkit-user-select:none"><button class="groc-check cbtn" data-idx="${idx}" style="${g.checked?'opacity:.5':''}">${g.checked?'✓':'○'}</button><div style="flex:1;min-width:0"><div style="font-weight:600;font-size:.9rem;${g.checked?'text-decoration:line-through;color:var(--text-dim)':''}">${esc(g.name)}</div>${g.notes?`<div style="font-size:.8rem;color:var(--text-dim);margin-top:2px;padding-left:8px;font-style:italic">${esc(g.notes)}</div>`:''}</div><button class="groc-del ibtn" data-idx="${idx}" style="font-size:.7rem;color:var(--danger-dark)">🗑️</button></div>`;
   };
   const uncheckedHtml=`<div id="groc-unchecked">${unchecked.map((g,i)=>renderItem(g,i)).join('')}</div>`;
   const checkedHtml=checked.length?`<div style="display:flex;align-items:center;gap:8px;margin:12px 0"><div style="flex:1;height:2px;background:var(--border)"></div><span style="font-size:.7rem;color:var(--text-dim)">— checked off —</span><div style="flex:1;height:2px;background:var(--border)"></div></div><div id="groc-checked">${checked.map((g,i)=>renderItem(g,i)).join('')}</div>`:'';
@@ -1192,8 +1335,8 @@ function rGrocery(){
   if(!D.recipes)D.recipes=[];
   const bodyHtml=rGroceryBody();
   // Recipes section
-  const recipesHtml=D.recipes.length?`<div style="margin-top:16px;border-top:1px solid var(--border);padding-top:12px"><div style="font-size:.85rem;font-weight:600;color:var(--accent-dark);margin-bottom:8px">📖 Recipes</div>${D.recipes.map((r,ri)=>`<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px"><button class="recipe-view btn bmut" data-ri="${ri}" style="flex:1;font-size:.8rem;padding:6px 10px;text-align:left">🍳 ${r.name} (${r.items.length} item${r.items.length!==1?'s':''})</button><button class="recipe-edit ibtn" data-ri="${ri}" style="font-size:.7rem">✏️</button><button class="recipe-del ibtn" data-ri="${ri}" style="font-size:.7rem;color:var(--danger-dark)">🗑️</button></div>`).join('')}</div>`:'';
-  const searchInput=grocSearch!==''?`<input id="groc-search-input" type="text" value="${grocSearch==='__open__'?'':grocSearch}" placeholder="Search groceries..." class="inf" style="margin-bottom:12px;font-size:.85rem" autocomplete="off" autofocus>`:'';
+  const recipesHtml=D.recipes.length?`<div style="margin-top:16px;border-top:1px solid var(--border);padding-top:12px"><div style="font-size:.85rem;font-weight:600;color:var(--accent-dark);margin-bottom:8px">📖 Recipes</div>${D.recipes.map((r,ri)=>`<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px"><button class="recipe-view btn bmut" data-ri="${ri}" style="flex:1;font-size:.8rem;padding:6px 10px;text-align:left">🍳 ${esc(r.name)} (${r.items.length} item${r.items.length!==1?'s':''})</button><button class="recipe-edit ibtn" data-ri="${ri}" style="font-size:.7rem">✏️</button><button class="recipe-del ibtn" data-ri="${ri}" style="font-size:.7rem;color:var(--danger-dark)">🗑️</button></div>`).join('')}</div>`:'';
+  const searchInput=grocSearch!==''?`<input id="groc-search-input" type="text" value="${esc(grocSearch==='__open__'?'':grocSearch)}" placeholder="Search groceries..." class="inf" style="margin-bottom:12px;font-size:.85rem" autocomplete="off" autofocus>`:'';
   return `<div class="vc"><button class="tback">← Back</button><div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px"><h2 style="font-size:1.1rem;color:var(--accent-dark)">🛒 Grocery List</h2>${D.groceries.length>3?`<button id="groc-search-btn" class="ibtn" style="background:var(--card-neutral);padding:6px 10px;border-radius:8px">🔍</button>`:''}</div>${searchInput}<div style="display:flex;gap:6px;margin-bottom:12px"><input id="groc-name" type="text" placeholder="Item name" class="inf" autocapitalize="words" style="flex:1;margin:0"><button id="groc-add" class="btn bsuc" style="padding:8px 12px">+</button></div><input id="groc-notes" type="text" placeholder="Notes (optional)" class="inf" style="margin-top:-4px;margin-bottom:12px;font-size:.8rem"><div id="groc-body">${bodyHtml}</div><button id="recipe-create" class="btn bmut" style="width:100%;margin-top:12px;font-size:.8rem">📖 Create Recipe</button>${recipesHtml}</div>`}
 
 // ===== HISTORY =====
@@ -1203,7 +1346,8 @@ function rHistory(){
   let cells='';for(let i=0;i<fd;i++)cells+='<div></div>';
   for(let d=1;d<=dim;d++){
     const ds=`${hY}-${String(hM+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
-    const ents=D.pointsHistory.filter(h=>h.date.slice(0,10)===ds);
+    // Bookkeeping rows shouldn't light up a calendar cell on their own.
+    const ents=realEntries(D.pointsHistory.filter(h=>h.date.slice(0,10)===ds));
     const earned=ptsForDay(ds);
     const dayGoal=D.dailyGoalLog[ds];
     const hasGoal=dayGoal&&dayGoal!==true;
@@ -1216,12 +1360,19 @@ function rHistory(){
   let detail='',daySummary='';
   if(selDay){
     const ents=D.pointsHistory.filter(h=>h.date.slice(0,10)===selDay);
-    const filteredEnts=histCatFilter==='all'?ents:ents.filter(e=>{if(e.category)return e.category===histCatFilter;if(e.taskId){const t=D.tasks.find(x=>x.id===e.taskId);return t&&t.category===histCatFilter}return false});
-    const dayPts=filteredEnts.filter(h=>h.type==='earned').reduce((s,h)=>s+h.points,0);
-    const dayMins=filteredEnts.reduce((s,h)=>s+(h.minutes||0),0);
+    // Summarise over real entries only — including `_tracking` rows and ✅ markers roughly
+    // doubled the reported time on any day containing a plan session. Exclude the daily goal
+    // bonus from the points figure so it agrees with the calendar cell, which uses ptsForDay().
+    const summaryEnts=realEntries(ents).filter(e=>entryMatchesCat(e,histCatFilter));
+    // Task points are shown separately from the goal bonus. The bare number has to match the
+    // calendar cell (ptsForDay(), which excludes the bonus so the bonus can't push you over your
+    // own goal), but the bonus is a visible row in the list below, so show it rather than drop it.
+    const dayPts=summaryEnts.filter(h=>h.type==='earned'&&h.task!=='🎯 Daily goal bonus').reduce((s,h)=>s+entryFieldForCat(h,histCatFilter,'points'),0);
+    const dayBonus=summaryEnts.filter(h=>h.type==='earned'&&h.task==='🎯 Daily goal bonus').reduce((s,h)=>s+h.points,0);
+    const dayMins=summaryEnts.reduce((s,h)=>s+entryFieldForCat(h,histCatFilter,'minutes'),0);
     const dayTimeStr=dayMins>=60?`${Math.floor(dayMins/60)}h ${dayMins%60}m`:`${dayMins}m`;
-    daySummary=filteredEnts.length?`<div style="display:flex;justify-content:space-between;font-size:.8rem;color:var(--text-dim);margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid var(--border)"><span>✨ ${dayPts} pts earned</span><span>⏱ ${dayTimeStr} logged</span></div>`:'';
-    if(ents.length){detail=ents.filter(e=>!e._tracking&&!(e.points===0&&e.task.includes('✅'))).filter(e=>{if(histCatFilter==='all')return true;if(e.category)return e.category===histCatFilter;if(e.taskId){const t=D.tasks.find(x=>x.id===e.taskId);return t&&t.category===histCatFilter}return false}).map(e=>{
+    daySummary=summaryEnts.length?`<div style="display:flex;justify-content:space-between;font-size:.8rem;color:var(--text-dim);margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid var(--border)"><span>✨ ${dayPts} pts earned${dayBonus>0?` <span style="color:var(--success-dark)">+${dayBonus} bonus</span>`:''}</span><span>⏱ ${dayTimeStr} logged</span></div>`:'';
+    if(ents.length){detail=realEntries(ents).filter(e=>entryMatchesCat(e,histCatFilter)).map(e=>{
         const timeParts=e.date.slice(11,16);const hr=parseInt(timeParts.split(':')[0]),min=timeParts.split(':')[1];
         const ampm=hr>=12?'PM':'AM';const hr12=hr%12||12;
         const time=(e.task==='🎯 Daily goal bonus'||e.originalDate)?'':(`${hr12}:${min} ${ampm}`);
@@ -1238,15 +1389,15 @@ function rHistory(){
             else if(st.flatDone>1)durInfo=st.flatDone+'× completed';
             else if(st.seconds>0)durInfo=sm+'m '+ss+'s';
             const icon=st.completed?'✅ ':'⏱️ ';
-            return `<div style="display:flex;align-items:center;padding:3px 0"><div style="flex:1"><div style="font-size:.8rem;font-weight:500;color:var(--text-dim)">${icon}${st.name}</div>${durInfo?`<div style="font-size:.7rem;color:var(--text-dim);opacity:.7">${durInfo}</div>`:''}</div><span style="font-size:.75rem;font-weight:bold;color:var(--text-dim)">+${st.points}</span></div>`;
+            return `<div style="display:flex;align-items:center;padding:3px 0"><div style="flex:1"><div style="font-size:.8rem;font-weight:500;color:var(--text-dim)">${icon}${esc(st.name)}</div>${durInfo?`<div style="font-size:.7rem;color:var(--text-dim);opacity:.7">${durInfo}</div>`:''}</div><span style="font-size:.75rem;font-weight:bold;color:var(--text-dim)">+${st.points}</span></div>`;
           }).join('');
-          return `<div class="hent hent-click" data-idx="${idx}"><div style="flex:1"><div style="font-size:.85rem;font-weight:500">${e.task}</div><div style="font-size:.7rem;color:var(--text-dim)">${time} · ${durStr}</div><div style="margin-top:4px;padding-left:8px;border-left:2px solid var(--border)">${subItems}</div></div><span class="hpts hpe">+${e.points}</span><button class="hdel ibtn" data-idx="${idx}">🗑️</button></div>`;
+          return `<div class="hent hent-click" data-idx="${idx}"><div style="flex:1"><div style="font-size:.85rem;font-weight:500">${esc(e.task)}</div><div style="font-size:.7rem;color:var(--text-dim)">${time} · ${durStr}</div><div style="margin-top:4px;padding-left:8px;border-left:2px solid var(--border)">${subItems}</div></div><span class="hpts hpe">+${e.points}</span><button class="hdel ibtn" data-idx="${idx}">🗑️</button></div>`;
         }
         let durInfo='';
         if(e.seconds!=null){const h=Math.floor(e.seconds/3600),m=Math.floor((e.seconds%3600)/60),s=e.seconds%60;let dur='';if(h>0)dur+=h+' hour'+(h>1?'s':'');if(m>0)dur+=(dur?' and ':'')+m+' minute'+(m>1?'s':'');if(!dur)dur=s+' second'+(s!==1?'s':'');durInfo=` · ${dur}`}
         else if(e.minutes!=null){const h=Math.floor(e.minutes/60),m=e.minutes%60;let dur='';if(h>0)dur+=h+' hour'+(h>1?'s':'');if(m>0)dur+=(dur?' and ':'')+m+' minute'+(m>1?'s':'');if(!dur)dur='0 minutes';durInfo=` · ${dur}`}
-        if(e.count!=null)durInfo+=` · ${e.count} ${e.countUnit||'units'}`;
-        return `<div class="hent hent-click" data-idx="${idx}"><div style="flex:1"><div style="font-size:.85rem;font-weight:500">${e.task}</div><div style="font-size:.7rem;color:var(--text-dim)">${time}${durInfo}</div></div><span class="hpts ${e.type==='earned'?'hpe':'hps'}">${e.type==='earned'?'+':''}${e.points}</span><button class="hedit ibtn" data-idx="${idx}">✏️</button><button class="hdel ibtn" data-idx="${idx}">🗑️</button></div>`}).join('')}
+        if(e.count!=null)durInfo+=` · ${e.count} ${esc(e.countUnit||'units')}`;
+        return `<div class="hent hent-click" data-idx="${idx}"><div style="flex:1"><div style="font-size:.85rem;font-weight:500">${esc(e.task)}</div><div style="font-size:.7rem;color:var(--text-dim)">${time}${durInfo}</div></div><span class="hpts ${e.type==='earned'?'hpe':'hps'}">${e.type==='earned'?'+':''}${e.points}</span><button class="hedit ibtn" data-idx="${idx}">✏️</button><button class="hdel ibtn" data-idx="${idx}">🗑️</button></div>`}).join('')}
     else detail='<p style="color:var(--text-dim);font-style:italic;font-size:.85rem">No activity.</p>'}
 
   const streakInfo=`<div style="display:flex;justify-content:center;gap:16px;margin-bottom:8px;font-size:.85rem;"><span>🔥 Current: <b>${D.streak||0}</b></span><span>🏆 Longest: <b>${D.longestStreak||0}</b></span></div><div style="text-align:center;margin-bottom:12px"><button id="show-recap" class="btn bmut" style="font-size:.8rem;padding:6px 12px">📊 Weekly Recap</button></div>`;
@@ -1261,7 +1412,7 @@ function rToolsMenu(){const a=T.running||T.paused,m=T.mode;return `<div class="v
 
 function rSW(){
   const sorted=[...visibleTasks()].sort((a,b)=>{const td2=((typeOrder[a.type]??9)-(typeOrder[b.type]??9));if(td2!==0)return td2;return D.tasks.indexOf(a)-D.tasks.indexOf(b)});
-  const opts=sorted.map(t=>`<option value="${t.id}">${typeE[t.type]||''}${catE[t.category]||''} ${t.name}</option>`).join('');
+  const opts=sorted.map(t=>`<option value="${t.id}">${typeE[t.type]||''}${catE[t.category]||''} ${esc(t.name)}</option>`).join('');
   const td=today();const firstSecIds=getPlanFirstSection();const planIncomplete=firstSecIds.filter(tid=>{const t=D.tasks.find(x=>x.id===tid);if(!t||t.archived)return false;
     const pi=D.plan.find(i=>i.type==='task'&&i.id===tid);
     return!planTaskDone(t,pi?.planGoal);}).length;
@@ -1292,10 +1443,10 @@ function rSW(){
     // Points info for current task
     let curPtsInfo='';
     if(curTask?.timeBased){const p=Math.floor((curSecs/60)*curTask.ptsAmount/curTask.ptsPerMinutes);curPtsInfo=`<div style="font-size:.75rem;color:var(--success-dark)">${p} pts (${curTask.ptsAmount} pts / ${curTask.ptsPerMinutes} min)</div>`}
-    else if(curTask?.countBased){curPtsInfo=`<div style="font-size:.75rem;color:var(--text-dim)">${curTask.ptsAmount} pts / ${curTask.ptsPerCount} ${curTask.countUnit}</div>`}
+    else if(curTask?.countBased){curPtsInfo=`<div style="font-size:.75rem;color:var(--text-dim)">${curTask.ptsAmount} pts / ${curTask.ptsPerCount} ${esc(curTask.countUnit)}</div>`}
     else if(curTask){curPtsInfo=`<div style="font-size:.75rem;color:var(--text-dim)">+${curTask.points||0} pts on complete${T.planFlatDone?.[curId]?' · '+T.planFlatDone[curId]+'× done':''}</div>`}
     // Goal info for current task
-    if(curTask){const cpi=D.plan.find(i=>i.type==='task'&&i.id===curId);const ceg=cpi?.planGoal||curTask.goal||null;if(ceg&&ceg.target){const td2=today();const ge=ceg.period==='total'?D.pointsHistory.filter(h=>h.taskId===curId&&h.type==='earned'):ceg.period==='hourly'?D.pointsHistory.filter(h=>h.taskId===curId&&h.type==='earned'&&h.date.slice(0,13)>=new Date().toISOString().slice(0,13)):D.pointsHistory.filter(h=>h.taskId===curId&&h.type==='earned'&&h.date.slice(0,10)===td2);const gc=curTask.timeBased?ge.reduce((s,h)=>s+(h.minutes||0),0)+Math.floor(curSecs/60):curTask.countBased?ge.reduce((s,h)=>s+(h.count||0),0)+(T.planCounts?.[curId]||0):ge.filter(h=>h.task.includes('✅')).length+(T.planFlatDone?.[curId]||0);const gu=curTask.timeBased?'min':curTask.countBased?(curTask.countUnit||'units'):'times';curPtsInfo+=`<div style="font-size:.7rem;color:${gc>=ceg.target?'var(--success-dark)':'var(--accent-dark)'}">🎯 ${gc}/${ceg.target} ${gu}${ceg.period!=='total'?' ('+ceg.period+')':''}${gc>=ceg.target?' ✓':''}</div>`}}
+    if(curTask){const cpi=D.plan.find(i=>i.type==='task'&&i.id===curId);const ceg=cpi?.planGoal||curTask.goal||null;if(ceg&&ceg.target){const td2=today();const ge=ceg.period==='total'?D.pointsHistory.filter(h=>h.taskId===curId&&h.type==='earned'):ceg.period==='hourly'?D.pointsHistory.filter(h=>h.taskId===curId&&h.type==='earned'&&h.date.slice(0,13)>=localHourStr()):D.pointsHistory.filter(h=>h.taskId===curId&&h.type==='earned'&&h.date.slice(0,10)===td2);const gc=curTask.timeBased?ge.reduce((s,h)=>s+(h.minutes||0),0)+Math.floor(curSecs/60):curTask.countBased?ge.reduce((s,h)=>s+(h.count||0),0)+(T.planCounts?.[curId]||0):ge.filter(h=>h.task.includes('✅')).length+(T.planFlatDone?.[curId]||0);const gu=curTask.timeBased?'min':curTask.countBased?(curTask.countUnit||'units'):'times';curPtsInfo+=`<div style="font-size:.7rem;color:${gc>=ceg.target?'var(--success-dark)':'var(--accent-dark)'}">🎯 ${gc}/${ceg.target} ${gu}${ceg.period!=='total'?' ('+ceg.period+')':''}${gc>=ceg.target?' ✓':''}</div>`}}
     // On deck with time/points info
     const onDeck=T.planQueue.slice(1).map(pid=>D.tasks.find(t=>t.id===pid)).filter(Boolean);
     const incompleteCount=T.planQueue.filter(tid=>!T.planCompleted?.includes(tid)).length;
@@ -1305,7 +1456,7 @@ function rSW(){
       const completed=T.planCompleted?.includes(pid);
       let info='';
       if(t.timeBased&&tSecs>0){const p=Math.floor((tSecs/60)*t.ptsAmount/t.ptsPerMinutes);info=`<span style="font-size:.7rem;color:var(--text-dim)">${tM}:${String(tS).padStart(2,'0')} · ${p}pts</span>`}
-      else if(t.countBased&&T.planCounts?.[pid]){const p=Math.floor(T.planCounts[pid]*t.ptsAmount/t.ptsPerCount);info=`<span style="font-size:.7rem;color:var(--text-dim)">${T.planCounts[pid]} ${t.countUnit} · ${p}pts</span>`}
+      else if(t.countBased&&T.planCounts?.[pid]){const p=Math.floor(T.planCounts[pid]*t.ptsAmount/t.ptsPerCount);info=`<span style="font-size:.7rem;color:var(--text-dim)">${T.planCounts[pid]} ${esc(t.countUnit)} · ${p}pts</span>`}
       else if(T.planFlatDone?.[pid]){info=`<span style="font-size:.7rem;color:var(--text-dim)">${T.planFlatDone[pid]}× · ${(T.planFlatDone[pid]*(t.points||0))}pts</span>`}
       else if(tSecs>0){info=`<span style="font-size:.7rem;color:var(--text-dim)">${tM}:${String(tS).padStart(2,'0')}</span>`}
       if(completed)info=`<span style="font-size:.7rem;color:var(--success-dark)">✅</span>${info?' '+info:''}`;
@@ -1313,7 +1464,7 @@ function rSW(){
       const opi=D.plan.find(x=>x.type==='task'&&x.id===pid);const oeg=opi?.planGoal||(t.goal&&(t.goal.period==='daily'||t.goal.period==='hourly'||t.goal.period==='total')?t.goal:null);
       let goalBadge='';
       if(oeg&&!completed){const td2=today();const oe=oeg.period==='total'?D.pointsHistory.filter(h=>h.taskId===pid&&h.type==='earned'):D.pointsHistory.filter(h=>h.taskId===pid&&h.type==='earned'&&h.date.slice(0,10)===td2);const oc=t.timeBased?oe.reduce((s,h)=>s+(h.minutes||0),0)+Math.floor(tSecs/60):t.countBased?oe.reduce((s,h)=>s+(h.count||0),0)+(T.planCounts?.[pid]||0):oe.filter(h=>h.task.includes('✅')).length+(T.planFlatDone?.[pid]||0);const ou=t.timeBased?'min':t.countBased?(t.countUnit||'units'):'times';goalBadge=`<div style="font-size:.65rem;color:var(--accent-dark)">📋 ${oc}/${oeg.target} ${ou}</div>`}
-      return `<div style="display:flex;align-items:center;gap:8px;padding:6px 8px;background:var(--card-neutral);border-radius:8px;margin-bottom:4px;${completed?'opacity:.6':''}"><div style="flex:1"><span style="font-size:.85rem;${completed?'text-decoration:line-through':''}">${t.name}</span>${goalBadge}</div>${info}<div style="display:flex;gap:2px">${!completed?`<button class="plan-q-move mbtn" data-idx="${i+1}" data-d="up">▲</button>${i<onDeck.length-1?`<button class="plan-q-move mbtn" data-idx="${i+1}" data-d="down">▼</button>`:''}`:''}</div></div>`;
+      return `<div style="display:flex;align-items:center;gap:8px;padding:6px 8px;background:var(--card-neutral);border-radius:8px;margin-bottom:4px;${completed?'opacity:.6':''}"><div style="flex:1"><span style="font-size:.85rem;${completed?'text-decoration:line-through':''}">${esc(t.name)}</span>${goalBadge}</div>${info}<div style="display:flex;gap:2px">${!completed?`<button class="plan-q-move mbtn" data-idx="${i+1}" data-d="up">▲</button>${i<onDeck.length-1?`<button class="plan-q-move mbtn" data-idx="${i+1}" data-d="down">▼</button>`:''}`:''}</div></div>`;
     }).join('');
     const showSkip=incompleteCount>1;
     // Determine button visibility: time-based with goal only shows Skip until goal met
@@ -1326,7 +1477,7 @@ function rSW(){
 
 function rPM(){
   const sorted=[...visibleTasks()].sort((a,b)=>{const td2=((typeOrder[a.type]??9)-(typeOrder[b.type]??9));if(td2!==0)return td2;return D.tasks.indexOf(a)-D.tasks.indexOf(b)});
-  const opts=sorted.map(t=>`<option value="${t.id}">${typeE[t.type]||''}${catE[t.category]||''} ${t.name}</option>`).join('');
+  const opts=sorted.map(t=>`<option value="${t.id}">${typeE[t.type]||''}${catE[t.category]||''} ${esc(t.name)}</option>`).join('');
   const td=today();const firstSecIds=getPlanFirstSection();const planIncomplete=firstSecIds.filter(tid=>{const t=D.tasks.find(x=>x.id===tid);if(!t||t.archived)return false;
     const pi=D.plan.find(i=>i.type==='task'&&i.id===tid);
     return!planTaskDone(t,pi?.planGoal);}).length;
@@ -1346,9 +1497,9 @@ function rPM(){
     const curM=Math.floor(curSecs/60),curS=curSecs%60;
     let curPtsInfo='';
     if(curTask?.timeBased){const p=Math.floor((curSecs/60)*curTask.ptsAmount/curTask.ptsPerMinutes);curPtsInfo=`<div style="font-size:.75rem;color:var(--success-dark)">${p} pts (${curTask.ptsAmount} pts / ${curTask.ptsPerMinutes} min)</div>`}
-    else if(curTask?.countBased){curPtsInfo=`<div style="font-size:.75rem;color:var(--text-dim)">${curTask.ptsAmount} pts / ${curTask.ptsPerCount} ${curTask.countUnit}</div>`}
+    else if(curTask?.countBased){curPtsInfo=`<div style="font-size:.75rem;color:var(--text-dim)">${curTask.ptsAmount} pts / ${curTask.ptsPerCount} ${esc(curTask.countUnit)}</div>`}
     else if(curTask){curPtsInfo=`<div style="font-size:.75rem;color:var(--text-dim)">+${curTask.points||0} pts on complete${T.planFlatDone?.[curId]?' · '+T.planFlatDone[curId]+'× done':''}</div>`}
-    if(curTask){const cpi=D.plan.find(i=>i.type==='task'&&i.id===curId);const ceg=cpi?.planGoal||curTask.goal||null;if(ceg&&ceg.target){const td2=today();const ge=ceg.period==='total'?D.pointsHistory.filter(h=>h.taskId===curId&&h.type==='earned'):ceg.period==='hourly'?D.pointsHistory.filter(h=>h.taskId===curId&&h.type==='earned'&&h.date.slice(0,13)>=new Date().toISOString().slice(0,13)):D.pointsHistory.filter(h=>h.taskId===curId&&h.type==='earned'&&h.date.slice(0,10)===td2);const gc=curTask.timeBased?ge.reduce((s,h)=>s+(h.minutes||0),0)+Math.floor(curSecs/60):curTask.countBased?ge.reduce((s,h)=>s+(h.count||0),0)+(T.planCounts?.[curId]||0):ge.filter(h=>h.task.includes('✅')).length+(T.planFlatDone?.[curId]||0);const gu=curTask.timeBased?'min':curTask.countBased?(curTask.countUnit||'units'):'times';curPtsInfo+=`<div style="font-size:.7rem;color:${gc>=ceg.target?'var(--success-dark)':'var(--accent-dark)'}">🎯 ${gc}/${ceg.target} ${gu}${ceg.period!=='total'?' ('+ceg.period+')':''}${gc>=ceg.target?' ✓':''}</div>`}}
+    if(curTask){const cpi=D.plan.find(i=>i.type==='task'&&i.id===curId);const ceg=cpi?.planGoal||curTask.goal||null;if(ceg&&ceg.target){const td2=today();const ge=ceg.period==='total'?D.pointsHistory.filter(h=>h.taskId===curId&&h.type==='earned'):ceg.period==='hourly'?D.pointsHistory.filter(h=>h.taskId===curId&&h.type==='earned'&&h.date.slice(0,13)>=localHourStr()):D.pointsHistory.filter(h=>h.taskId===curId&&h.type==='earned'&&h.date.slice(0,10)===td2);const gc=curTask.timeBased?ge.reduce((s,h)=>s+(h.minutes||0),0)+Math.floor(curSecs/60):curTask.countBased?ge.reduce((s,h)=>s+(h.count||0),0)+(T.planCounts?.[curId]||0):ge.filter(h=>h.task.includes('✅')).length+(T.planFlatDone?.[curId]||0);const gu=curTask.timeBased?'min':curTask.countBased?(curTask.countUnit||'units'):'times';curPtsInfo+=`<div style="font-size:.7rem;color:${gc>=ceg.target?'var(--success-dark)':'var(--accent-dark)'}">🎯 ${gc}/${ceg.target} ${gu}${ceg.period!=='total'?' ('+ceg.period+')':''}${gc>=ceg.target?' ✓':''}</div>`}}
     const onDeck=T.planQueue.slice(1).map(pid=>D.tasks.find(t=>t.id===pid)).filter(Boolean);
     const incompleteCount=T.planQueue.filter(tid=>!T.planCompleted?.includes(tid)).length;
     const onDeckCards=onDeck.map((t,i)=>{
@@ -1357,7 +1508,7 @@ function rPM(){
       const completed=T.planCompleted?.includes(pid);
       let info='';
       if(t.timeBased&&tSecs>0){const p=Math.floor((tSecs/60)*t.ptsAmount/t.ptsPerMinutes);info=`<span style="font-size:.7rem;color:var(--text-dim)">${tM}:${String(tS).padStart(2,'0')} · ${p}pts</span>`}
-      else if(t.countBased&&T.planCounts?.[pid]){const p=Math.floor(T.planCounts[pid]*t.ptsAmount/t.ptsPerCount);info=`<span style="font-size:.7rem;color:var(--text-dim)">${T.planCounts[pid]} ${t.countUnit} · ${p}pts</span>`}
+      else if(t.countBased&&T.planCounts?.[pid]){const p=Math.floor(T.planCounts[pid]*t.ptsAmount/t.ptsPerCount);info=`<span style="font-size:.7rem;color:var(--text-dim)">${T.planCounts[pid]} ${esc(t.countUnit)} · ${p}pts</span>`}
       else if(T.planFlatDone?.[pid]){info=`<span style="font-size:.7rem;color:var(--text-dim)">${T.planFlatDone[pid]}× · ${(T.planFlatDone[pid]*(t.points||0))}pts</span>`}
       else if(tSecs>0){info=`<span style="font-size:.7rem;color:var(--text-dim)">${tM}:${String(tS).padStart(2,'0')}</span>`}
       if(completed)info=`<span style="font-size:.7rem;color:var(--success-dark)">✅</span>${info?' '+info:''}`;
@@ -1365,7 +1516,7 @@ function rPM(){
       const opi=D.plan.find(x=>x.type==='task'&&x.id===pid);const oeg=opi?.planGoal||(t.goal&&(t.goal.period==='daily'||t.goal.period==='hourly'||t.goal.period==='total')?t.goal:null);
       let goalBadge='';
       if(oeg&&!completed){const td2=today();const oe=oeg.period==='total'?D.pointsHistory.filter(h=>h.taskId===pid&&h.type==='earned'):D.pointsHistory.filter(h=>h.taskId===pid&&h.type==='earned'&&h.date.slice(0,10)===td2);const oc=t.timeBased?oe.reduce((s,h)=>s+(h.minutes||0),0)+Math.floor(tSecs/60):t.countBased?oe.reduce((s,h)=>s+(h.count||0),0)+(T.planCounts?.[pid]||0):oe.filter(h=>h.task.includes('✅')).length+(T.planFlatDone?.[pid]||0);const ou=t.timeBased?'min':t.countBased?(t.countUnit||'units'):'times';goalBadge=`<div style="font-size:.65rem;color:var(--accent-dark)">📋 ${oc}/${oeg.target} ${ou}</div>`}
-      return `<div style="display:flex;align-items:center;gap:8px;padding:6px 8px;background:var(--card-neutral);border-radius:8px;margin-bottom:4px;${completed?'opacity:.6':''}"><div style="flex:1"><span style="font-size:.85rem;${completed?'text-decoration:line-through':''}">${t.name}</span>${goalBadge}</div>${info}<div style="display:flex;gap:2px">${!completed?`<button class="plan-q-move mbtn" data-idx="${i+1}" data-d="up">▲</button>${i<onDeck.length-1?`<button class="plan-q-move mbtn" data-idx="${i+1}" data-d="down">▼</button>`:''}`:''}</div></div>`;
+      return `<div style="display:flex;align-items:center;gap:8px;padding:6px 8px;background:var(--card-neutral);border-radius:8px;margin-bottom:4px;${completed?'opacity:.6':''}"><div style="flex:1"><span style="font-size:.85rem;${completed?'text-decoration:line-through':''}">${esc(t.name)}</span>${goalBadge}</div>${info}<div style="display:flex;gap:2px">${!completed?`<button class="plan-q-move mbtn" data-idx="${i+1}" data-d="up">▲</button>${i<onDeck.length-1?`<button class="plan-q-move mbtn" data-idx="${i+1}" data-d="down">▼</button>`:''}`:''}</div></div>`;
     }).join('');
     const showSkip=incompleteCount>1;
     // Determine button visibility: time-based with goal only shows Skip until goal met
@@ -1393,7 +1544,7 @@ function rPM(){
 function rTech(){
   const sorted=[...D.techniques].sort((a,b)=>{const ae=a.entries.length,be=b.entries.length;const ap=ae>0?a.entries.filter(e=>e.thumbsUp).length/ae:-1;const bp=be>0?b.entries.filter(e=>e.thumbsUp).length/be:-1;if(bp!==ap)return bp-ap;return be-ae});
   const cards=sorted.map(t=>{const tot=t.entries.length,ups=t.entries.filter(e=>e.thumbsUp).length,pct=tot>0?Math.round(ups/tot*100):0;const exp=expandedTech===t.id;
-    return `<div class="fcard" style="margin-bottom:10px"><div style="display:flex;justify-content:space-between;align-items:center;cursor:pointer" class="ttog" data-id="${t.id}"><b>${t.name}</b><div style="display:flex;align-items:center;gap:8px"><span style="font-size:.8rem;color:var(--text-dim)">${tot} uses</span><span style="font-weight:bold;color:${pct>=60?'var(--success-dark)':pct>=40?'var(--warning-dark)':'var(--danger-dark)'}">${tot>0?pct+'%':'—'}</span></div></div>${exp?`<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border)">${t.entries.map((e,ei)=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;font-size:.8rem"><span>${e.thumbsUp?'👍':'👎'} ${e.note||'(no note)'}</span><span style="display:flex;align-items:center;gap:4px"><span style="color:var(--text-dim)">${new Date(e.date.slice(0,10)+'T12:00:00').toLocaleDateString()}</span><button class="tdel-entry ibtn" data-tid="${t.id}" data-ei="${ei}" style="font-size:.7rem">✕</button></span></div>`).join('')}<div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap"><input class="tni inf" data-id="${t.id}" type="text" placeholder="Note" style="flex:1;min-width:100px;margin:0"><button class="tlog btn bsuc" data-id="${t.id}" data-u="1" style="padding:8px 12px">👍</button><button class="tlog btn bdan" data-id="${t.id}" data-u="0" style="padding:8px 12px">👎</button></div><button class="tdelt" data-id="${t.id}" style="margin-top:8px;background:none;border:none;color:var(--danger-dark);font-size:.8rem;cursor:pointer">Delete technique</button></div>`:''}</div>`}).join('');
+    return `<div class="fcard" style="margin-bottom:10px"><div style="display:flex;justify-content:space-between;align-items:center;cursor:pointer" class="ttog" data-id="${t.id}"><b>${esc(t.name)}</b><div style="display:flex;align-items:center;gap:8px"><span style="font-size:.8rem;color:var(--text-dim)">${tot} uses</span><span style="font-weight:bold;color:${pct>=60?'var(--success-dark)':pct>=40?'var(--warning-dark)':'var(--danger-dark)'}">${tot>0?pct+'%':'—'}</span></div></div>${exp?`<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border)">${t.entries.map((e,ei)=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;font-size:.8rem"><span>${e.thumbsUp?'👍':'👎'} ${esc(e.note||'(no note)')}</span><span style="display:flex;align-items:center;gap:4px"><span style="color:var(--text-dim)">${new Date(e.date.slice(0,10)+'T12:00:00').toLocaleDateString()}</span><button class="tdel-entry ibtn" data-tid="${t.id}" data-ei="${ei}" style="font-size:.7rem">✕</button></span></div>`).join('')}<div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap"><input class="tni inf" data-id="${t.id}" type="text" placeholder="Note" style="flex:1;min-width:100px;margin:0"><button class="tlog btn bsuc" data-id="${t.id}" data-u="1" style="padding:8px 12px">👍</button><button class="tlog btn bdan" data-id="${t.id}" data-u="0" style="padding:8px 12px">👎</button></div><button class="tdelt" data-id="${t.id}" style="margin-top:8px;background:none;border:none;color:var(--danger-dark);font-size:.8rem;cursor:pointer">Delete technique</button></div>`:''}</div>`}).join('');
   return `<div class="vc"><button class="tback">← Back</button><h2 style="font-size:1.1rem;color:var(--accent-dark);margin-bottom:12px">🧠 Techniques</h2>${cards||'<p style="color:var(--text-dim);font-style:italic">No techniques yet.</p>'}<div style="display:flex;gap:8px;margin-top:12px"><input id="tnn" type="text" placeholder="New technique" class="inf" autocapitalize="words" style="flex:1;margin:0"><button id="tna" class="btn bpri" style="padding:10px 16px">+</button></div></div>`}
 
 // ===== SETTINGS/DETAIL MODALS =====
@@ -1492,12 +1643,18 @@ function rAchievements(){
   return `<div class="vc"><button class="tback">← Back</button><h2 style="font-size:1.1rem;color:var(--accent-dark);margin-bottom:4px">🏅 Achievements</h2><p style="font-size:.8rem;color:var(--text-dim);margin-bottom:14px">${unlocked}/${achievements.length} unlocked</p>${hsSection}${cards}</div>`;
 }
 function getAchievements(){
-  const lifetime=D.pointsHistory.filter(h=>h.type==='earned').reduce((s,h)=>s+h.points,0);
-  const totalTasks=D.pointsHistory.filter(h=>h.type==='earned'&&h.task!=='🎯 Daily goal bonus').length;
+  // All counts run over realEntries(): a single plan session used to emit a grouped row plus a
+  // `_tracking` row and a ✅ marker per task — enough to unlock both "Speed Demon" (3 rows
+  // within an hour) and "Decathlon" (10 rows in a day) off one session.
+  const completions=realEntries().filter(h=>h.type==='earned'&&h.task!=='🎯 Daily goal bonus');
+  const lifetime=realEntries().filter(h=>h.type==='earned').reduce((s,h)=>s+h.points,0);
+  const totalTasks=completions.reduce((s,h)=>s+entryTaskCount(h),0);
   const longestStreak=D.longestStreak||0;
   let speedDemon=false;
-  const earned=D.pointsHistory.filter(h=>h.type==='earned'&&h.task!=='🎯 Daily goal bonus').sort((a,b)=>a.date.localeCompare(b.date));
+  const earned=[...completions].sort((a,b)=>a.date.localeCompare(b.date));
   for(let i=0;i<earned.length-2;i++){const t1=new Date(earned[i].date),t3=new Date(earned[i+2].date);if((t3-t1)/36e5<=1){speedDemon=true;break}}
+  const perDay={};completions.forEach(h=>{const d=h.date.slice(0,10);perDay[d]=(perDay[d]||0)+entryTaskCount(h)});
+  const bestDayCount=Math.max(0,...Object.values(perDay));
   return[
     {icon:'🌱',name:'First Task',desc:'Complete your first task',done:totalTasks>=1},
     {icon:'🔥',name:'Week Warrior',desc:'7-day streak',done:longestStreak>=7},
@@ -1508,7 +1665,7 @@ function getAchievements(){
     {icon:'🚀',name:'Rocket',desc:'2,000 lifetime points',done:lifetime>=2000},
     {icon:'👑',name:'Legend',desc:'5,000 lifetime points',done:lifetime>=5000},
     {icon:'💎',name:'Diamond',desc:'10,000 lifetime points',done:lifetime>=10000},
-    {icon:'🔟',name:'Decathlon',desc:'10 tasks in one day',done:D.pointsHistory.some((_,__,arr)=>{const days={};arr.filter(h=>h.type==='earned'&&h.task!=='🎯 Daily goal bonus').forEach(h=>{const d=h.date.slice(0,10);days[d]=(days[d]||0)+1});return Object.values(days).some(v=>v>=10)})},
+    {icon:'🔟',name:'Decathlon',desc:'10 tasks in one day',done:bestDayCount>=10},
     {icon:'📅',name:'Consistency',desc:'30-day streak',done:longestStreak>=30},
   ];
 }
@@ -1533,9 +1690,11 @@ function checkAchievements(){
     </div>`);
     return;
   }
-  // Check for level up
+  // Check for level up. Must be `== null`, not `!D._lastLevel` — level 0 is falsy, so the old
+  // guard kept overwriting the baseline while the user sat at level 0 and then compared 1 > 1,
+  // meaning the very first level-up was never celebrated.
   const lv=getLevel();
-  if(!D._lastLevel)D._lastLevel=lv.level;
+  if(D._lastLevel==null)D._lastLevel=lv.level;
   if(lv.level>D._lastLevel){
     D._lastLevel=lv.level;saveL();
     confetti();
@@ -1583,7 +1742,7 @@ function rInsights(){
   const totalCatPts=Object.values(cats).reduce((s,v)=>s+v,0);
   const catBars=totalCatPts>0?Object.entries(cats).map(([k,v])=>{const pct=Math.round(v/totalCatPts*100);const label=k==='work'?'💼 Work':k==='home'?'🏠 Home':'🌱 Growth';return `<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px"><span style="font-size:.75rem;min-width:70px;white-space:nowrap">${label}</span><div style="flex:1;height:14px;background:var(--card-neutral);border-radius:4px;overflow:hidden"><div style="height:100%;width:${pct}%;background:var(--accent);border-radius:4px"></div></div><span style="font-size:.7rem;color:var(--text-dim);min-width:30px;text-align:right">${pct}%</span></div>`}).join(''):'';
   // Productivity score: rolling 7-day avg
-  const last7=[];for(let i=0;i<7;i++){const d=new Date();d.setDate(d.getDate()-i);const ds=new Date(d.getTime()-d.getTimezoneOffset()*60000).toISOString().slice(0,10);last7.push(ptsForDay(ds))}
+  const last7=[];for(let i=0;i<7;i++){const d=new Date();d.setDate(d.getDate()-i);last7.push(ptsForDay(localDateStr(d)))}
   const avg7=Math.round(last7.reduce((s,v)=>s+v,0)/7);
   return `<div class="vc"><button class="tback">← Back</button><h2 style="font-size:1.1rem;color:var(--accent-dark);margin-bottom:16px">🔍 Insights</h2>
     <div class="fcard" style="margin-bottom:12px;text-align:center"><div style="font-size:.8rem;color:var(--text-dim);margin-bottom:4px">7-day average</div><div style="font-size:1.5rem;font-weight:bold;color:var(--accent-dark)">${avg7} pts/day</div></div>
@@ -1594,8 +1753,8 @@ function rInsights(){
 }
 // ===== METRICS =====
 function rCorrelation(){
-  const opts=D.metrics.map(m=>`<option value="${m.id}" ${corrA===m.id?'selected':''}>${m.name}</option>`).join('');
-  const opts2=D.metrics.map(m=>`<option value="${m.id}" ${corrB===m.id?'selected':''}>${m.name}</option>`).join('');
+  const opts=D.metrics.map(m=>`<option value="${m.id}" ${corrA===m.id?'selected':''}>${esc(m.name)}</option>`).join('');
+  const opts2=D.metrics.map(m=>`<option value="${m.id}" ${corrB===m.id?'selected':''}>${esc(m.name)}</option>`).join('');
   let result='';
   if(corrA&&corrB&&corrA!==corrB){
     const mA=D.metrics.find(x=>x.id===corrA),mB=D.metrics.find(x=>x.id===corrB);
@@ -1607,7 +1766,7 @@ function rCorrelation(){
       for(const day of sorted){
         const aVal=mA.entries.find(e=>e.date===day);
         if(corrLag==='same'){const bVal=mB.entries.find(e=>e.date===day);if(aVal&&bVal)pairs.push({d:day,a:aVal.val,b:bVal.val})}
-        else{const nextDay=new Date(day+'T12:00:00');nextDay.setDate(nextDay.getDate()+1);const nd=nextDay.toISOString().slice(0,10);const bVal=mB.entries.find(e=>e.date===nd);if(aVal&&bVal)pairs.push({d:day,a:aVal.val,b:bVal.val})}
+        else{const nextDay=new Date(day+'T12:00:00');nextDay.setDate(nextDay.getDate()+1);const nd=localDateStr(nextDay);const bVal=mB.entries.find(e=>e.date===nd);if(aVal&&bVal)pairs.push({d:day,a:aVal.val,b:bVal.val})}
       }
       if(pairs.length>=2){
         // Pearson correlation
@@ -1709,7 +1868,7 @@ function rMetrics(){
     }
     return `<div class="fcard" style="margin-bottom:10px;">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-        <b class="mname" data-id="${m.id}" style="cursor:pointer;">${m.name}</b>
+        <b class="mname" data-id="${m.id}" style="cursor:pointer;">${esc(m.name)}</b>
         <button class="mdel ibtn" data-id="${m.id}" style="font-size:.9rem;">🗑️</button>
       </div>
       <div style="display:flex;justify-content:space-around;">
@@ -1747,23 +1906,23 @@ function showHistDetail(idx){
       let timeInfo=st.seconds>0?`${sm}m ${ss}s`:'';
       let rateInfo='';
       if(st.timeBased&&st.ptsAmount){rateInfo=`${st.ptsAmount} pts / ${st.ptsPerMinutes} min`}
-      else if(st.countBased&&st.ptsAmount){rateInfo=`${st.ptsAmount} pts / ${st.ptsPerCount} ${st.countUnit}`}
+      else if(st.countBased&&st.ptsAmount){rateInfo=`${st.ptsAmount} pts / ${st.ptsPerCount} ${esc(st.countUnit)}`}
       else if(st.flatPoints){rateInfo=`+${st.flatPoints} pts flat`}
-      let countInfo=st.countBased&&st.count?`${st.count} ${st.countUnit}`:'';
+      let countInfo=st.countBased&&st.count?`${st.count} ${esc(st.countUnit)}`:'';
       const detailParts=[timeInfo,countInfo,rateInfo].filter(Boolean).join(' · ');
       const icon=st.completed?'✅':'⏱️';
-      return `<div style="display:flex;align-items:center;padding:8px 0;border-bottom:1px solid var(--border)"><div style="flex:1"><div style="font-size:.9rem;font-weight:500">${icon} ${st.name}</div><div style="font-size:.75rem;color:var(--text-dim)">${detailParts||'—'}</div></div><span style="font-weight:bold;color:var(--success-dark);margin-right:8px">+${st.points}</span><button class="plan-st-edit ibtn" data-idx="${idx}" data-si="${si}">✏️</button></div>`;
+      return `<div style="display:flex;align-items:center;padding:8px 0;border-bottom:1px solid var(--border)"><div style="flex:1"><div style="font-size:.9rem;font-weight:500">${icon} ${esc(st.name)}</div><div style="font-size:.75rem;color:var(--text-dim)">${detailParts||'—'}</div></div><span style="font-weight:bold;color:var(--success-dark);margin-right:8px">+${st.points}</span><button class="plan-st-edit ibtn" data-idx="${idx}" data-si="${si}">✏️</button></div>`;
     }).join('');
-    modal(`<h2 style="color:var(--accent-dark);margin-bottom:4px">${e.task}</h2><div style="font-size:.85rem;line-height:1.8;margin-bottom:12px"><div><b>Date:</b> ${dateStr}</div><div><b>Time:</b> ${time}</div><div><b>Total duration:</b> ${durStr.trim()}</div><div><b>Total points:</b> +${e.points}</div><div><b>Tasks:</b> ${completed}/${e.planTasks.length} completed</div>${e.pomo?`<div><b>Pomodoro:</b> ${e.pomo} (work/break)</div>`:''}</div><div style="margin-bottom:16px">${taskRows}</div><button data-close class="btn bmut" style="width:100%">Close</button>`);
+    modal(`<h2 style="color:var(--accent-dark);margin-bottom:4px">${esc(e.task)}</h2><div style="font-size:.85rem;line-height:1.8;margin-bottom:12px"><div><b>Date:</b> ${dateStr}</div><div><b>Time:</b> ${time}</div><div><b>Total duration:</b> ${durStr.trim()}</div><div><b>Total points:</b> +${e.points}</div><div><b>Tasks:</b> ${completed}/${e.planTasks.length} completed</div>${e.pomo?`<div><b>Pomodoro:</b> ${e.pomo} (work/break)</div>`:''}</div><div style="margin-bottom:16px">${taskRows}</div><button data-close class="btn bmut" style="width:100%">Close</button>`);
     document.querySelectorAll('.plan-st-edit').forEach(btn=>btn.addEventListener('click',()=>{
       const hi=parseInt(btn.dataset.idx),si=parseInt(btn.dataset.si);
       const entry=D.pointsHistory[hi];if(!entry||!entry.planTasks||!entry.planTasks[si])return;
       const st=entry.planTasks[si];
       const mVal=Math.floor((st.seconds||0)/60),sVal=(st.seconds||0)%60;
       let fields=`<label class="rl">Minutes</label><input id="pse-min" type="number" min="0" value="${mVal}" class="inf" style="text-align:center"><label class="rl">Seconds</label><input id="pse-sec" type="number" min="0" max="59" value="${sVal}" class="inf" style="text-align:center">`;
-      if(st.countBased)fields+=`<label class="rl">${st.countUnit||'Count'}</label><input id="pse-count" type="number" min="0" value="${st.count||0}" class="inf" style="text-align:center">`;
+      if(st.countBased)fields+=`<label class="rl">${esc(st.countUnit||'Count')}</label><input id="pse-count" type="number" min="0" value="${st.count||0}" class="inf" style="text-align:center">`;
       fields+=`<label class="rl">Points</label><input id="pse-pts" type="number" min="0" value="${st.points}" class="inf" style="text-align:center">`;
-      modal(`<h2 style="color:var(--accent-dark);margin-bottom:12px">Edit: ${st.name}</h2>${fields}<button id="pse-save" class="btn bpri" style="width:100%;margin-top:12px">Save</button><button id="pse-cancel" class="btn bmut" style="width:100%;margin-top:8px">Cancel</button>`);
+      modal(`<h2 style="color:var(--accent-dark);margin-bottom:12px">Edit: ${esc(st.name)}</h2>${fields}<button id="pse-save" class="btn bpri" style="width:100%;margin-top:12px">Save</button><button id="pse-cancel" class="btn bmut" style="width:100%;margin-top:8px">Cancel</button>`);
       document.getElementById('pse-save')?.addEventListener('click',()=>{
         const newMin=parseInt(document.getElementById('pse-min')?.value)||0;
         const newSec=parseInt(document.getElementById('pse-sec')?.value)||0;
@@ -1805,17 +1964,17 @@ function showHistDetail(idx){
   if(e.seconds!=null){const h=Math.floor(e.seconds/3600),m=Math.floor((e.seconds%3600)/60),s=e.seconds%60;let dur='';if(h>0)dur+=h+'h ';if(m>0)dur+=m+'m ';dur+=s+'s';details.push(`<div><b>Working duration:</b> ${dur.trim()}</div>`)}
   else if(e.minutes!=null){const h=Math.floor(e.minutes/60),m=e.minutes%60;let dur='';if(h>0)dur+=h+'h ';if(m>0)dur+=m+'m';details.push(`<div><b>Working duration:</b> ${dur.trim()||'0m'}</div>`)}
   if(e.breakSeconds!=null&&e.breakSeconds>0){const bh=Math.floor(e.breakSeconds/3600),bm=Math.floor((e.breakSeconds%3600)/60),bs=e.breakSeconds%60;let bdur='';if(bh>0)bdur+=bh+'h ';if(bm>0)bdur+=bm+'m ';bdur+=bs+'s';details.push(`<div><b>Break duration:</b> ${bdur.trim()}</div>`)}
-  if(e.count!=null)details.push(`<div><b>Count:</b> ${e.count} ${e.countUnit||'units'}</div>`);
+  if(e.count!=null)details.push(`<div><b>Count:</b> ${e.count} ${esc(e.countUnit||'units')}</div>`);
   if(e.category)details.push(`<div><b>Category:</b> ${e.category==='work'?'💼 Work':e.category==='home'?'🏠 Home':e.category==='growth'?'🌱 Growth':e.category}</div>`);
   if(e.taskType)details.push(`<div><b>Type:</b> ${e.taskType==='one-time'?'🎯 One-Time':e.taskType==='recurring'?'🔄 Recurring':e.taskType==='daily'?'📅 Daily':e.taskType==='evergreen'?'♾️ Evergreen':e.taskType}</div>`);
   else if(e.taskId){const tt=D.tasks.find(x=>x.id===e.taskId);if(tt)details.push(`<div><b>Type:</b> ${tt.type==='one-time'?'🎯 One-Time':tt.type==='recurring'?'🔄 Recurring':tt.type==='daily'?'📅 Daily':tt.type==='evergreen'?'♾️ Evergreen':tt.type}</div>`)}
   if(e.taskId){const allForTask=D.pointsHistory.filter(h=>h.taskId===e.taskId&&h.type==='earned');const totalMins=allForTask.reduce((s,h)=>s+(h.minutes||0),0);if(totalMins>0){const th=Math.floor(totalMins/60),tm=totalMins%60;let dur='';if(th>0)dur+=th+' hour'+(th>1?'s':'');if(tm>0)dur+=(dur?' and ':'')+tm+' minute'+(tm>1?'s':'');details.push(`<div><b>Total time invested:</b> ${dur}</div>`)}}
-  modal(`<h2 style="color:var(--accent-dark);margin-bottom:8px">${e.task}</h2><div style="font-size:.85rem;line-height:1.8;margin-bottom:16px">${details.join('')}</div><button data-close class="btn bmut" style="width:100%">Close</button>`);
+  modal(`<h2 style="color:var(--accent-dark);margin-bottom:8px">${esc(e.task)}</h2><div style="font-size:.85rem;line-height:1.8;margin-bottom:16px">${details.join('')}</div><button data-close class="btn bmut" style="width:100%">Close</button>`);
 }
 
 function showRewardEdit(rid){
   const r=D.rewards.find(x=>x.id===rid);if(!r)return;
-  modal(`<h2 style="color:var(--accent-dark);margin-bottom:12px">Edit Reward</h2><input id="ren" type="text" value="${r.name}" class="inf"><input id="rec" type="number" value="${r.cost}" min="1" class="inf"><div id="ree" class="err"></div><div style="display:flex;gap:8px;margin-top:8px"><button id="res" class="btn bpri" style="flex:1">Save</button><button id="red" class="btn bdan" style="padding:10px 16px">🗑️</button></div><button data-close class="btn bmut" style="margin-top:10px;width:100%">Close</button>`);
+  modal(`<h2 style="color:var(--accent-dark);margin-bottom:12px">Edit Reward</h2><input id="ren" type="text" value="${esc(r.name)}" class="inf"><input id="rec" type="number" value="${r.cost}" min="1" class="inf"><div id="ree" class="err"></div><div style="display:flex;gap:8px;margin-top:8px"><button id="res" class="btn bpri" style="flex:1">Save</button><button id="red" class="btn bdan" style="padding:10px 16px">🗑️</button></div><button data-close class="btn bmut" style="margin-top:10px;width:100%">Close</button>`);
   document.getElementById('res')?.addEventListener('click',()=>{const n=document.getElementById('ren').value.trim(),c=parseInt(document.getElementById('rec').value);if(!n||!Number.isInteger(c)||c<1){document.getElementById('ree').textContent='Valid name/cost needed';document.getElementById('ree').style.display='block';return}r.name=n;r.cost=c;save();closeM();render()});
   document.getElementById('red')?.addEventListener('click',()=>confirmAction('Delete this reward?',()=>{D.rewards=D.rewards.filter(x=>x.id!==rid);save();render()}));
 }
@@ -1938,18 +2097,18 @@ function showTaskDetail(tid){
   const isHidden=task.hiddenToday&&task.hiddenToday.includes(today());
   const canSkip=task.type==='daily'||task.goal;
   const skipBtn=canSkip?`<button id="eskip" class="btn ${isSkipped?'bwar':'bmut'}" style="width:100%;margin-bottom:8px;font-size:.85rem">${isSkipped?'⏭️ Skipped today (tap to undo)':'⏭️ Skip today (preserve streak)'}</button>`:'';
-  const wouldNaturallySleep=task.type==='recurring'&&recurElapsed(task)<task.cadenceDays;
+  const wouldNaturallySleep=task.type==='recurring'&&recurIsResting(task);
   const hideBtn=(wouldNaturallySleep&&!task.dueEarly)?"":`<button id="ehide" class="btn ${isHidden?'bdan':'bmut'}" style="width:100%;margin-bottom:8px;font-size:.85rem">${isHidden?'🚫 Hidden today (tap to undo)':'🚫 Not today'}</button>`;
   const backToSleepBtn=(task.dueEarly&&wouldNaturallySleep)?`<button id="eundueearly" class="btn bmut" style="width:100%;margin-bottom:8px;font-size:.85rem">😴 Back to sleep (undo due early)</button>`:'';
   const goalInfo=task.goal?`<div style="margin-bottom:14px;font-size:.85rem;color:var(--text-dim)">📊 Goal: ${task.goal.target} ${task.timeBased?'min':task.countBased?(task.countUnit||'units'):'times'} per ${task.goal.period}${goalStreak>0?` · 🔥 ${goalStreak} ${task.goal.period} streak`:''}</div>${skipBtn}${hideBtn}${backToSleepBtn}`:(task.type==='daily'?`${dailyStreak>0?`<div style="margin-bottom:14px;font-size:.85rem;color:var(--text-dim)">🔥 ${dailyStreak} day streak</div>`:''}${skipBtn}${hideBtn}${backToSleepBtn}`:`${hideBtn}${backToSleepBtn}`);
-  const isSleeping=(task.type==='recurring'&&recurElapsed(task)<task.cadenceDays&&task.dueEarly!==today())||(task.type==='daily'&&task.dueEarly!==today()&&D.pointsHistory.some(h=>h.taskId===task.id&&h.type==='earned'&&h.date.slice(0,10)===today()&&h.task.includes('✅')));
+  const isSleeping=(task.type==='recurring'&&recurIsResting(task))||(task.type==='daily'&&task.dueEarly!==today()&&D.pointsHistory.some(h=>h.taskId===task.id&&h.type==='earned'&&h.date.slice(0,10)===today()&&h.task.includes('✅')));
   const earlyBtn=isSleeping?`<button id="edone-early" class="btn bsuc" style="width:100%;margin-bottom:8px">📅 Due early</button>`:'';  const isFlatOneTime=task.type==='one-time'&&!task.timeBased&&!task.countBased;
   const hasHist=hist.length>0;
   let statsSection='';
   if(isFlatOneTime){statsSection=goalInfo}
   else if(!hasHist){statsSection=`<p style="font-size:.85rem;color:var(--text-dim);font-style:italic;margin-bottom:14px">No history yet.</p>${goalInfo}`}
   else{statsSection=`<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:14px"><div class="sbox"><div class="sn">${statToday}</div><div class="sl">Today</div></div><div class="sbox"><div class="sn">${statWeek}</div><div class="sl">This week</div></div><div class="sbox"><div class="sn">${statMonth}</div><div class="sl">This month</div></div><div class="sbox"><div class="sn">${statLife}</div><div class="sl">Lifetime</div></div></div>${goalInfo}<p style="font-size:.8rem;color:var(--text-dim);margin-bottom:14px">Last: ${ld}</p><div id="viz-container">${taskViz(task,hist)}</div>`}
-  modal(`<h2 style="color:var(--accent-dark);margin-bottom:14px">${task.name}</h2>${earlyBtn}${statsSection}<h3 style="font-size:.9rem;margin-bottom:8px">Edit</h3><input id="en" type="text" value="${task.name}" class="inf" autocapitalize="words"><select id="ety" class="inf"><option value="one-time" ${task.type==='one-time'?'selected':''}>🎯 One-Time</option><option value="recurring" ${task.type==='recurring'?'selected':''}>🔄 Recurring</option><option value="daily" ${task.type==='daily'?'selected':''}>📅 Daily</option><option value="evergreen" ${task.type==='evergreen'?'selected':''}>♾️ Evergreen</option></select><select id="ecat" class="inf"><option value="work" ${task.category==='work'?'selected':''}>💼 Work</option><option value="home" ${task.category==='home'?'selected':''}>🏠 Home</option><option value="growth" ${task.category==='growth'?'selected':''}>🌱 Growth</option></select>${rGroupSelect('egrp',task.group||'')}<div id="ecw" style="${task.type==='recurring'?'':'display:none'}"><input id="ecd" type="number" value="${task.cadenceDays||''}" min="1" placeholder="Cadence (days)" class="inf"></div><label class="chlbl"><input id="etb" type="checkbox" ${task.timeBased?'checked':''}> Time-based</label><label class="chlbl"><input id="ecb" type="checkbox" ${task.countBased?'checked':''}> Count-based</label><div id="efw" style="${task.timeBased||task.countBased?'display:none':''}"><input id="ept" type="number" value="${task.points||''}" min="0" placeholder="Points" class="inf"></div><div id="etw" style="${task.timeBased?'':'display:none'}"><div style="display:flex;gap:6px;align-items:center;margin-bottom:8px"><input id="epa" type="number" value="${task.ptsAmount||''}" min="1" class="inf" style="width:70px;margin:0;text-align:center"><span class="rl">pts per</span><input id="epp" type="number" value="${task.ptsPerMinutes||''}" min="1" class="inf" style="width:70px;margin:0;text-align:center"><span class="rl">min</span></div></div><div id="ecbw" style="${task.countBased?'':'display:none'}"><div style="display:flex;gap:6px;align-items:center;margin-bottom:8px"><input id="ecpa" type="number" value="${task.countBased?task.ptsAmount:''}" min="1" class="inf" style="width:70px;margin:0;text-align:center"><span class="rl">pts per</span><input id="ecpc" type="number" value="${task.ptsPerCount||''}" min="1" class="inf" style="width:70px;margin:0;text-align:center"><input id="ecunit" type="text" value="${task.countUnit||''}" placeholder="unit" class="inf" style="width:70px;margin:0"></div></div><div id="ee" class="err"></div>${true?`<div id="egoal-section" style="margin-bottom:8px;padding:8px;background:var(--card-neutral);border-radius:8px"><div style="font-size:.8rem;font-weight:600;margin-bottom:6px">📊 Goal (optional)</div><div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><input id="egoal-target" type="number" min="1" value="${task.goal?.target||''}" placeholder="" class="inf" style="width:70px;margin:0;text-align:center"><span class="rl">${task.timeBased?'min':task.countBased?(task.countUnit||'units'):'times'} per</span><select id="egoal-period" class="inf" style="width:auto;margin:0"><option value="">None</option><option value="hourly" ${task.goal?.period==='hourly'?'selected':''}>Hour</option><option value="daily" ${task.goal?.period==='daily'?'selected':''}>Day</option><option value="weekly" ${task.goal?.period==='weekly'?'selected':''}>Week</option><option value="monthly" ${task.goal?.period==='monthly'?'selected':''}>Month</option><option value="annually" ${task.goal?.period==='annually'?'selected':''}>Year</option><option value="total" ${task.goal?.period==='total'?'selected':''}>Total</option></select></div></div>`:''}<div style="display:flex;gap:8px;margin-top:8px"><button id="esv" data-id="${task.id}" class="btn bpri" style="flex:1">Save</button><button id="erem" data-id="${task.id}" class="btn ${task.reminder&&task.reminder.on?'bpri':'bmut'}" style="padding:10px 12px;font-size:.8rem">🔔</button><button id="epin" data-id="${task.id}" class="btn ${task.pinned?'bpri':'bmut'}" style="padding:10px 12px;font-size:.8rem">📌</button><button id="earchive" data-id="${task.id}" class="btn bmut" style="padding:10px 12px;font-size:.8rem">${task.archived?'📤':'📦'}</button><button id="edl" data-id="${task.id}" class="btn bdan" style="padding:10px 16px">🗑️</button></div><button data-close class="btn bmut" style="margin-top:10px;width:100%">Close</button>`);
+  modal(`<h2 style="color:var(--accent-dark);margin-bottom:14px">${esc(task.name)}</h2>${earlyBtn}${statsSection}<h3 style="font-size:.9rem;margin-bottom:8px">Edit</h3><input id="en" type="text" value="${esc(task.name)}" class="inf" autocapitalize="words"><select id="ety" class="inf"><option value="one-time" ${task.type==='one-time'?'selected':''}>🎯 One-Time</option><option value="recurring" ${task.type==='recurring'?'selected':''}>🔄 Recurring</option><option value="daily" ${task.type==='daily'?'selected':''}>📅 Daily</option><option value="evergreen" ${task.type==='evergreen'?'selected':''}>♾️ Evergreen</option></select><select id="ecat" class="inf"><option value="work" ${task.category==='work'?'selected':''}>💼 Work</option><option value="home" ${task.category==='home'?'selected':''}>🏠 Home</option><option value="growth" ${task.category==='growth'?'selected':''}>🌱 Growth</option></select>${rGroupSelect('egrp',task.group||'')}<div id="ecw" style="${task.type==='recurring'?'':'display:none'}"><input id="ecd" type="number" value="${task.cadenceDays||''}" min="1" placeholder="Cadence (days)" class="inf"></div><label class="chlbl"><input id="etb" type="checkbox" ${task.timeBased?'checked':''}> Time-based</label><label class="chlbl"><input id="ecb" type="checkbox" ${task.countBased?'checked':''}> Count-based</label><div id="efw" style="${task.timeBased||task.countBased?'display:none':''}"><input id="ept" type="number" value="${task.points||''}" min="0" placeholder="Points" class="inf"></div><div id="etw" style="${task.timeBased?'':'display:none'}"><div style="display:flex;gap:6px;align-items:center;margin-bottom:8px"><input id="epa" type="number" value="${task.ptsAmount||''}" min="1" class="inf" style="width:70px;margin:0;text-align:center"><span class="rl">pts per</span><input id="epp" type="number" value="${task.ptsPerMinutes||''}" min="1" class="inf" style="width:70px;margin:0;text-align:center"><span class="rl">min</span></div></div><div id="ecbw" style="${task.countBased?'':'display:none'}"><div style="display:flex;gap:6px;align-items:center;margin-bottom:8px"><input id="ecpa" type="number" value="${task.countBased?task.ptsAmount:''}" min="1" class="inf" style="width:70px;margin:0;text-align:center"><span class="rl">pts per</span><input id="ecpc" type="number" value="${task.ptsPerCount||''}" min="1" class="inf" style="width:70px;margin:0;text-align:center"><input id="ecunit" type="text" value="${esc(task.countUnit||'')}" placeholder="unit" class="inf" style="width:70px;margin:0"></div></div><div id="ee" class="err"></div>${true?`<div id="egoal-section" style="margin-bottom:8px;padding:8px;background:var(--card-neutral);border-radius:8px"><div style="font-size:.8rem;font-weight:600;margin-bottom:6px">📊 Goal (optional)</div><div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><input id="egoal-target" type="number" min="1" value="${task.goal?.target||''}" placeholder="" class="inf" style="width:70px;margin:0;text-align:center"><span class="rl">${task.timeBased?'min':task.countBased?(task.countUnit||'units'):'times'} per</span><select id="egoal-period" class="inf" style="width:auto;margin:0"><option value="">None</option><option value="hourly" ${task.goal?.period==='hourly'?'selected':''}>Hour</option><option value="daily" ${task.goal?.period==='daily'?'selected':''}>Day</option><option value="weekly" ${task.goal?.period==='weekly'?'selected':''}>Week</option><option value="monthly" ${task.goal?.period==='monthly'?'selected':''}>Month</option><option value="annually" ${task.goal?.period==='annually'?'selected':''}>Year</option><option value="total" ${task.goal?.period==='total'?'selected':''}>Total</option></select></div></div>`:''}<div style="display:flex;gap:8px;margin-top:8px"><button id="esv" data-id="${task.id}" class="btn bpri" style="flex:1">Save</button><button id="erem" data-id="${task.id}" class="btn ${task.reminder&&task.reminder.on?'bpri':'bmut'}" style="padding:10px 12px;font-size:.8rem">🔔</button><button id="epin" data-id="${task.id}" class="btn ${task.pinned?'bpri':'bmut'}" style="padding:10px 12px;font-size:.8rem">📌</button><button id="earchive" data-id="${task.id}" class="btn bmut" style="padding:10px 12px;font-size:.8rem">${task.archived?'📤':'📦'}</button><button id="edl" data-id="${task.id}" class="btn bdan" style="padding:10px 16px">🗑️</button></div><button data-close class="btn bmut" style="margin-top:10px;width:100%">Close</button>`);
   document.getElementById('edone-early')?.addEventListener('click',()=>{if(task.type==='recurring'||task.type==='daily'){task.dueEarly=today();save();closeM();render();toast('📅 Due today!')}else{closeM();completeTask(tid)}});
   document.getElementById('eskip')?.addEventListener('click',()=>{if(!task.goalSkips)task.goalSkips=[];const t=today();const idx=task.goalSkips.indexOf(t);if(idx>=0){task.goalSkips.splice(idx,1);save();render();showTaskDetail(tid);toast('↩️ Skip removed')}else{task.goalSkips.push(t);if(task.hiddenToday){const hi=task.hiddenToday.indexOf(t);if(hi>=0)task.hiddenToday.splice(hi,1)}save();render();showTaskDetail(tid);toast('⏭️ Skipped — streak preserved')}});
   document.getElementById('ehide')?.addEventListener('click',()=>{if(!task.hiddenToday)task.hiddenToday=[];const t=today();const idx=task.hiddenToday.indexOf(t);if(idx>=0){task.hiddenToday.splice(idx,1);save();render();showTaskDetail(tid);toast('↩️ Unhidden')}else{task.hiddenToday.push(t);if(task.goalSkips){const si=task.goalSkips.indexOf(t);if(si>=0)task.goalSkips.splice(si,1)}save();render();showTaskDetail(tid);toast('🚫 Hidden for today')}});
@@ -1997,7 +2156,7 @@ function readTimePicker(prefix){
 }
 function showRecurringReminderModal(task){
   const r=task.reminder||{};
-  modal(`<h2 style="color:var(--accent-dark);margin-bottom:6px">🔔 Reminders</h2><p style="font-size:.85rem;color:var(--text-dim);margin-bottom:14px">${task.name}</p><label class="chlbl"><input id="rmon" type="checkbox" ${r.on?'checked':''}> Remind me when this becomes due again</label><div id="rmfields" style="margin-top:12px;${r.on?'':'display:none'}"><label class="rl">Time</label>${timePickerHTML('rm',r.time||'19:00')}<p style="font-size:.75rem;color:var(--text-dim);margin-bottom:8px">Fires once, on the day it genuinely becomes due — not every day it's outstanding, even if you skip it or hit "Not today" a few times. Best-effort schedule, won't fire to the exact minute.</p></div><div id="rme" class="err"></div><button id="rmsv" class="btn bpri" style="width:100%;margin-top:8px">Save</button><button data-close class="btn bmut" style="margin-top:8px;width:100%">Close</button>`);
+  modal(`<h2 style="color:var(--accent-dark);margin-bottom:6px">🔔 Reminders</h2><p style="font-size:.85rem;color:var(--text-dim);margin-bottom:14px">${esc(task.name)}</p><label class="chlbl"><input id="rmon" type="checkbox" ${r.on?'checked':''}> Remind me when this becomes due again</label><div id="rmfields" style="margin-top:12px;${r.on?'':'display:none'}"><label class="rl">Time</label>${timePickerHTML('rm',r.time||'19:00')}<p style="font-size:.75rem;color:var(--text-dim);margin-bottom:8px">Fires once, on the day it genuinely becomes due — not every day it's outstanding, even if you skip it or hit "Not today" a few times. Best-effort schedule, won't fire to the exact minute.</p></div><div id="rme" class="err"></div><button id="rmsv" class="btn bpri" style="width:100%;margin-top:8px">Save</button><button data-close class="btn bmut" style="margin-top:8px;width:100%">Close</button>`);
   document.getElementById('rmon')?.addEventListener('change',e=>{document.getElementById('rmfields').style.display=e.target.checked?'':'none'});
   document.getElementById('rmsv')?.addEventListener('click',()=>{
     const on=document.getElementById('rmon').checked;
@@ -2029,7 +2188,7 @@ function showTaskReminderModal(tid){
   const domOptions=[`<option value="1" ${dayOfMonth===1?'selected':''}>First of the month</option>`,`<option value="last" ${dayOfMonth==='last'?'selected':''}>Last of the month</option>`].concat(
     Array.from({length:30},(_, i)=>i+2).map(d=>`<option value="${d}" ${dayOfMonth===d?'selected':''}>${d}</option>`)
   ).join('');
-  modal(`<h2 style="color:var(--accent-dark);margin-bottom:6px">🔔 Reminders</h2><p style="font-size:.85rem;color:var(--text-dim);margin-bottom:14px">${task.name}</p><label class="chlbl"><input id="rmon" type="checkbox" ${r.on?'checked':''}> Enable reminders for this task</label><div id="rmfields" style="margin-top:12px;${r.on?'':'display:none'}"><label class="rl">Time</label>${timePickerHTML('rm',r.time||'19:00')}<label class="rl">Frequency</label><select id="rmfreq" class="inf"><option value="daily" ${freq==='daily'?'selected':''}>Daily</option><option value="weekly" ${freq==='weekly'?'selected':''}>Weekly</option><option value="monthly" ${freq==='monthly'?'selected':''}>Monthly</option><option value="once" ${freq==='once'?'selected':''}>One-time</option></select><div id="rmdaily" style="${freq==='daily'?'':'display:none'}"><label class="rl">On these days</label>${daysRow}</div><div id="rmweekly" style="${freq==='weekly'?'':'display:none'}"><label class="rl">On</label>${weekdaySelect}</div><div id="rmmonthly" style="${freq==='monthly'?'':'display:none'}"><label class="rl">Day of month</label><select id="rmdom" class="inf">${domOptions}</select><p style="font-size:.7rem;color:var(--text-dim);margin-top:-4px;margin-bottom:8px">Months without a specific numbered day (e.g. day 31 in a 30-day month) are skipped.</p></div><div id="rmonce" style="${freq==='once'?'':'display:none'}"><label class="rl">Date</label><div style="display:flex;justify-content:center;margin-bottom:8px"><input id="rmdate" type="date" value="${r.date||today()}" class="inf" style="width:160px;margin:0"></div></div><p style="font-size:.75rem;color:var(--text-dim);margin-bottom:8px">Best-effort schedule — the check runs periodically, so it won't fire at the exact minute. Skips sending if this task's goal/requirement is already met for the current period.</p></div><div id="rme" class="err"></div><button id="rmsv" class="btn bpri" style="width:100%;margin-top:8px">Save</button><button data-close class="btn bmut" style="margin-top:8px;width:100%">Close</button>`);
+  modal(`<h2 style="color:var(--accent-dark);margin-bottom:6px">🔔 Reminders</h2><p style="font-size:.85rem;color:var(--text-dim);margin-bottom:14px">${esc(task.name)}</p><label class="chlbl"><input id="rmon" type="checkbox" ${r.on?'checked':''}> Enable reminders for this task</label><div id="rmfields" style="margin-top:12px;${r.on?'':'display:none'}"><label class="rl">Time</label>${timePickerHTML('rm',r.time||'19:00')}<label class="rl">Frequency</label><select id="rmfreq" class="inf"><option value="daily" ${freq==='daily'?'selected':''}>Daily</option><option value="weekly" ${freq==='weekly'?'selected':''}>Weekly</option><option value="monthly" ${freq==='monthly'?'selected':''}>Monthly</option><option value="once" ${freq==='once'?'selected':''}>One-time</option></select><div id="rmdaily" style="${freq==='daily'?'':'display:none'}"><label class="rl">On these days</label>${daysRow}</div><div id="rmweekly" style="${freq==='weekly'?'':'display:none'}"><label class="rl">On</label>${weekdaySelect}</div><div id="rmmonthly" style="${freq==='monthly'?'':'display:none'}"><label class="rl">Day of month</label><select id="rmdom" class="inf">${domOptions}</select><p style="font-size:.7rem;color:var(--text-dim);margin-top:-4px;margin-bottom:8px">Months without a specific numbered day (e.g. day 31 in a 30-day month) are skipped.</p></div><div id="rmonce" style="${freq==='once'?'':'display:none'}"><label class="rl">Date</label><div style="display:flex;justify-content:center;margin-bottom:8px"><input id="rmdate" type="date" value="${r.date||today()}" class="inf" style="width:160px;margin:0"></div></div><p style="font-size:.75rem;color:var(--text-dim);margin-bottom:8px">Best-effort schedule — the check runs periodically, so it won't fire at the exact minute. Skips sending if this task's goal/requirement is already met for the current period.</p></div><div id="rme" class="err"></div><button id="rmsv" class="btn bpri" style="width:100%;margin-top:8px">Save</button><button data-close class="btn bmut" style="margin-top:8px;width:100%">Close</button>`);
   document.getElementById('rmon')?.addEventListener('change',e=>{document.getElementById('rmfields').style.display=e.target.checked?'':'none'});
   document.getElementById('rmfreq')?.addEventListener('change',e=>{
     document.getElementById('rmdaily').style.display=e.target.value==='daily'?'':'none';
@@ -2074,10 +2233,15 @@ function bindTasksBody(){
   document.getElementById('rsort')?.addEventListener('click',()=>{recurSort=recurSort==='custom'?'due':'custom';render()});
   // Tasks
   document.querySelectorAll('.grp-hdr').forEach(b=>b.addEventListener('click',()=>{if(dragJustEnded)return;const g=b.dataset.grp;if(collapsedGroups.has(g))collapsedGroups.delete(g);else collapsedGroups.add(g);localStorage.setItem('pt_collapsedGroups',JSON.stringify([...collapsedGroups]));render()}));
-  document.querySelectorAll('.grp-done').forEach(b=>b.addEventListener('click',e=>{e.stopPropagation();const g=b.dataset.grp;const td=today();const gTasks=D.tasks.filter(t=>t.group===g&&!t.archived);const prevStates=gTasks.map(t=>({id:t.id,state:JSON.parse(JSON.stringify(t))}));const prevP=D.points;const prevHistLen=D.pointsHistory.length;let completed=0;gTasks.forEach(t=>{if(t.type==='evergreen'){if(t.timeBased)completeTask(t.id,t.ptsPerMinutes||1);else if(t.countBased)completeTask(t.id,1);else completeTask(t.id);completed++;return}if(t.timeBased||t.countBased)return;if(t.type==='one-time'&&!t.completed){completeTask(t.id);completed++}else if(t.type==='daily'){const doneToday=D.pointsHistory.some(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td&&h.task.includes('✅'));if(!doneToday){completeTask(t.id);completed++}}else if(t.type==='recurring'){completeTask(t.id);completed++}});if(completed>0){render();showUndo(()=>{prevStates.forEach(ps=>{const idx=D.tasks.findIndex(x=>x.id===ps.id);if(idx>=0)D.tasks[idx]=ps.state});D.points=prevP;D.pointsHistory.length=prevHistLen;saveDirty();render()})}}));
-  document.querySelectorAll('.grp-skip').forEach(b=>b.addEventListener('click',e=>{e.stopPropagation();const g=b.dataset.grp;const td=today();const gTasks=D.tasks.filter(t=>t.group===g&&!t.archived);const allSkipped=gTasks.every(t=>t.goalSkips&&t.goalSkips.includes(td));if(allSkipped){gTasks.forEach(t=>{if(t.goalSkips){const idx=t.goalSkips.indexOf(td);if(idx>=0)t.goalSkips.splice(idx,1)}});save();render();toast(`↩️ Unskipped ${g}`)}else{let count=0;gTasks.forEach(t=>{if(!t.goalSkips)t.goalSkips=[];if(!t.goalSkips.includes(td)){t.goalSkips.push(td);count++}});save();render();toast(`⏭️ Skipped ${g} (${count} tasks)`)}}));
+  document.querySelectorAll('.grp-done').forEach(b=>b.addEventListener('click',e=>{e.stopPropagation();const g=b.dataset.grp;const td=today();const gTasks=D.tasks.filter(t=>t.group===g&&!t.archived);const prevStates=gTasks.map(t=>({id:t.id,state:JSON.parse(JSON.stringify(t))}));const genAtAction=dataGen;const prevHistLen=D.pointsHistory.length;let completed=0;gTasks.forEach(t=>{if(t.type==='evergreen'){if(t.timeBased)completeTask(t.id,t.ptsPerMinutes||1);else if(t.countBased)completeTask(t.id,1);else completeTask(t.id);completed++;return}if(t.timeBased||t.countBased)return;if(t.type==='one-time'&&!t.completed){completeTask(t.id);completed++}else if(t.type==='daily'){const doneToday=D.pointsHistory.some(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td&&h.task.includes('✅'));if(!doneToday){completeTask(t.id);completed++}}else if(t.type==='recurring'){completeTask(t.id);completed++}});if(completed>0){const addedRows=D.pointsHistory.slice(prevHistLen);render();showUndo(()=>{
+      // Same guard as completeTask's undo: bail if a sync swapped D out from under us rather
+      // than truncating pointsHistory to a stale length.
+      if(dataGen!==genAtAction){toast('🔄 Synced from another device — undo cancelled');return}
+      prevStates.forEach(ps=>{const idx=D.tasks.findIndex(x=>x.id===ps.id);if(idx>=0)D.tasks[idx]=ps.state});
+      D.points-=removeHistoryRows(addedRows);saveDirty();render()})}}));
+  document.querySelectorAll('.grp-skip').forEach(b=>b.addEventListener('click',e=>{e.stopPropagation();const g=b.dataset.grp;const td=today();const gTasks=D.tasks.filter(t=>t.group===g&&!t.archived);const allSkipped=gTasks.every(t=>t.goalSkips&&t.goalSkips.includes(td));if(allSkipped){gTasks.forEach(t=>{if(t.goalSkips){const idx=t.goalSkips.indexOf(td);if(idx>=0)t.goalSkips.splice(idx,1)}});save();render();toast(`↩️ Unskipped ${esc(g)}`)}else{let count=0;gTasks.forEach(t=>{if(!t.goalSkips)t.goalSkips=[];if(!t.goalSkips.includes(td)){t.goalSkips.push(td);count++}});save();render();toast(`⏭️ Skipped ${esc(g)} (${count} tasks)`)}}));
   document.querySelectorAll('.grp-move').forEach(b=>b.addEventListener('click',e=>{e.stopPropagation()}));
-  document.querySelectorAll('.grp-hide').forEach(b=>b.addEventListener('click',e=>{e.stopPropagation();const g=b.dataset.grp;const td=today();const gTasks=D.tasks.filter(t=>t.group===g&&!t.archived);const allHidden=gTasks.every(t=>t.hiddenToday&&t.hiddenToday.includes(td));if(allHidden){gTasks.forEach(t=>{if(t.hiddenToday){const idx=t.hiddenToday.indexOf(td);if(idx>=0)t.hiddenToday.splice(idx,1)}});save();render();toast(`↩️ Unhidden ${g}`)}else{let count=0;gTasks.forEach(t=>{if(!t.hiddenToday)t.hiddenToday=[];if(!t.hiddenToday.includes(td)){t.hiddenToday.push(td);if(t.goalSkips){const si=t.goalSkips.indexOf(td);if(si>=0)t.goalSkips.splice(si,1)}count++}});save();render();toast(`🚫 Hidden ${g} (${count} tasks)`)}}));
+  document.querySelectorAll('.grp-hide').forEach(b=>b.addEventListener('click',e=>{e.stopPropagation();const g=b.dataset.grp;const td=today();const gTasks=D.tasks.filter(t=>t.group===g&&!t.archived);const allHidden=gTasks.every(t=>t.hiddenToday&&t.hiddenToday.includes(td));if(allHidden){gTasks.forEach(t=>{if(t.hiddenToday){const idx=t.hiddenToday.indexOf(td);if(idx>=0)t.hiddenToday.splice(idx,1)}});save();render();toast(`↩️ Unhidden ${esc(g)}`)}else{let count=0;gTasks.forEach(t=>{if(!t.hiddenToday)t.hiddenToday=[];if(!t.hiddenToday.includes(td)){t.hiddenToday.push(td);if(t.goalSkips){const si=t.goalSkips.indexOf(td);if(si>=0)t.goalSkips.splice(si,1)}count++}});save();render();toast(`🚫 Hidden ${esc(g)} (${count} tasks)`)}}));
   document.querySelectorAll('.cbtn').forEach(b=>b.addEventListener('click',e=>{e.stopPropagation();const t=D.tasks.find(x=>x.id===b.dataset.id);if(t&&(t.timeBased||t.countBased)){inlineMinId=t.id;render()}else completeTask(b.dataset.id)}));
   document.querySelectorAll('.task-drag-item[data-id]').forEach(el=>el.addEventListener('contextmenu',e=>{
     e.preventDefault();
@@ -2118,7 +2282,7 @@ function bindTasksBody(){
     const c=parseInt(document.getElementById('imi-count')?.value)||0;
     const pts=Math.floor(c*task.ptsAmount/task.ptsPerCount);
     const prev=document.getElementById('imi-preview');
-    if(prev)prev.textContent=c>0?`= ${pts} point${pts!==1?'s':''} [${task.ptsAmount} points per ${task.ptsPerCount} ${task.countUnit}]`:'';
+    if(prev)prev.textContent=c>0?`= ${pts} point${pts!==1?'s':''} [${task.ptsAmount} points per ${task.ptsPerCount} ${esc(task.countUnit)}]`:'';
   });
   document.querySelectorAll('.tdet').forEach(b=>b.addEventListener('click',()=>showTaskDetail(b.dataset.id)));
   document.querySelectorAll('.sldet').forEach(b=>b.addEventListener('click',()=>showTaskDetail(b.dataset.id)));
@@ -2266,7 +2430,7 @@ function bindTasksBody(){
 function bindGroceryBody(){
   document.querySelectorAll('.groc-check').forEach(b=>b.addEventListener('click',e=>{e.stopPropagation();const idx=parseInt(b.dataset.idx);const g=D.groceries[idx];if(!g)return;D.groceries.splice(idx,1);g.checked=!g.checked;if(g.checked){const firstChecked=D.groceries.findIndex(x=>x.checked);if(firstChecked>=0)D.groceries.splice(firstChecked,0,g);else D.groceries.push(g)}else{D.groceries.unshift(g)}save();render()}));
   document.querySelectorAll('.groc-item').forEach(b=>b.addEventListener('click',()=>{const idx=parseInt(b.dataset.idx);const g=D.groceries[idx];if(!g)return;
-    modal(`<div><h3 style="color:var(--accent-dark);margin-bottom:12px">Edit Item</h3><input id="groc-edit-name" type="text" value="${g.name}" class="inf" autocapitalize="words"><input id="groc-edit-notes" type="text" value="${g.notes||''}" placeholder="Notes" class="inf" style="font-size:.85rem"><div style="display:flex;gap:8px;margin-top:12px"><button id="groc-edit-save" class="btn bpri" style="flex:1">Save</button><button data-close class="btn bmut" style="flex:1">Cancel</button></div></div>`);
+    modal(`<div><h3 style="color:var(--accent-dark);margin-bottom:12px">Edit Item</h3><input id="groc-edit-name" type="text" value="${esc(g.name)}" class="inf" autocapitalize="words"><input id="groc-edit-notes" type="text" value="${esc(g.notes||'')}" placeholder="Notes" class="inf" style="font-size:.85rem"><div style="display:flex;gap:8px;margin-top:12px"><button id="groc-edit-save" class="btn bpri" style="flex:1">Save</button><button data-close class="btn bmut" style="flex:1">Cancel</button></div></div>`);
     document.getElementById('groc-edit-save')?.addEventListener('click',()=>{const n=document.getElementById('groc-edit-name')?.value.trim();if(!n)return;g.name=n;g.notes=document.getElementById('groc-edit-notes')?.value.trim()||'';save();closeM();render()})
   }));
   document.querySelectorAll('.groc-del').forEach(b=>b.addEventListener('click',e=>{e.stopPropagation();const idx=parseInt(b.dataset.idx);D.groceries.splice(idx,1);save();render()}));
@@ -2352,7 +2516,7 @@ function bindAll(){
   document.querySelectorAll('.hedit').forEach(b=>b.addEventListener('click',ev=>{ev.stopPropagation();
     const idx=parseInt(b.dataset.idx),e=D.pointsHistory[idx];if(!e)return;
     const dateVal=e.date.slice(0,10);
-    modal(`<h2 style="color:var(--accent-dark);margin-bottom:12px">Edit Entry</h2><p style="margin-bottom:8px;font-size:.9rem">${e.task}</p><label class="rl">Points</label><input id="hep" type="number" value="${e.points}" class="inf"><label class="rl" style="text-align:center;display:block">Date</label><div style="display:flex;justify-content:center"><input id="hed" type="date" value="${dateVal}" class="inf" style="text-align:center;max-width:200px;margin:0 auto"></div><button id="hes" class="btn bpri" style="width:100%;margin-top:8px">Save</button><button data-close class="btn bmut" style="width:100%;margin-top:8px">Cancel</button>`);
+    modal(`<h2 style="color:var(--accent-dark);margin-bottom:12px">Edit Entry</h2><p style="margin-bottom:8px;font-size:.9rem">${esc(e.task)}</p><label class="rl">Points</label><input id="hep" type="number" value="${e.points}" class="inf"><label class="rl" style="text-align:center;display:block">Date</label><div style="display:flex;justify-content:center"><input id="hed" type="date" value="${dateVal}" class="inf" style="text-align:center;max-width:200px;margin:0 auto"></div><button id="hes" class="btn bpri" style="width:100%;margin-top:8px">Save</button><button data-close class="btn bmut" style="width:100%;margin-top:8px">Cancel</button>`);
     document.getElementById('hes')?.addEventListener('click',()=>{const v=parseInt(document.getElementById('hep').value);if(!Number.isInteger(v))return;const newDate=document.getElementById('hed').value;const oldDay=dateVal;if(newDate&&newDate!==dateVal){if(!e.originalDate)e.originalDate=e.date;const timePart=e.date.slice(10);e.date=newDate+timePart;if(e.originalDate&&newDate===e.originalDate.slice(0,10)){e.date=e.originalDate;delete e.originalDate}}editHistEntry(idx,v);if(e.taskId){const task=D.tasks.find(t=>t.id===e.taskId);if(task&&(task.type==='recurring'||task.type==='daily')){const entries=D.pointsHistory.filter(h=>h.taskId===e.taskId&&h.type==='earned');if(entries.length>0){task.lastCompleted=entries.reduce((latest,h)=>h.date>latest?h.date:latest,entries[0].date)}else{task.lastCompleted=null}save()}}closeM();checkGoalForDay(oldDay);if(newDate&&newDate!==oldDay)checkGoalForDay(newDate)});
   }));
   // Plan
@@ -2368,7 +2532,7 @@ function bindAll(){
     const t=D.tasks.find(x=>x.id===item.id);if(!t)return;
     const pg=item.planGoal;
     const unit=t.timeBased?'min':t.countBased?(t.countUnit||'units'):'times';
-    modal(`<div style="text-align:center"><h2 style="color:var(--accent-dark);margin-bottom:8px">${t.name}</h2><p style="font-size:.85rem;color:var(--text-dim);margin-bottom:12px">Set a goal for today's plan</p><div style="display:flex;gap:6px;align-items:center;justify-content:center;margin-bottom:12px"><input id="pg-target" type="number" min="1" value="${pg?pg.target:''}" placeholder="" class="inf" style="width:70px;margin:0;text-align:center"><span class="rl">${unit}</span></div>${pg?'<button id="pg-remove" class="btn bdan" style="width:100%;margin-bottom:8px;font-size:.85rem">Remove goal</button>':''}<button id="pg-save" class="btn bpri" style="width:100%">Save</button><button data-close class="btn bmut" style="width:100%;margin-top:8px">Cancel</button></div>`);
+    modal(`<div style="text-align:center"><h2 style="color:var(--accent-dark);margin-bottom:8px">${esc(t.name)}</h2><p style="font-size:.85rem;color:var(--text-dim);margin-bottom:12px">Set a goal for today's plan</p><div style="display:flex;gap:6px;align-items:center;justify-content:center;margin-bottom:12px"><input id="pg-target" type="number" min="1" value="${pg?pg.target:''}" placeholder="" class="inf" style="width:70px;margin:0;text-align:center"><span class="rl">${unit}</span></div>${pg?'<button id="pg-remove" class="btn bdan" style="width:100%;margin-bottom:8px;font-size:.85rem">Remove goal</button>':''}<button id="pg-save" class="btn bpri" style="width:100%">Save</button><button data-close class="btn bmut" style="width:100%;margin-top:8px">Cancel</button></div>`);
     document.getElementById('pg-save')?.addEventListener('click',()=>{const target=parseInt(document.getElementById('pg-target')?.value);if(!Number.isInteger(target)||target<1)return;item.planGoal={target,unit};syncSavedPlan(Math.max(0,D.plan.slice(0,gi).filter(x=>x.type==='break').length));save();closeM();render()});
     document.getElementById('pg-remove')?.addEventListener('click',()=>{delete item.planGoal;syncSavedPlan(Math.max(0,D.plan.slice(0,gi).filter(x=>x.type==='break').length));save();closeM();render()});
   }));
@@ -2384,11 +2548,11 @@ function bindAll(){
     } else {
       if(t.type==='one-time')alreadyDone=t.completed;
       else if(t.type==='daily')alreadyDone=D.pointsHistory.some(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td&&h.task.includes('✅'));
-      else if(t.type==='recurring')alreadyDone=t.lastCompleted&&(new Date()-new Date(t.lastCompleted))/864e5<t.cadenceDays;
+      else if(t.type==='recurring')alreadyDone=recurIsResting(t); // canonical; was a raw ms diff off lastCompleted
       else if(t.type==='evergreen')alreadyDone=D.pointsHistory.some(h=>h.taskId===t.id&&h.type==='earned'&&h.date.slice(0,10)===td&&h.task.includes('✅'));
     }
     if(alreadyDone){
-      modal(`<div style="text-align:center"><h2 style="color:var(--accent-dark);margin-bottom:12px">${t.name}</h2><p style="font-size:.85rem;color:var(--text-dim);margin-bottom:12px">This task is complete.</p><button id="pdb-more" class="btn bmut" style="width:100%;margin-bottom:8px">Log more</button><button id="pdb-undo" class="btn bdan" style="width:100%;margin-bottom:8px">Undo completion</button><button data-close class="btn bmut" style="width:100%">Cancel</button></div>`);
+      modal(`<div style="text-align:center"><h2 style="color:var(--accent-dark);margin-bottom:12px">${esc(t.name)}</h2><p style="font-size:.85rem;color:var(--text-dim);margin-bottom:12px">This task is complete.</p><button id="pdb-more" class="btn bmut" style="width:100%;margin-bottom:8px">Log more</button><button id="pdb-undo" class="btn bdan" style="width:100%;margin-bottom:8px">Undo completion</button><button data-close class="btn bmut" style="width:100%">Cancel</button></div>`);
       document.getElementById('pdb-more')?.addEventListener('click',()=>{closeM();if(t.timeBased||t.countBased){inlineMinId=t.id;render()}else{completeTask(t.id)}});
       document.getElementById('pdb-undo')?.addEventListener('click',()=>{closeM();
         let idx=-1;
@@ -2578,8 +2742,8 @@ function bindAll(){
     const linkedIdx=sLinks[si];
     const linkedName=linkedIdx!=null&&D.savedPlans[linkedIdx]?D.savedPlans[linkedIdx].name:null;
     if(linkedName){
-      modal(`<div style="text-align:center"><h2 style="color:var(--accent-dark);margin-bottom:12px">💾 Save Section</h2><p style="font-size:.85rem;color:var(--text-dim);margin-bottom:12px">This section is linked to "<b>${linkedName}</b>"</p><button id="sp-update" class="btn bpri" style="width:100%;margin-bottom:8px">Update "${linkedName}"</button><button id="sp-new" class="btn bmut" style="width:100%;margin-bottom:8px">Save as new...</button><button data-close class="btn bmut" style="width:100%">Cancel</button></div>`);
-      document.getElementById('sp-update')?.addEventListener('click',()=>{D.savedPlans[linkedIdx].items=ids;save();closeM();render();toast(`💾 Updated "${linkedName}"`)});
+      modal(`<div style="text-align:center"><h2 style="color:var(--accent-dark);margin-bottom:12px">💾 Save Section</h2><p style="font-size:.85rem;color:var(--text-dim);margin-bottom:12px">This section is linked to "<b>${esc(linkedName)}</b>"</p><button id="sp-update" class="btn bpri" style="width:100%;margin-bottom:8px">Update "${esc(linkedName)}"</button><button id="sp-new" class="btn bmut" style="width:100%;margin-bottom:8px">Save as new...</button><button data-close class="btn bmut" style="width:100%">Cancel</button></div>`);
+      document.getElementById('sp-update')?.addEventListener('click',()=>{D.savedPlans[linkedIdx].items=ids;save();closeM();render();toast(`💾 Updated "${esc(linkedName)}"`)});
       document.getElementById('sp-new')?.addEventListener('click',()=>{closeM();
         modal(`<div style="text-align:center"><h2 style="color:var(--accent-dark);margin-bottom:12px">💾 Save as New</h2><input id="sp-name" type="text" placeholder="Plan name" class="inf" autocapitalize="words" style="text-align:center"><button id="sp-save" class="btn bpri" style="width:100%;margin-top:8px">Save</button><button data-close class="btn bmut" style="width:100%;margin-top:8px">Cancel</button></div>`);
         document.getElementById('sp-save')?.addEventListener('click',()=>{const name=document.getElementById('sp-name')?.value.trim();if(!name)return;D.savedPlans.push({name,items:ids,rewards:[...((D.planSectionRewards||{})[si]||[])]});const newIdx=D.savedPlans.length-1;
@@ -2610,8 +2774,8 @@ function bindAll(){
       const newSecIdx=D.plan.filter(i=>i.type==='break').length;
       D.planSectionRewards[newSecIdx]=[...(D.planSectionRewards[newSecIdx]||[]),...sp.rewards.filter(rid=>!(D.planSectionRewards[newSecIdx]||[]).includes(rid))];
     }
-    save();render();toast(`📋 Loaded "${sp.name}"`)}));
-  document.querySelectorAll('.plan-del-saved').forEach(b=>b.addEventListener('click',e=>{e.stopPropagation();const spi=parseInt(b.dataset.spi);confirmAction(`Delete saved plan "${D.savedPlans[spi]?.name}"?`,()=>{D.savedPlans.splice(spi,1);D.plan.forEach(item=>{if(item.savedPlanIdx!=null){if(item.savedPlanIdx===spi)delete item.savedPlanIdx;else if(item.savedPlanIdx>spi)item.savedPlanIdx--}});save();render()})}));
+    save();render();toast(`📋 Loaded "${esc(sp.name)}"`)}));
+  document.querySelectorAll('.plan-del-saved').forEach(b=>b.addEventListener('click',e=>{e.stopPropagation();const spi=parseInt(b.dataset.spi);confirmAction(`Delete saved plan "${esc(D.savedPlans[spi]?.name)}"?`,()=>{D.savedPlans.splice(spi,1);D.plan.forEach(item=>{if(item.savedPlanIdx!=null){if(item.savedPlanIdx===spi)delete item.savedPlanIdx;else if(item.savedPlanIdx>spi)item.savedPlanIdx--}});save();render()})}));
   document.getElementById('plan-clear')?.addEventListener('click',()=>confirmAction('Clear your entire plan?',()=>{D.plan=[];D.planSectionRewards={};localStorage.removeItem('pt_firedSec_'+today());save();render()}));
   // History entries
   document.querySelectorAll('.hent-click').forEach(b=>b.addEventListener('click',()=>showHistDetail(parseInt(b.dataset.idx))));
@@ -2648,7 +2812,7 @@ function bindAll(){
       planAdvanceToNext();if(planAllDone()){T.mode==='pm'?stopPM():stopSW()}else{render()}
     }
     if(curTask&&curTask.countBased){
-      modal(`<div style="text-align:center"><p style="margin-bottom:12px">How many <b>${curTask.countUnit||'units'}</b> did you complete on <b>${curTask.name}</b>?</p><input id="pcmp-count" type="number" min="0" placeholder="" class="inf" style="text-align:center"><div style="display:flex;gap:8px;margin-top:12px"><button id="pcmp-ok" class="btn bsuc" style="flex:1">Done!</button><button id="pcmp-cancel" class="btn bmut" style="flex:1">Cancel</button></div></div>`);
+      modal(`<div style="text-align:center"><p style="margin-bottom:12px">How many <b>${esc(curTask.countUnit||'units')}</b> did you complete on <b>${esc(curTask.name)}</b>?</p><input id="pcmp-count" type="number" min="0" placeholder="" class="inf" style="text-align:center"><div style="display:flex;gap:8px;margin-top:12px"><button id="pcmp-ok" class="btn bsuc" style="flex:1">Done!</button><button id="pcmp-cancel" class="btn bmut" style="flex:1">Cancel</button></div></div>`);
       document.getElementById('pcmp-ok')?.addEventListener('click',()=>{const cnt=parseInt(document.getElementById('pcmp-count')?.value)||0;if(cnt>0){if(!T.planCounts)T.planCounts={};T.planCounts[curId]=(T.planCounts[curId]||0)+cnt}closeM();markDoneIfGoalMet()});
       document.getElementById('pcmp-cancel')?.addEventListener('click',closeM);
     } else {markDoneIfGoalMet()}});
@@ -2705,7 +2869,7 @@ function bindAll(){
   bindGroceryBody();
   // Recipe: create
   document.getElementById('recipe-create')?.addEventListener('click',()=>{
-    const existingItems=D.groceries.map((g,i)=>`<label style="display:flex;align-items:center;gap:6px;padding:4px 0;font-size:.85rem"><input type="checkbox" class="rc-existing" data-i="${i}"> ${g.name}</label>`).join('');
+    const existingItems=D.groceries.map((g,i)=>`<label style="display:flex;align-items:center;gap:6px;padding:4px 0;font-size:.85rem"><input type="checkbox" class="rc-existing" data-i="${i}"> ${esc(g.name)}</label>`).join('');
     modal(`<div><h3 style="color:var(--accent-dark);margin-bottom:12px">📖 Create Recipe</h3><input id="rc-name" type="text" placeholder="Recipe name" class="inf" autocapitalize="words">${existingItems?`<div style="margin:8px 0;max-height:150px;overflow-y:auto;border:1px solid var(--border);border-radius:8px;padding:8px"><div style="font-size:.75rem;color:var(--text-dim);margin-bottom:4px">Select existing items:</div>${existingItems}</div>`:''}<div style="margin-top:8px"><div style="font-size:.75rem;color:var(--text-dim);margin-bottom:4px">Add new ingredients (one per line):</div><textarea id="rc-new" class="inf" rows="3" placeholder="Tomatoes\nOnions\nGarlic" style="resize:vertical"></textarea></div><div style="display:flex;gap:8px;margin-top:12px"><button id="rc-save" class="btn bsuc" style="flex:1">Save Recipe</button><button data-close class="btn bmut" style="flex:1">Cancel</button></div></div>`);
     document.getElementById('rc-save')?.addEventListener('click',()=>{
       const name=document.getElementById('rc-name')?.value.trim();if(!name){toast('Name required');return}
@@ -2720,18 +2884,18 @@ function bindAll(){
   // Recipe: view popup with ingredients + add button
   document.querySelectorAll('.recipe-view').forEach(b=>b.addEventListener('click',()=>{const ri=parseInt(b.dataset.ri);const r=D.recipes?.[ri];if(!r)return;
     const ingredientList=r.items.map(item=>{const existing=D.groceries.find(g=>g.name.toLowerCase()===item.toLowerCase());const checked=existing&&existing.checked;const inList=!!existing;const notes=existing?.notes;return `<div style="padding:4px 0;font-size:.85rem"><div style="display:flex;align-items:center;gap:8px"><span style="${checked?'text-decoration:line-through;color:var(--text-dim)':''}">${item}</span>${inList?`<span style="font-size:.65rem;color:${checked?'var(--success-dark)':'var(--accent-dark)'}">${checked?'✓ got it':'in list'}</span>`:''}</div>${notes?`<div style="font-size:.75rem;color:var(--text-dim);padding-left:12px;font-style:italic">${notes}</div>`:''}</div>`}).join('');
-    modal(`<div><h3 style="color:var(--accent-dark);margin-bottom:12px">🍳 ${r.name}</h3><div style="margin-bottom:16px;max-height:250px;overflow-y:auto">${ingredientList}</div><button id="recipe-add-all" class="btn bsuc" style="width:100%;margin-bottom:8px">🛒 Add all to grocery list</button><button data-close class="btn bmut" style="width:100%">Close</button></div>`);
+    modal(`<div><h3 style="color:var(--accent-dark);margin-bottom:12px">🍳 ${esc(r.name)}</h3><div style="margin-bottom:16px;max-height:250px;overflow-y:auto">${ingredientList}</div><button id="recipe-add-all" class="btn bsuc" style="width:100%;margin-bottom:8px">🛒 Add all to grocery list</button><button data-close class="btn bmut" style="width:100%">Close</button></div>`);
     document.getElementById('recipe-add-all')?.addEventListener('click',()=>{
       r.items.forEach(itemName=>{const existing=D.groceries.find(g=>g.name.toLowerCase()===itemName.toLowerCase());if(existing){if(existing.checked){D.groceries.splice(D.groceries.indexOf(existing),1);existing.checked=false;D.groceries.unshift(existing)}}else{D.groceries.unshift({name:itemName,notes:'',checked:false})}});
-      save();closeM();render();toast(`🍳 Added ${r.items.length} items from "${r.name}"`)
+      save();closeM();render();toast(`🍳 Added ${r.items.length} items from "${esc(r.name)}"`)
     });
   }));
-  document.querySelectorAll('.recipe-del').forEach(b=>b.addEventListener('click',e=>{e.stopPropagation();const ri=parseInt(b.dataset.ri);confirmAction(`Delete recipe "${D.recipes[ri]?.name}"?`,()=>{D.recipes.splice(ri,1);save();render()})}));
+  document.querySelectorAll('.recipe-del').forEach(b=>b.addEventListener('click',e=>{e.stopPropagation();const ri=parseInt(b.dataset.ri);confirmAction(`Delete recipe "${esc(D.recipes[ri]?.name)}"?`,()=>{D.recipes.splice(ri,1);save();render()})}));
   document.querySelectorAll('.recipe-edit').forEach(b=>b.addEventListener('click',e=>{e.stopPropagation();const ri=parseInt(b.dataset.ri);const r=D.recipes?.[ri];if(!r)return;
     const allGrocNames=new Set(D.groceries.map(g=>g.name.toLowerCase()));
     const allNames=[...new Set([...r.items,...D.groceries.map(g=>g.name)])];
-    const itemChecks=allNames.map(n=>`<label style="display:flex;align-items:center;gap:6px;padding:4px 0;font-size:.85rem"><input type="checkbox" class="re-item" data-name="${n}" ${r.items.some(x=>x.toLowerCase()===n.toLowerCase())?'checked':''}> ${n}</label>`).join('');
-    modal(`<div><h3 style="color:var(--accent-dark);margin-bottom:12px">✏️ Edit Recipe</h3><input id="re-name" type="text" value="${r.name}" class="inf" autocapitalize="words"><div style="margin:8px 0;max-height:200px;overflow-y:auto;border:1px solid var(--border);border-radius:8px;padding:8px"><div style="font-size:.75rem;color:var(--text-dim);margin-bottom:4px">Ingredients:</div>${itemChecks}</div><div style="margin-top:8px"><div style="font-size:.75rem;color:var(--text-dim);margin-bottom:4px">Add new (one per line):</div><textarea id="re-new" class="inf" rows="2" placeholder="New ingredient" style="resize:vertical"></textarea></div><div style="display:flex;gap:8px;margin-top:12px"><button id="re-save" class="btn bsuc" style="flex:1">Save</button><button data-close class="btn bmut" style="flex:1">Cancel</button></div></div>`);
+    const itemChecks=allNames.map(n=>`<label style="display:flex;align-items:center;gap:6px;padding:4px 0;font-size:.85rem"><input type="checkbox" class="re-item" data-name="${esc(n)}" ${r.items.some(x=>x.toLowerCase()===n.toLowerCase())?'checked':''}> ${esc(n)}</label>`).join('');
+    modal(`<div><h3 style="color:var(--accent-dark);margin-bottom:12px">✏️ Edit Recipe</h3><input id="re-name" type="text" value="${esc(r.name)}" class="inf" autocapitalize="words"><div style="margin:8px 0;max-height:200px;overflow-y:auto;border:1px solid var(--border);border-radius:8px;padding:8px"><div style="font-size:.75rem;color:var(--text-dim);margin-bottom:4px">Ingredients:</div>${itemChecks}</div><div style="margin-top:8px"><div style="font-size:.75rem;color:var(--text-dim);margin-bottom:4px">Add new (one per line):</div><textarea id="re-new" class="inf" rows="2" placeholder="New ingredient" style="resize:vertical"></textarea></div><div style="display:flex;gap:8px;margin-top:12px"><button id="re-save" class="btn bsuc" style="flex:1">Save</button><button data-close class="btn bmut" style="flex:1">Cancel</button></div></div>`);
     document.getElementById('re-save')?.addEventListener('click',()=>{
       const name=document.getElementById('re-name')?.value.trim();if(!name){toast('Name required');return}
       const items=[];
@@ -2819,7 +2983,7 @@ function showTimerAutocomplete(prefix,query){
   const matches=D.tasks.filter(t=>!t.archived&&t.name.toLowerCase().includes(q)).slice(0,5);
   if(!matches.length){ac.style.display='none';return}
   ac.style.display='block';
-  ac.innerHTML=matches.map(t=>`<div class="ac-item" data-id="${t.id}" style="padding:8px 12px;cursor:pointer;font-size:.85rem;border-bottom:1px solid var(--border)">${typeE[t.type]||''}${catE[t.category]||''} ${t.name}</div>`).join('');
+  ac.innerHTML=matches.map(t=>`<div class="ac-item" data-id="${t.id}" style="padding:8px 12px;cursor:pointer;font-size:.85rem;border-bottom:1px solid var(--border)">${typeE[t.type]||''}${catE[t.category]||''} ${esc(t.name)}</div>`).join('');
   ac.querySelectorAll('.ac-item').forEach(item=>{item.addEventListener('click',()=>{
     const tid=item.dataset.id;const t=D.tasks.find(x=>x.id===tid);if(!t)return;
     // Set as selected task in the dropdown
@@ -2885,7 +3049,10 @@ function startPM(){
     note:isPlan?'':document.getElementById('pmn')?.value||'',taskId:isPlan?(planQueue[0]||''):selTask,pts:p,per:r,
     planMode:isPlan,planQueue:planQueue,planTimes:isPlan?{}:{},planCurrentStart:isPlan?Date.now():0,planCompleted:[],planCounts:{},totalWork:0,totalBreak:0,awaitingAck:false};
   startTick()}
-function pause(){if(T.planMode&&T.planQueue.length>0){const curId=T.planQueue[0];const curExtra=Math.floor((Date.now()-T.planCurrentStart)/1000);T.planTimes[curId]=(T.planTimes[curId]||0)+curExtra}T.elapsed=elapsed();T.running=false;T.paused=true;clearInterval(tickInterval);render()}
+// The `T.running&&T.phase!=='break'` guard matches stopSW/stopPM/#plan-skip. Without it,
+// pausing during a pomodoro break credited the break seconds as work on the current plan task,
+// inflating both its points and its goal progress.
+function pause(){if(T.planMode&&T.planQueue.length>0&&T.running&&T.phase!=='break'){const curId=T.planQueue[0];const curExtra=Math.floor((Date.now()-T.planCurrentStart)/1000);T.planTimes[curId]=(T.planTimes[curId]||0)+curExtra}T.elapsed=elapsed();T.running=false;T.paused=true;clearInterval(tickInterval);render()}
 function resume(){T.running=true;T.paused=false;T.start=Date.now();if(T.planMode)T.planCurrentStart=Date.now();startTick()}
 
 function startTick(){
@@ -2965,9 +3132,16 @@ function stopSW(){
       totalPlanPts+=pts;
       // Mark task complete in the actual task data
       if(completed||T.planFlatDone?.[tid]){
-        if(t.type==='one-time'){t.completed=true;t.completedAt=localISO()}
-        else if(t.type==='recurring'||t.type==='daily'){t.lastCompleted=localISO()}
-        // Push a ✅ marker for completed tasks so isDoneToday/recurElapsed detects them
+        // Retire for the Tasks tab only once the TASK's own goal is met — never the plan goal.
+        // Finishing the plan's smaller commitment ends the task in the plan (planCompleted /
+        // planTaskDone), but the task itself is still only part-done for the day.
+        // Previously any single tap retired a multi-per-day goal task.
+        {const st=sleepTarget(t);
+         if(st==null||taskProgressWithSession(t,taskSecs,count,T.planFlatDone?.[tid]||0)>=st){
+           if(t.type==='one-time'){t.completed=true;t.completedAt=localISO()}
+           else if(t.type==='recurring'||t.type==='daily'){t.lastCompleted=localISO();if(t.dueEarly)delete t.dueEarly}
+         }}
+        // Push a ✅ marker per completion tap so isDoneToday/recurElapsed detects them
         {const doneCount=T.planFlatDone?.[tid]||1;for(let di=0;di<doneCount;di++){D.pointsHistory.push({date:localISO(),task:t.name+' ✅',taskId:tid,points:0,type:'earned'})}}
       }
       if(taskSecs>0||count>0||completed||T.planFlatDone?.[tid]){
@@ -2989,14 +3163,15 @@ function stopSW(){
       // Ask for count before logging
       const savedE=e,savedMins=mins,savedLabel=label,savedTaskId=taskId;
       T={running:false,paused:false,mode:null,start:null,elapsed:0,workDur:T.workDur,breakDur:T.breakDur,phase:'work',note:'',taskId:'',pts:1,per:15,planMode:false,planQueue:[],planTimes:{},planCurrentStart:0,planCompleted:[],planCounts:{},totalWork:0,totalBreak:0,awaitingAck:false};
-      modal(`<div style="text-align:center"><p style="margin-bottom:12px">How many <b>${theTask.countUnit||'units'}</b> did you complete on <b>${theTask.name}</b>?</p><input id="sw-stop-count" type="number" min="0" placeholder="0" class="inf" style="text-align:center"><div style="display:flex;gap:8px;margin-top:12px"><button id="sw-stop-count-ok" class="btn bsuc" style="flex:1">Save</button><button id="sw-stop-count-none" class="btn bmut" style="flex:1">None</button></div></div>`);
+      modal(`<div style="text-align:center"><p style="margin-bottom:12px">How many <b>${esc(theTask.countUnit||'units')}</b> did you complete on <b>${esc(theTask.name)}</b>?</p><input id="sw-stop-count" type="number" min="0" placeholder="0" class="inf" style="text-align:center"><div style="display:flex;gap:8px;margin-top:12px"><button id="sw-stop-count-ok" class="btn bsuc" style="flex:1">Save</button><button id="sw-stop-count-none" class="btn bmut" style="flex:1">None</button></div></div>`);
       const finishCount=(cnt)=>{
         const pts=cnt>0?Math.floor(cnt*theTask.ptsAmount/theTask.ptsPerCount):0;
-        if(pts>0){D.points+=pts;checkGoal()}
+        if(pts>0)D.points+=pts;
         const h={date:localISO(),task:'⏱️ '+savedLabel,taskId:savedTaskId,points:pts,type:'earned',minutes:savedMins,seconds:savedE,count:cnt,countUnit:theTask.countUnit};
-        D.pointsHistory.push(h);saveDirty();closeM();render();confetti();
+        // Push before checkGoal() — it totals the day from pointsHistory, not D.points.
+        D.pointsHistory.push(h);if(pts>0)checkGoal();saveDirty();closeM();render();confetti();
         const timeStr=savedMins>=60?`${Math.floor(savedMins/60)}h ${savedMins%60}m`:`${savedMins}m`;
-        modal(`<div style="text-align:center"><div style="font-size:2rem;margin-bottom:8px">🎉</div><h2 style="color:var(--accent-dark);margin-bottom:8px">Session Complete!</h2><p style="font-size:.85rem;margin-bottom:4px">Time: ${timeStr}</p>${cnt>0?`<p style="font-size:.85rem;margin-bottom:4px">${cnt} ${theTask.countUnit||'units'}</p>`:''}<p style="font-size:1rem;font-weight:bold;color:var(--success-dark)">+${pts} points</p><button id="sw-sum-ok" class="btn bpri" style="margin-top:12px;width:100%">Nice!</button></div>`);
+        modal(`<div style="text-align:center"><div style="font-size:2rem;margin-bottom:8px">🎉</div><h2 style="color:var(--accent-dark);margin-bottom:8px">Session Complete!</h2><p style="font-size:.85rem;margin-bottom:4px">Time: ${timeStr}</p>${cnt>0?`<p style="font-size:.85rem;margin-bottom:4px">${cnt} ${esc(theTask.countUnit||'units')}</p>`:''}<p style="font-size:1rem;font-weight:bold;color:var(--success-dark)">+${pts} points</p><button id="sw-sum-ok" class="btn bpri" style="margin-top:12px;width:100%">Nice!</button></div>`);
         document.getElementById('sw-sum-ok')?.addEventListener('click',closeM);
       };
       document.getElementById('sw-stop-count-ok')?.addEventListener('click',()=>{const cnt=parseInt(document.getElementById('sw-stop-count')?.value)||0;finishCount(cnt)});
@@ -3004,8 +3179,11 @@ function stopSW(){
       return;
     }
     const exactPts=e*T.pts/(T.per*60),pts=awardTimerPts(exactPts);
-    if(pts>0){D.points+=pts;checkGoal()}
+    if(pts>0)D.points+=pts;
     D.pointsHistory.push({date:localISO(),task:'⏱️ '+label,taskId:taskId||null,points:pts,type:'earned',minutes:mins,seconds:e,rate:`${T.pts} points per ${T.per} minute${T.per>1?'s':''}`});
+    // checkGoal() reads the ledger via ptsForDay(), so it has to run AFTER the push —
+    // otherwise this session's points aren't counted and the daily bonus never fires for it.
+    if(pts>0)checkGoal();
     saveDirty();
     totalPlanPts=pts;
   }
@@ -3021,10 +3199,10 @@ function stopSW(){
         const timeStr=tm>0?`${tm}m ${ts}s`:`${ts}s`;
         let detail=s.completed?'✅ Completed':'';
         if(s.timeBased){detail+=` · ${timeStr} · ${s.ptsAmount} pts / ${s.ptsPerMinutes} min`}
-        else if(s.countBased&&s.count){detail+=` · ${s.count} ${s.countUnit} · ${s.ptsAmount} pts / ${s.ptsPerCount} ${s.countUnit}`}
+        else if(s.countBased&&s.count){detail+=` · ${s.count} ${esc(s.countUnit)} · ${s.ptsAmount} pts / ${s.ptsPerCount} ${esc(s.countUnit)}`}
         else if(s.flatDone>1){detail+=` · ${s.flatDone}× completed`}
         else if(s.secs>0)detail+=` · ${timeStr}`;
-        return `<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--border)"><div><div style="font-size:.85rem;font-weight:500">${s.name}</div><div style="font-size:.7rem;color:var(--text-dim)">${detail}</div></div><span style="font-weight:bold;color:var(--success-dark);font-size:.85rem">+${s.pts}</span></div>`;
+        return `<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--border)"><div><div style="font-size:.85rem;font-weight:500">${esc(s.name)}</div><div style="font-size:.7rem;color:var(--text-dim)">${detail}</div></div><span style="font-weight:bold;color:var(--success-dark);font-size:.85rem">+${s.pts}</span></div>`;
       }).join('');
       modal(`<div style="text-align:center"><div style="font-size:2rem;margin-bottom:8px">🎉</div><h2 style="color:var(--accent-dark);margin-bottom:4px">Session complete!</h2><p style="font-size:.85rem;color:var(--text-dim);margin-bottom:16px">${totalTime} total · ${totalPlanPts} points earned</p></div><div style="text-align:left">${rows}</div><button data-close class="btn bpri" style="width:100%;margin-top:16px">Nice!</button>`);
       render();
@@ -3033,8 +3211,8 @@ function stopSW(){
     const linkedTask=taskId?D.tasks.find(x=>x.id===taskId):null;
     setTimeout(()=>{
       if(linkedTask&&(linkedTask.type==='one-time'||linkedTask.type==='recurring'||linkedTask.type==='daily')&&!linkedTask.completed){
-        const countInput=linkedTask.countBased?`<div style="margin-bottom:12px"><label class="rl">How many ${linkedTask.countUnit||'units'} completed?</label><input id="qc-count" type="number" min="0" placeholder="0" class="inf" style="text-align:center"></div>`:'';
-        modal(`<div style="text-align:center">${countInput}<p style="margin-bottom:12px">Mark <b>${linkedTask.name}</b> as complete?</p><div style="display:flex;gap:8px"><button id="qc-yes" class="btn bsuc" style="flex:1">Yes, done!</button><button id="qc-no" class="btn bmut" style="flex:1">Not yet</button></div></div>`);
+        const countInput=linkedTask.countBased?`<div style="margin-bottom:12px"><label class="rl">How many ${esc(linkedTask.countUnit||'units')} completed?</label><input id="qc-count" type="number" min="0" placeholder="0" class="inf" style="text-align:center"></div>`:'';
+        modal(`<div style="text-align:center">${countInput}<p style="margin-bottom:12px">Mark <b>${esc(linkedTask.name)}</b> as complete?</p><div style="display:flex;gap:8px"><button id="qc-yes" class="btn bsuc" style="flex:1">Yes, done!</button><button id="qc-no" class="btn bmut" style="flex:1">Not yet</button></div></div>`);
         document.getElementById('qc-yes')?.addEventListener('click',()=>{
           if(linkedTask.type==='one-time'){linkedTask.completed=true;linkedTask.completedAt=localISO()}
           else if(linkedTask.type==='recurring'||linkedTask.type==='daily'){linkedTask.lastCompleted=localISO()}
@@ -3087,12 +3265,16 @@ function stopPM(){
       if(p>0)D.points+=p;
       totalPlanPts+=p;
       if(completed||T.planFlatDone?.[tid]){
-        if(t.type==='one-time'){t.completed=true;t.completedAt=localISO()}
-        else if(t.type==='recurring'||t.type==='daily'){t.lastCompleted=localISO()}
-        // Push a ✅ marker for completed tasks so isDoneToday/recurElapsed detects them
-        {
-          D.pointsHistory.push({date:localISO(),task:t.name+' ✅',taskId:tid,points:0,type:'earned'});
-        }
+        // Same rule as stopSW: retire against the TASK's own goal, never the plan's.
+        {const st=sleepTarget(t);
+         if(st==null||taskProgressWithSession(t,taskSecs,count,T.planFlatDone?.[tid]||0)>=st){
+           if(t.type==='one-time'){t.completed=true;t.completedAt=localISO()}
+           else if(t.type==='recurring'||t.type==='daily'){t.lastCompleted=localISO();if(t.dueEarly)delete t.dueEarly}
+         }}
+        // One ✅ marker per completion tap so isDoneToday/recurElapsed and flat-task goal
+        // progress (which counts these rows) see every tap. Was a single marker here while
+        // stopSW looped, so pomodoro plan sessions under-reported repeat completions.
+        {const doneCount=T.planFlatDone?.[tid]||1;for(let di=0;di<doneCount;di++){D.pointsHistory.push({date:localISO(),task:t.name+' ✅',taskId:tid,points:0,type:'earned'})}}
       }
       if(taskSecs>0||count>0||completed||T.planFlatDone?.[tid]){
         // Push individual tracking entry for goal progress (0 pts to avoid double-counting)
@@ -3113,22 +3295,26 @@ function stopPM(){
     if(theTask&&theTask.countBased){
       const savedWorkSecs=workSecs,savedBreakSecs=breakSecs,savedMins=mins,savedLabel=label,savedTaskId=taskId;
       T={running:false,paused:false,mode:null,start:null,elapsed:0,workDur:T.workDur,breakDur:T.breakDur,phase:'work',note:'',taskId:'',pts:1,per:15,planMode:false,planQueue:[],planTimes:{},planCurrentStart:0,planCompleted:[],planCounts:{},totalWork:0,totalBreak:0,awaitingAck:false};
-      modal(`<div style="text-align:center"><p style="margin-bottom:12px">How many <b>${theTask.countUnit||'units'}</b> did you complete on <b>${theTask.name}</b>?</p><input id="pm-stop-count" type="number" min="0" placeholder="0" class="inf" style="text-align:center"><div style="display:flex;gap:8px;margin-top:12px"><button id="pm-stop-count-ok" class="btn bsuc" style="flex:1">Save</button><button id="pm-stop-count-none" class="btn bmut" style="flex:1">None</button></div></div>`);
+      modal(`<div style="text-align:center"><p style="margin-bottom:12px">How many <b>${esc(theTask.countUnit||'units')}</b> did you complete on <b>${esc(theTask.name)}</b>?</p><input id="pm-stop-count" type="number" min="0" placeholder="0" class="inf" style="text-align:center"><div style="display:flex;gap:8px;margin-top:12px"><button id="pm-stop-count-ok" class="btn bsuc" style="flex:1">Save</button><button id="pm-stop-count-none" class="btn bmut" style="flex:1">None</button></div></div>`);
       const finishCount=(cnt)=>{
         const pts=cnt>0?Math.floor(cnt*theTask.ptsAmount/theTask.ptsPerCount):0;
-        if(pts>0){D.points+=pts;checkGoal()}
+        if(pts>0)D.points+=pts;
         D.pointsHistory.push({date:localISO(),task:'🍅 '+savedLabel,taskId:savedTaskId,points:pts,type:'earned',minutes:savedMins,seconds:savedWorkSecs,pomo:`${T.workDur||25}/${T.breakDur||5}`,count:cnt,countUnit:theTask.countUnit,workSeconds:savedWorkSecs,breakSeconds:savedBreakSecs});
+        // Push before checkGoal() — it totals the day from pointsHistory, not D.points.
+        if(pts>0)checkGoal();
         saveDirty();closeM();render();confetti();
         const timeStr=savedMins>=60?`${Math.floor(savedMins/60)}h ${savedMins%60}m`:`${savedMins}m`;
-        modal(`<div style="text-align:center"><div style="font-size:2rem;margin-bottom:8px">🎉</div><h2 style="color:var(--accent-dark);margin-bottom:8px">Session Complete!</h2><p style="font-size:.85rem;margin-bottom:4px">Work: ${timeStr}</p>${cnt>0?`<p style="font-size:.85rem;margin-bottom:4px">${cnt} ${theTask.countUnit||'units'}</p>`:''}<p style="font-size:1rem;font-weight:bold;color:var(--success-dark)">+${pts} points</p><button id="pm-sum-ok" class="btn bpri" style="margin-top:12px;width:100%">Nice!</button></div>`);
+        modal(`<div style="text-align:center"><div style="font-size:2rem;margin-bottom:8px">🎉</div><h2 style="color:var(--accent-dark);margin-bottom:8px">Session Complete!</h2><p style="font-size:.85rem;margin-bottom:4px">Work: ${timeStr}</p>${cnt>0?`<p style="font-size:.85rem;margin-bottom:4px">${cnt} ${esc(theTask.countUnit||'units')}</p>`:''}<p style="font-size:1rem;font-weight:bold;color:var(--success-dark)">+${pts} points</p><button id="pm-sum-ok" class="btn bpri" style="margin-top:12px;width:100%">Nice!</button></div>`);
         document.getElementById('pm-sum-ok')?.addEventListener('click',closeM);
       };
       document.getElementById('pm-stop-count-ok')?.addEventListener('click',()=>{const cnt=parseInt(document.getElementById('pm-stop-count')?.value)||0;finishCount(cnt)});
       document.getElementById('pm-stop-count-none')?.addEventListener('click',()=>finishCount(0));
       return;
     }
-    if(!T.planMode){const exactPts=workSecs*T.pts/(T.per*60);pts=awardTimerPts(exactPts);if(pts>0){D.points+=pts;checkGoal()}}
+    if(!T.planMode){const exactPts=workSecs*T.pts/(T.per*60);pts=awardTimerPts(exactPts);if(pts>0)D.points+=pts}
     D.pointsHistory.push({date:localISO(),task:'🍅 '+label,taskId:taskId||null,points:pts,type:'earned',minutes:mins,seconds:workSecs,pomo:`${T.workDur}/${T.breakDur}`,rate:`${T.pts} points per ${T.per} minute${T.per>1?'s':''}`,workSeconds:workSecs,breakSeconds:breakSecs});
+    // checkGoal() sums the day from pointsHistory, so it must run after the push.
+    if(!T.planMode&&pts>0)checkGoal();
     saveDirty();
   }
   const sessionWorkSecs=T.totalWork+(T.phase==='work'?e:0);
@@ -3146,10 +3332,10 @@ function stopPM(){
         const timeStr=tm>0?`${tm}m ${ts}s`:`${ts}s`;
         let detail=s.completed?'✅ Completed':'';
         if(s.timeBased){detail+=` · ${timeStr} · ${s.ptsAmount} pts / ${s.ptsPerMinutes} min`}
-        else if(s.countBased&&s.count){detail+=` · ${s.count} ${s.countUnit} · ${s.ptsAmount} pts / ${s.ptsPerCount} ${s.countUnit}`}
+        else if(s.countBased&&s.count){detail+=` · ${s.count} ${esc(s.countUnit)} · ${s.ptsAmount} pts / ${s.ptsPerCount} ${esc(s.countUnit)}`}
         else if(s.flatDone>1){detail+=` · ${s.flatDone}× completed`}
         else if(s.seconds>0)detail+=` · ${timeStr}`;
-        return `<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--border)"><div><div style="font-size:.85rem;font-weight:500">${s.name}</div><div style="font-size:.7rem;color:var(--text-dim)">${detail}</div></div><span style="font-weight:bold;color:var(--success-dark);font-size:.85rem">+${s.points}</span></div>`;
+        return `<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--border)"><div><div style="font-size:.85rem;font-weight:500">${esc(s.name)}</div><div style="font-size:.7rem;color:var(--text-dim)">${detail}</div></div><span style="font-weight:bold;color:var(--success-dark);font-size:.85rem">+${s.points}</span></div>`;
       }).join('');
       const workTimeStr=sessionWorkSecs>=3600?`${Math.floor(sessionWorkSecs/3600)}h ${Math.floor((sessionWorkSecs%3600)/60)}m`:`${Math.floor(sessionWorkSecs/60)}m`;
       const breakTimeStr=sessionBreakSecs>0?(sessionBreakSecs>=3600?`${Math.floor(sessionBreakSecs/3600)}h ${Math.floor((sessionBreakSecs%3600)/60)}m`:`${Math.floor(sessionBreakSecs/60)}m`):'0m';
@@ -3160,8 +3346,8 @@ function stopPM(){
     const linkedTask=taskId?D.tasks.find(x=>x.id===taskId):null;
     setTimeout(()=>{
       if(linkedTask&&(linkedTask.type==='one-time'||linkedTask.type==='recurring'||linkedTask.type==='daily')&&!linkedTask.completed){
-      const countInput=linkedTask.countBased?`<div style="margin-bottom:12px"><label class="rl">How many ${linkedTask.countUnit||'units'} completed?</label><input id="qc-count" type="number" min="0" placeholder="0" class="inf" style="text-align:center"></div>`:'';
-      modal(`<div style="text-align:center">${countInput}<p style="margin-bottom:12px">Mark <b>${linkedTask.name}</b> as complete?</p><div style="display:flex;gap:8px"><button id="qc-yes" class="btn bsuc" style="flex:1">Yes, done!</button><button id="qc-no" class="btn bmut" style="flex:1">Not yet</button></div></div>`);
+      const countInput=linkedTask.countBased?`<div style="margin-bottom:12px"><label class="rl">How many ${esc(linkedTask.countUnit||'units')} completed?</label><input id="qc-count" type="number" min="0" placeholder="0" class="inf" style="text-align:center"></div>`:'';
+      modal(`<div style="text-align:center">${countInput}<p style="margin-bottom:12px">Mark <b>${esc(linkedTask.name)}</b> as complete?</p><div style="display:flex;gap:8px"><button id="qc-yes" class="btn bsuc" style="flex:1">Yes, done!</button><button id="qc-no" class="btn bmut" style="flex:1">Not yet</button></div></div>`);
       document.getElementById('qc-yes')?.addEventListener('click',()=>{
         if(linkedTask.type==='one-time'){linkedTask.completed=true;linkedTask.completedAt=localISO()}
         else if(linkedTask.type==='recurring'||linkedTask.type==='daily'){linkedTask.lastCompleted=localISO()}
@@ -3215,9 +3401,11 @@ function getWeekRecap(){
   const lastSun=new Date(now);lastSun.setDate(now.getDate()-(dayOfWeek||7));
   const lastMon=new Date(lastSun);lastMon.setDate(lastSun.getDate()-6);
   const monStr=localDateStr(lastMon),sunStr=localDateStr(lastSun);
-  const entries=D.pointsHistory.filter(h=>h.date.slice(0,10)>=monStr&&h.date.slice(0,10)<=sunStr);
+  // realEntries(): plan-session bookkeeping rows previously double-counted `mins` and
+  // multiplied the task count (one session could add ~9 rows).
+  const entries=realEntries(D.pointsHistory.filter(h=>h.date.slice(0,10)>=monStr&&h.date.slice(0,10)<=sunStr));
   const earned=entries.filter(h=>h.type==='earned').reduce((s,h)=>s+h.points,0);
-  const tasks=entries.filter(h=>h.type==='earned'&&h.task!=='🎯 Daily goal bonus').length;
+  const tasks=entries.filter(h=>h.type==='earned'&&h.task!=='🎯 Daily goal bonus').reduce((s,h)=>s+entryTaskCount(h),0);
   const mins=entries.reduce((s,h)=>s+(h.minutes||0),0);
   const goalDays=Object.keys(D.dailyGoalLog).filter(d=>d>=monStr&&d<=sunStr&&D.dailyGoalLog[d]&&D.dailyGoalLog[d]!==true).length;
   const metDays=Object.keys(D.dailyGoalLog).filter(d=>d>=monStr&&d<=sunStr&&D.dailyGoalLog[d]&&D.dailyGoalLog[d]!==true&&ptsForDay(d)>=D.dailyGoalLog[d]).length;
@@ -3271,7 +3459,7 @@ if(!D.savedPlans)D.savedPlans=[];
 {const seen=new Set();const before=D.tasks.length;D.tasks=D.tasks.filter(t=>{if(seen.has(t.id))return false;seen.add(t.id);return true});if(D.tasks.length<before){console.log("Deduped "+(before-D.tasks.length)+" task(s)");saveL()}}
 // Seed achievements tracker on first run so existing achievements don't popup
 if(!D._unlockedAchievements){D._unlockedAchievements=getAchievements().filter(a=>a.done).map(a=>a.name);saveL()}
-if(!D._lastLevel){D._lastLevel=getLevel().level;saveL()}
+if(D._lastLevel==null){D._lastLevel=getLevel().level;saveL()}
 if(D.settings.gistId&&D.settings.token){gistPull().then(()=>{updateStreak();render();showStartupModals()});startAutoSync()}
 else{render();showStartupModals()}
 function checkDayChange(){
@@ -3297,7 +3485,12 @@ function checkDayChange(){
         }
       });
     }
-    D.tasks.forEach(task=>{if(task.hiddenToday)task.hiddenToday=task.hiddenToday.filter(d=>d>=t);if(task.goalSkips)task.goalSkips=task.goalSkips.filter(d=>d>=t)});
+    // hiddenToday is only ever tested against today, so past entries are dead weight — prune them.
+    // goalSkips MUST keep its history: getGoalStreak()/getDailyStreak() read past skip dates to
+    // carry a streak across skipped periods. Pruning to >= today silently broke every streak the
+    // morning after a skip. Trim only beyond the 365-period lookback those functions use.
+    const skipCutoff=localDateStr(new Date(Date.now()-400*864e5));
+    D.tasks.forEach(task=>{if(task.hiddenToday)task.hiddenToday=task.hiddenToday.filter(d=>d>=t);if(task.goalSkips)task.goalSkips=task.goalSkips.filter(d=>d>=skipCutoff)});
     D._lastDay=t;saveL();
     return true;
   }
