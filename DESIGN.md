@@ -6,9 +6,18 @@
 
 ## 0. Picking this up again — read this first
 
-Last worked: **2026-08-21**, ending at **5.11.0**. Three consecutive audit/fix passes (5.9.0,
-5.10.0, 5.11.0); no feature work. Everything is committed to the working tree but **not yet pushed**
-— see 12.1 for the file list.
+Last worked: **2026-08-23**, ending at **5.12.0**. Four consecutive fix passes (5.9.0, 5.10.0,
+5.11.0 audits, then 5.12.0 against four bugs reported from real use). Everything is in the working
+tree but **not yet pushed** — see 12.1 for the file list.
+
+**5.12.0 was driven by user-reported bugs, and the headline lesson is 3.7:** three of the four had
+the same root cause — a plan-timer completion is invisible to any code that scans `h.taskId`,
+because the real record lives in the grouped row's `planTasks[]`, which has no `taskId`. Before
+writing any new query over `pointsHistory`, read 3.7.
+
+One reported bug is **still unresolved and needs data from the user**: a count-based daily task's
+streak reading wrong. Two real defects were found in that area but neither was confirmed as the
+symptom — see 11.2 C14/C15.
 
 **Where to start, depending on what you want to do:**
 
@@ -16,15 +25,18 @@ Last worked: **2026-08-21**, ending at **5.11.0**. Three consecutive audit/fix p
 |------|------|
 | Fix another bug from the backlog | §11, ordered by priority. §11.1 needs your decision first |
 | Touch anything that sums or counts `pointsHistory` | §3.4 — the bookkeeping-row rule. This caused 5 separate bugs |
+| Ask "when was this task last completed / was it done today?" | §3.7 — **never** scan `h.taskId` yourself, and never read `task.lastCompleted` |
 | Touch any date/period comparison | §3.6 — `localISO()` stores local time with a lying `Z` |
 | Change when a task counts as "done" | §4.4.1 — "done" is scoped per surface, not global |
 | Touch recurring cadence | §4.4.2 — one canonical definition, mirrored in the reminder script |
 | Verify a change | §12 "Verifying a change" — the headless harness recipe, including the gotchas |
 
-**Three invariants that are easy to break and were each the root of multiple bugs:**
+**Four invariants that are easy to break and were each the root of multiple bugs:**
 1. Aggregations go through `realEntries()`, never raw `D.pointsHistory` (§3.4).
 2. Period boundaries come from `localDateStr()`/`periodStartStr()`, never `toISOString()` (§3.6).
 3. An in-plan goal never writes `lastCompleted`/`completed` (§4.4.1).
+4. "Was this completed?" goes through `taskCompletedInEntry()` / `lastCompletionDateStr()`, never a
+   hand-rolled `h.taskId` scan and never `task.lastCompleted` (§3.7).
 
 **Verification is not optional for ledger/sync/timer changes.** There's no test runner, but the
 inline script runs headlessly in ~40 lines of Node — recipe in §12. Every fix in 5.9.0–5.11.0 was
@@ -40,7 +52,7 @@ Single-file PWA (`index.html` + `sw.js`) for personal productivity tracking. Van
 - **GitHub repo**: https://github.com/isabella-bianchi18/productivity-tracker
 - **GitHub Pages**: https://isabella-bianchi18.github.io/productivity-tracker/
 - **Local dev**: User opens `file:///...productivity-tracker/index.html` directly in browser.
-- **Current version**: 5.11.0 (APP_VERSION in index.html, CACHE_VERSION in sw.js — always bumped together)
+- **Current version**: 5.12.0 (APP_VERSION in index.html, CACHE_VERSION in sw.js — always bumped together)
 
 ---
 
@@ -106,6 +118,7 @@ them, so every read must tolerate `undefined`:
 | `_unlockedAchievements` | `checkAchievements()` | Seeded on first run |
 | `_lastLevel` | `checkAchievements()` | Guard must be `== null`, not `!x` — level 0 is falsy |
 | `_highScoreShown` | `checkHighScores()` | `{date_label: true}`, grows unbounded |
+| `_planFired` | `setPlanFiredToday()` | `{today: [sectionIdx]}` — plan sections already paid a bonus. **Must stay in `D`** (it gates points, so it has to sync); only today's key is kept |
 | `_lastRecap` | `showWeekRecap(true)` | Monday-of-week string |
 | `longestStreak` | `updateStreak()` | Recomputed from a 365-day window |
 | `settings.timezone` | either reminder modal | IANA name; `check-reminders.js` needs it |
@@ -250,6 +263,61 @@ timezone offset.
 `scripts/check-reminders.js` solves the same problem differently — it is timezone-explicit via
 `Intl.DateTimeFormat` and `D.settings.timezone`, because it runs on a UTC GitHub runner. Keep the
 two in agreement conceptually; they will never share code.
+
+### 3.7 "Was this task completed?" — **the single most repeated bug in this codebase**
+
+A plan-timer completion is written to the ledger in **two** places, and only one of them carries a
+`taskId`:
+
+| Row | Has `taskId`? | Points | Notes |
+|---|---|---|---|
+| `<task> ✅` marker | yes | **0** | one per completion tap |
+| grouped `⏱️ Plan` / `🍅 Plan` row's `planTasks[i].completed` | **no** | real | the authoritative record |
+
+So both of these are wrong, and both shipped:
+- scanning `h.taskId` only → misses the grouped row;
+- **also** filtering out 0-point ✅ rows (which `realEntries()`/`isBookkeepingEntry()` correctly do,
+  §3.4) → now misses *both*, and the task looks like it was never completed at all.
+
+`showTaskDetail` managed to do exactly that: it stripped 0-point ✅ markers, then `taskViz`'s
+calendar filtered the remainder **for** ✅ — mathematically guaranteed empty. A task completed in the
+plan every day showed "No history yet.", `—` in all four stat boxes, and "never completed" on its
+card, while the *same* task was correctly sleeping because `recurElapsed()` did look inside
+`planTasks`.
+
+Reading `task.lastCompleted` instead is not an escape hatch. It is legitimately absent by design
+(an in-plan goal never writes it, §4.4.1; flat daily tasks withhold it until the goal is met;
+evergreen never receives it from the plan timer), and startup orphan reconciliation (§6.7) used to
+actively **delete** it for plan completions — after which the card fell back to a `taskId` scan,
+found nothing, and printed "never completed".
+
+**Use these. Do not hand-roll the query.**
+
+```javascript
+taskCompletedInEntry(t, h)   // is this ONE ledger row a completion of t? (marker OR planTasks)
+lastCompletionDateStr(t)     // 'YYYY-MM-DD' of the newest completion, or null
+completionDaysFor(t)         // Set of every 'YYYY-MM-DD' the task was completed
+taskHistFor(tid)             // the task's history for its detail view (see below)
+```
+
+`lastCompletionDateStr()` takes a true **max by date**, not `.pop()` / `hist[hist.length-1]`. The
+history-edit modal can change an entry's date without re-sorting `pointsHistory`, so array position
+is not chronological order.
+
+`taskHistFor(tid)` returns real standalone rows (bookkeeping excluded, as before) **plus a synthetic
+row per matching `planTasks` entry**. A plan session therefore contributes exactly once, so minutes
+and counts are not double counted — verified by assertion, since getting this wrong reintroduces the
+§3.4 doubling from the other direction.
+
+`recurElapsed()` is now just `lastCompletionDateStr()` plus a day-count, and
+`scripts/check-reminders.js` mirrors the predicate as its own `taskCompletedInEntry()` —
+**keep the two in sync** (§8).
+
+**Known remaining gap:** a task worth **0 points** produces rows that satisfy `isBookkeepingEntry()`
+(`points === 0 && task includes ✅`), so even its *direct, non-plan* completions are discarded by
+every `realEntries()` surface, and it reads "No history yet." forever. A clean discriminator exists
+— `completeTask` always sets `category` and `taskType`, the plan-timer markers never do — but it was
+left alone in 5.12.0 because it changes `realEntries()` globally. See 11.2 C16.
 
 ## 4. Core Architecture
 
@@ -540,9 +608,12 @@ from a bookkeeping row. Use `_tracking`.
 - **Inconsistency (open)**: the `planTasks` branch recomputes `lastCompleted` from *all* earned entries, not just ✅ ones, so deleting a plan session can leave a task asleep on the strength of a partial "worked on it" row. Startup orphan reconciliation (6.7) papers over it on the next load.
 
 ### 6.7 Orphan Reconciliation (startup)
-- On load: scans all tasks. If `lastCompleted` points to a date with no matching ✅ entry in history → clears it.
-- If one-time `completed=true` but no ✅ entry in history → resets.
+- On load: scans all tasks. If `lastCompleted` points to a date with no completion in history → clears it.
+- If one-time `completed=true` but no completion in history → resets.
 - Prevents stale completion flags from old undo bugs.
+- **Both checks go through `taskCompletedInEntry()` (§3.7).** They used to match standalone ✅ rows
+  only, so they actively deleted valid `lastCompleted` values for plan-timer completions — which is
+  what then made the card say "never completed". Fixed in 5.12.0 (was C13).
 
 ---
 
@@ -565,6 +636,16 @@ from a bookkeeping row. Use `_tracking`.
 - **De-dupe**: `reminder.lastSent` (a date string) is written back to the Gist after a send. That write-back is the cause of open issue **D1** (11.1).
 - The script is timezone-explicit (`Intl.DateTimeFormat` + `settings.timezone`) because it runs on a UTC runner, whereas the app relies on `localISO()`. Different mechanisms, same intent — see 3.6.
 - **Its recurring due-date reckoning duplicates the app's** — see 4.4.2. Keep `lastCompletionDateStr()` / `computeRecurringDueDateStr()` in sync with `recurElapsed()` / `recurIsDue()`.
+- **`isTaskDone()` decides whether to stay quiet because you already did the thing.** It goes through
+  the script's own `taskCompletedInEntry()` / `completedOnDate()`, mirroring §3.7 — a completion done
+  in the plan timer counts. **Evergreen is handled there too**; it used to fall through to
+  `return false` ("no done state, never skip"), so an evergreen task with a daily reminder nagged
+  every single day no matter how often it was actually completed. Fixed in 5.12.0.
+- The time gate is `if (parts.hhmm < r.time) return false` — strictly backward-looking, so the script
+  **cannot** fire before the scheduled time in the configured timezone. If a reminder appears early,
+  suspect the timezone (`settings.timezone`, silently defaulting to `'UTC'`) or push **delivery**
+  latency on a sleeping phone, not the schedule. The run log prints `Checking reminders for <date>
+  <hhmm> (<tz>)`, which settles it in one line.
 - Safe to `require()` for testing — the entry point is guarded by `require.main === module`. Needs a `web-push` stub when `node_modules` isn't installed (§12).
 
 ---
@@ -609,14 +690,18 @@ deliberately left alone. Roughly in the order worth fixing.
 | # | Issue |
 |---|---|
 | **D1** | **`check-reminders.js` write-back can clobber unpushed local edits.** It sets `_lastModified = Date.now()` whenever it sends, and `gistPull` accepts any newer remote without consulting `localDirty` — so every 15 minutes there is a window where `lastSent` bookkeeping discards local work. Preserving the original `_lastModified` fixes the data loss (the script only touches `reminder.lastSent`), but then `lastSent` never reaches your devices, risking a duplicate notification. Other options: keep reminder state in a separate Gist file excluded from conflict detection, or have the client merge `lastSent` on pull rather than replacing `D` wholesale. |
-| **D2** | **Should an in-plan goal be settable on a task that has no goal of its own?** Today it can be. Per 4.4.1 it correctly has no effect on the Tasks tab, but it does gate the plan card and the timer queue. Confirm that's intended, or hide the option for goal-less tasks. |
+**D2 is resolved (2026-08-23): yes, an in-plan goal may be set on a task with no goal of its own.**
+Confirmed by the user. It has no effect on the Tasks tab (4.4.1) and only gates the plan card and the
+timer queue. No code change was needed — this was already the behaviour. Do not "fix" it.
 
 ### 11.2 Correctness bugs
 
 | # | Issue |
 |---|---|
 | **C1** | **Editing a plan sub-task doesn't update the row that drives goals.** `plan-st-edit` updates `planTasks[i]`, the grouped totals, and `D.points`, but never the sibling `_tracking` row that `getGoalProgress` reads. The history detail and the goal bar diverge permanently after an edit. |
-| **C2** | **Plan-timer completions never appear on the task's own calendar.** `showTaskDetail` builds `hist` excluding 0-point ✅ markers, then `taskViz`'s calendar branch filters that list *for* ✅ — guaranteed empty for plan completions. |
+| **C14** | **`getGoalProgress` counts a live plan session; `getGoalStreak` can't.** Line ~269 adds `T.planCounts[id]` / `T.planTimes[id]` / `T.planFlatDone[id]`; the streak's inner `met()` has no equivalent term, because those live in memory until `stopSW`/`stopPM` flushes them. So mid-session a card reads `30/30 · 🔥4` when the streak should be 5 — and if the session is never stopped (tab closed, PWA killed) the counts never reach `pointsHistory` at all, so that day is a permanent miss and the streak breaks. Fix by giving both a single shared `periodProgress(task, periodStart)`. **Suspected cause of the user's count-based streak report; unconfirmed.** |
+| **C15** | **A 0-point count log is indistinguishable from a bookkeeping row.** `completeTask` writes one row that is both the ✅ marker and the `count` carrier, with `points = floor(count*ptsAmount/ptsPerCount)`. A coarse rate (1 pt per 10 reps, logging 5) gives 0 points, which matches `isBookkeepingEntry`. The goal bar and streak still count it (they read raw history) but every `realEntries()` surface drops it, so 🔥 and the stats disagree about the same day. Same family as C16. |
+| **C16** | **A task worth 0 points reads "No history yet." forever** — its `completeTask` rows satisfy `isBookkeepingEntry` even for direct, non-plan completions (§3.7). Discriminator available: `completeTask` always sets `category`/`taskType`, plan-timer markers never do. Deferred in 5.12.0 because it changes `realEntries()` globally. |
 | **C3** | **`deleteHistEntry`'s `planTasks` branch** recomputes `lastCompleted` from *all* earned rows, not just ✅ ones (6.6), so deleting a plan session can leave a task asleep on the strength of a partial "worked on it" row. Self-heals at next startup via 6.7, which is itself a smell. |
 | **C4** | **Insights "Category Breakdown" ignores all timer points.** It sums `h.category`, which only `completeTask` and Quick Log set. `entryFieldForCat()` (3.5) now exists and would fix it. |
 | **C5** | **Duplicate DOM ids when one task sits in two plan sections.** `plan-load`/`plan-sec-add` don't check other sections, so both cards render `id="imi-count"` / `id="ims-work"` / `id="imi-preview"`, and `getElementById` picks the first — the wrong card responds. Either dedupe on add, or key the inline form by `data-gi`. |
@@ -627,14 +712,14 @@ deliberately left alone. Roughly in the order worth fixing.
 | **C10** | **Post-drag click leaks** on `.tdet` / `.groc-item` / `.sldet` / `.plan-goal-tap` — none check `dragJustEnded`, so a short desktop drag opens the detail modal on drop. See 4.5. |
 | **C11** | **Pinned-section drag reorders unrelated tasks** by splicing all pinned tasks into `D.tasks` at the first pinned index. |
 | **C12** | **`stopPM` logs nothing** when stopped during a break with `T.totalWork === 0`. |
-| **C13** | **Orphan reconciliation (6.7) may still clear `lastCompleted` for plan-timer completions** — it only matches standalone ✅ rows, not `planTasks` entries. Less likely now that markers are logged per tap, but the gap remains. |
+| **C17** | **`plan-sec-move` doesn't reset `D._planFired`.** Section indices shift but the fired list doesn't, so after reordering sections a stale index can suppress a real section's popup **or** let an already-paid section pay its bonus a second time. This mattered less when the tracker only gated a popup; as of 5.12.0 it gates points. Same index-fragility family as C8 (which `plan-sec-move` also ignores). |
 
 ### 11.3 Structural / performance
 
 | # | Issue |
 |---|---|
 | **S1** | **`getGoalStreak` is O(365 × history) and `rCard` calls it ~3× per card.** With ~40 tasks and a few thousand history rows this dominates every `render()`. Memoise per render pass. |
-| **S2** | **Unbounded localStorage growth**: one `pt_firedSec_<date>` key per day, never cleaned up; `D._highScoreShown` likewise. |
+| **S2** | **Unbounded growth**: `D._highScoreShown` grows forever. (The `pt_firedSec_<date>` localStorage keys are gone as of 5.12.0 — that state moved into `D._planFired`, which self-prunes to today. Old keys are left behind on existing devices but are never read again.) |
 | **S3** | **`deleteTask`/archive leave orphan entries** in `D.plan`, `savedPlans`, `planSectionRewards`. Rendering tolerates them; the arrays just grow. |
 | **S4** | **Blank screen on cold start with sync enabled** — `render()` only runs inside `gistPull().then(...)`, so a slow network shows nothing at all. |
 | **S5** | **3s auto-sync poll with `If-None-Match:''`** deliberately defeats the API cache: ~1,200 requests/hour per open tab against GitHub's 5,000/hour. |
@@ -671,17 +756,50 @@ const code = fs.readFileSync('index.html','utf8').match(/<script>([\s\S]*?)<\/sc
 ```
 
 To exercise it, run that code through `vm.runInContext` with a stub `document` / `localStorage` /
-`navigator`. Two gotchas:
+`navigator`. Gotchas, in the order you'll hit them:
 - `D`, `T`, `view` etc. are top-level `let` bindings, so they are **not** properties of the VM
   global. Append a small bridge (`globalThis.__b = {getD:()=>D, setT:v=>{T=v}, ...}`) to reach them.
   `function` declarations *are* reachable directly.
 - Stub `navigator` keys must be **absent**, not `undefined` — the app tests
   `'serviceWorker' in navigator`.
+- Every stub element's `.style` needs **`setProperty`** — `applyTheme()` runs at load and calls
+  `documentElement.style.setProperty('--accent', …)`.
+- The sandbox object itself needs **`addEventListener`** (not just `document`): the tail of the file
+  registers `window.addEventListener('pagehide', …)`.
+- Set `sandbox.window = sandbox` and `sandbox.globalThis = sandbox` before `createContext`.
+- `Intl` must be passed through if you touch anything timezone-related.
 
 Pair each assertion with a negative control: revert the fix in the extracted source and confirm
-the assertion fails. A test that passes before and after proves nothing.
+the assertion fails. A test that passes before and after proves nothing. The cheap way to run a
+control is a `HARNESS_MUTATE='["<exact source>","<replacement>"]'` env var that string-replaces the
+fix out before the `vm` run, and to treat "0 assertions failed" under a control as a **harness bug**.
 
-### 12.1 Fixed in 5.11.0
+**Emoji census as of 5.12.0** (literal UTF-8, no BOM — verify before/after any scripted rewrite of
+`index.html`): U+2705 ✅ = **62**, U+1F3AF 🎯 = **31**, U+1F3C6 🏆 = **6**.
+
+### 12.1 Fixed in 5.12.0
+
+First pass driven by **user-reported bugs from real use** rather than an audit. 33 harness
+assertions, 9/9 negative controls discriminating.
+
+**Needs pushing:** `index.html`, `sw.js`, `scripts/check-reminders.js`, `DESIGN.md`.
+
+| Area | Change |
+|------|--------|
+| Plan UI | **The swipe-reveal bar behind a plan card is no longer taller than the card.** `.plan-sw-wrap` has `overflow:hidden`, making it a block formatting context, so `.tcard`'s `margin-bottom:8px` couldn't collapse out the way it does through `.bucket-item` on the Tasks tab — the wrapper was 8px taller than the card and the `top:0;bottom:0` ▲Up/▼Down bars hung below it. Two new rules move the gap outside the wrapper. **These are the first real CSS selectors for the swipe layers**; everything else about them is inline styles inside `rSwipeWrap`/`rPlanSwipeWrap` |
+| Completions | **New canonical `taskCompletedInEntry()` / `lastCompletionDateStr()` / `completionDaysFor()` / `taskHistFor()` (§3.7).** `recurElapsed()` now delegates to them. This is the fix for three separate reported symptoms |
+| Tasks tab | **Cards no longer say "never completed" for a task completed via the plan timer.** The recurring branch was gated on `t.lastCompleted` and all three branches fell back to a `taskId`-only `.pop()` scan. The daily/evergreen scans also accepted any earned row, so a "worked on it" partial could read as "last: today" |
+| Task detail | **"No history yet." and `—` in all four stat boxes are fixed for plan-timer completions**, and the mini calendar marks those days (was C2). `hist` comes from `taskHistFor()`; the calendar comes from `completionDaysFor()` rather than filtering a list the caller had already stripped ✅ rows out of. "Last:" now means last *completion*, taken as a max by date rather than by array position |
+| Startup | **Orphan reconciliation no longer deletes valid `lastCompleted`** for plan-timer completions (was C13) — it was the trigger that demoted `rCard` onto the broken path |
+| Plan | **Finishing one section now pays a bonus: 10% of that section's own points.** Previously the only point-bearing award was a whole-plan bonus, so completing a section logged a `points: 0` reward row and nothing else. There is no separate whole-plan payout any more — the last section's award covers it |
+| Plan | **The whole-plan bonus had been ignoring every point earned through the plan timer**, because it matched `h.taskId` and the grouped row has none. `planSectionPtsToday()` reads `planTasks` |
+| Plan | **Fired-section state moved from `localStorage['pt_firedSec_<date>']` into `D._planFired`** so it syncs. It now gates a real points award, and a device-local copy would let the same section pay out again on every other device. Self-prunes to today (partly addresses S2). New helpers `planFiredToday()` / `setPlanFiredToday()` / `unfirePlanSection()` / `planSectionOfTask()` replace four hand-rolled section-index loops |
+| Reminders | **A task completed today no longer gets reminded about it.** `isTaskDone()` mirrors §3.7, so plan-timer completions count. **Evergreen tasks previously had no "done" state at all** and fell through to `return false`, so an evergreen task with a daily reminder nagged every day regardless |
+
+Not changed: the reminder **schedule** logic. The gate is strictly backward-looking, so early-looking
+sends are a timezone or push-delivery-latency question, not a scheduling one (§8).
+
+### 12.2 Fixed in 5.11.0
 
 Corrects the 5.10.0 retirement model and unifies the recurring-due logic. 50 harness assertions,
 17/17 negative controls discriminating.
@@ -694,7 +812,7 @@ Corrects the 5.10.0 retirement model and unifies the recurring-due logic. 50 har
 | Recurring | Plan-timer retirement now clears `dueEarly`, so a "due early" task actually sleeps once done |
 | Reminders | `check-reminders.js` derives due dates from the ✅ history (including plan-grouped completions) instead of `task.lastCompleted`, and falls back to `createdAt` — a never-completed recurring task previously got **no reminder ever** |
 
-### 12.2 Fixed in 5.10.0
+### 12.3 Fixed in 5.10.0
 
 Follow-up to the 5.9.0 audit pass, resolving the three decisions left open there. 54 harness
 assertions, 15/15 negative controls discriminating.
@@ -706,7 +824,7 @@ assertions, 15/15 negative controls discriminating.
 | Goals | **Hourly goals now register progress at all.** Added `localHourStr()` / `periodStartStr()` / `periodEndStr()` and removed every `toISOString()`-derived boundary string (3.6) |
 | History | Day summary now shows `✨ N pts earned  +M bonus` — the bare number still matches the calendar cell, but the bonus is no longer invisible (5.2) |
 
-### 12.3 Fixed in 5.9.0
+### 12.4 Fixed in 5.9.0
 
 Audit pass, no new features. All of the below were verified with a headless harness plus negative
 controls.

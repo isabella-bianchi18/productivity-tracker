@@ -25,7 +25,11 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-seri
 if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
 
 // ===== DATA =====
-const APP_VERSION='5.11.0';
+const APP_VERSION='5.12.0';
+// Ledger rows the app generates itself. Any "how many points did X earn" sum must exclude these or
+// a bonus ends up inflating the figure the next bonus is calculated from.
+const GOAL_BONUS_LABEL='🎯 Daily goal bonus';
+const SECTION_BONUS_LABEL='🏆 Section bonus';
 const DEFAULT_DATA={tasks:[],points:0,pointsHistory:[],rewards:[],techniques:[],metrics:[],settings:{gistId:'',token:'',dailyGoal:0,theme:'default'},dailyGoalLog:{},streak:0,fractional:0,groupOrder:[],plan:[],savedPlans:[],planSectionRewards:{},groceries:[],recipes:[],pushSubscription:null};
 // Shared task type/category emoji + sort-order maps (single source of truth).
 // typeE/catE are aliases used by the timer views; typeEmoji/catEmoji by the plan view.
@@ -152,7 +156,39 @@ function periodEndStr(period,pStart){
   return localDateStr(new Date(y,m,d+1)); // 'daily'
 }
 function getRecentValues(tid,isTime){const entries=D.pointsHistory.filter(h=>h.taskId===tid&&h.type==='earned');const vals=[];for(let i=entries.length-1;i>=0&&vals.length<3;i--){const v=isTime?(entries[i].minutes||0):(entries[i].count||0);if(v>0&&!vals.includes(v))vals.push(v)}return vals}
-function recurElapsed(t){const td=today();let lastDate=null;const directEntries=D.pointsHistory.filter(h=>h.taskId===t.id&&h.type==='earned'&&h.task.includes('✅'));if(directEntries.length)lastDate=directEntries[directEntries.length-1].date.slice(0,10);D.pointsHistory.forEach(h=>{if(h.type==='earned'&&h.planTasks){const pt=h.planTasks.find(p=>p.taskId===t.id&&p.completed);if(pt){const d=h.date.slice(0,10);if(!lastDate||d>lastDate)lastDate=d}}});if(!lastDate)return 9999;return Math.floor((new Date(td+'T12:00:00')-new Date(lastDate+'T12:00:00'))/864e5)}
+// ===== CANONICAL "WHEN WAS THIS TASK LAST COMPLETED?" =====
+// A plan-timer session records the completion in TWO places: a 0-point "name ✅" marker (carries
+// taskId) and the grouped '⏱️/🍅 Plan' row's planTasks[] (carries NO taskId). Anything that scans
+// only `h.taskId` therefore misses plan completions entirely, and anything that reads
+// task.lastCompleted misses them too — an in-plan goal deliberately never writes that field, and
+// startup orphan reconciliation can clear it. Both helpers below read both places and take a true
+// max by DATE rather than by array position, because the history-edit modal can change an entry's
+// date without re-sorting pointsHistory.
+function taskCompletedInEntry(t,h){
+  if(h.type!=='earned')return false;
+  if(h.taskId===t.id&&typeof h.task==='string'&&h.task.includes('✅'))return true;
+  return !!(h.planTasks&&h.planTasks.some(p=>p.taskId===t.id&&p.completed));
+}
+function lastCompletionDateStr(t){let last=null;D.pointsHistory.forEach(h=>{if(!taskCompletedInEntry(t,h))return;const ds=h.date.slice(0,10);if(!last||ds>last)last=ds});return last}
+function completionDaysFor(t){const s=new Set();D.pointsHistory.forEach(h=>{if(taskCompletedInEntry(t,h))s.add(h.date.slice(0,10))});return s}
+// The task's own history for its detail view: standalone rows as before, PLUS this task's slice of
+// every grouped plan-timer session. Those slices live on a row with no taskId, which is why a task
+// only ever completed in the plan showed "No history yet." with — in all four stat boxes.
+// Bookkeeping rows stay excluded, so a plan session contributes exactly once and its minutes and
+// counts are not double counted.
+function taskHistFor(tid){
+  const out=D.pointsHistory.filter(h=>h.taskId===tid&&!isBookkeepingEntry(h));
+  D.pointsHistory.forEach(h=>{
+    if(h.type!=='earned'||!h.planTasks)return;
+    h.planTasks.forEach(p=>{
+      if(p.taskId!==tid)return;
+      if(!p.completed&&!(p.minutes>0)&&!(p.count>0)&&!(p.points>0))return;
+      out.push({date:h.date,task:p.name+(p.completed?' ✅':''),taskId:tid,points:p.points||0,type:'earned',minutes:p.minutes||0,count:p.count,countUnit:p.countUnit,_fromPlan:true});
+    });
+  });
+  return out.sort((a,b)=>a.date<b.date?-1:a.date>b.date?1:0);
+}
+function recurElapsed(t){const lastDate=lastCompletionDateStr(t);if(!lastDate)return 9999;return Math.floor((new Date(today()+'T12:00:00')-new Date(lastDate+'T12:00:00'))/864e5)}
 // ===== CANONICAL "IS THIS RECURRING TASK DUE?" =====
 // Single source of truth. Cadence is measured in CALENDAR days since the last completion via
 // recurElapsed(), which reads the ✅ history (including plan-grouped completions) rather than
@@ -444,7 +480,7 @@ function completeTask(tid,mins,finished){
     // absolute snapshot that would clobber anything else logged in the meantime.
     D.points-=removeHistoryRows(addedRows);saveDirty();
     // Clear fired section tracker if this task is in the plan
-    if(D.plan&&D.plan.some(i=>i.type==='task'&&i.id===tid)){let secI=0;for(let pi=0;pi<D.plan.length;pi++){if(D.plan[pi].type==='break')secI++;if(D.plan[pi].type==='task'&&D.plan[pi].id===tid)break}const td2=today();const fired=JSON.parse(localStorage.getItem('pt_firedSec_'+td2)||'[]');const fi=fired.indexOf(secI);if(fi>=0){fired.splice(fi,1);localStorage.setItem('pt_firedSec_'+td2,JSON.stringify(fired))}}
+    {const secI=planSectionOfTask(tid);if(secI>=0)unfirePlanSection(secI)}
     render()});
   setTimeout(checkAchievements,2000);
   setTimeout(checkHighScores,2200);
@@ -1022,6 +1058,48 @@ function getPlanFirstSection(){
   const section=breakIdx<0?D.plan:D.plan.slice(0,breakIdx);
   return section.filter(i=>i.type==='task').map(i=>i.id);
 }
+// Which plan sections have already fired (popup + rewards + bonus) today. This lives in D so it
+// SYNCS: it now gates a real points award, and a device-local localStorage copy would let the same
+// section pay out again on every other device. Only today's key is kept, so it can't grow forever
+// the way the old pt_firedSec_<date> keys did.
+function planFiredToday(){
+  if(!D._planFired||typeof D._planFired!=='object')D._planFired={};
+  const td=today();
+  Object.keys(D._planFired).forEach(k=>{if(k!==td)delete D._planFired[k]});
+  return D._planFired[td]||[];
+}
+function setPlanFiredToday(arr){
+  if(!D._planFired||typeof D._planFired!=='object')D._planFired={};
+  D._planFired[today()]=arr;saveDirty();
+}
+// Remove a section from today's fired list so its popup and bonus can fire again (used when a
+// completion is undone or deleted).
+function unfirePlanSection(si){
+  const fired=planFiredToday();const fi=fired.indexOf(si);
+  if(fi>=0){fired.splice(fi,1);setPlanFiredToday(fired)}
+}
+// The section index a given task sits in, or -1 if it isn't in the plan.
+function planSectionOfTask(tid){
+  if(!D.plan)return -1;let si=0;
+  for(let pi=0;pi<D.plan.length;pi++){
+    if(D.plan[pi].type==='break'){si++;continue}
+    if(D.plan[pi].type==='task'&&D.plan[pi].id===tid)return si;
+  }
+  return -1;
+}
+// Points earned today by the tasks in one plan section. Grouped plan-timer rows carry no taskId, so
+// their per-task points have to be read out of planTasks — the old whole-plan calculation matched on
+// h.taskId only and therefore ignored every point earned through the plan timer.
+function planSectionPtsToday(secTaskIds){
+  const td=today();let sum=0;
+  D.pointsHistory.forEach(h=>{
+    if(h.type!=='earned'||h.date.slice(0,10)!==td)return;
+    if(h.task===GOAL_BONUS_LABEL||h.task===SECTION_BONUS_LABEL)return;
+    if(h.planTasks&&h.planTasks.length){h.planTasks.forEach(p=>{if(secTaskIds.has(p.taskId))sum+=(p.points||0)});return}
+    if(h.taskId&&secTaskIds.has(h.taskId))sum+=(h.points||0);
+  });
+  return sum;
+}
 function checkPlanComplete(){
   if(!D.plan||!D.plan.length)return;
   const td=today();
@@ -1033,8 +1111,8 @@ function checkPlanComplete(){
   // Helper to check if a task is done (delegates to shared planTaskDone)
   const isTaskDone=(t,pg)=>planTaskDone(t,pg);
   // Per-section completion check
-  const firedSections=JSON.parse(localStorage.getItem('pt_firedSec_'+td)||'[]');
-  let newlyCompleted=null;
+  const firedSections=planFiredToday();
+  let newlyCompleted=null,bonusPaid=0;
   planSections.forEach((sec,si)=>{
     if(firedSections.includes(si))return;
     const secTaskItems=sec.map(i=>({task:allTasks.find(t=>t.id===i.id),planGoal:i.planGoal||null})).filter(x=>x.task);
@@ -1042,26 +1120,33 @@ function checkPlanComplete(){
     const secDone=secTaskItems.every(({task:t,planGoal:pg})=>isTaskDone(t,pg));
     if(secDone){
       firedSections.push(si);
-      localStorage.setItem('pt_firedSec_'+td,JSON.stringify(firedSections));
+      setPlanFiredToday(firedSections);
+      // Per-section bonus: 10% of what THIS section earned today. The only point-bearing award
+      // used to be a whole-plan bonus, so finishing a single section paid nothing.
+      const secBonus=Math.floor(planSectionPtsToday(new Set(secTaskItems.map(x=>x.task.id)))*0.1);
+      if(secBonus>0){D.points+=secBonus;D.pointsHistory.push({date:localISO(),task:SECTION_BONUS_LABEL,points:secBonus,type:'earned'});bonusPaid+=secBonus}
       // Log section rewards
       const secRewards=(D.planSectionRewards||{})[si]||[];
       const rewardNames=[];
       secRewards.forEach(rid=>{const r=D.rewards?.find(x=>x.id===rid);if(r){D.pointsHistory.push({date:localISO(),task:'🏆 Plan reward: '+r.name,points:0,type:'earned'});rewardNames.push(r.name)}});
       if(rewardNames.length)saveL();
       // Show section congrats popup (only first newly completed section this call)
-      if(!newlyCompleted)newlyCompleted={si,taskCount:secTaskItems.length,rewardNames};
+      if(!newlyCompleted)newlyCompleted={si,taskCount:secTaskItems.length,rewardNames,secBonus};
     }
   });
   if(newlyCompleted){
     const isFullPlan=firedSections.length===planSections.filter(s=>s.some(i=>{const t=allTasks.find(x=>x.id===i.id);return!!t})).length;
-    let planBonus=0;
-    if(isFullPlan){const planPts=D.pointsHistory.filter(h=>h.date.slice(0,10)===td&&h.type==='earned'&&h.task!=='\uD83C\uDFAF Daily goal bonus'&&D.plan.some(i=>i.type==='task'&&i.id===h.taskId)).reduce((s,h)=>s+h.points,0);planBonus=Math.floor(planPts*0.1);if(planBonus>0){D.points+=planBonus;D.pointsHistory.push({date:localISO(),task:'\uD83C\uDFC6 Plan completion bonus',points:planBonus,type:'earned'});saveDirty();checkGoal()}}
+    // The per-section bonuses ARE the plan bonus now: the final section's award covers finishing
+    // the plan, so there's no separate whole-plan payout stacked on top. checkGoal() runs after the
+    // rows are pushed because it totals the day out of pointsHistory.
+    if(bonusPaid>0){saveDirty();checkGoal()}
     const nc=newlyCompleted;
     setTimeout(()=>{
       confetti();
       const rewardSection=nc.rewardNames.length?`<div style="margin:12px 0;padding:8px 12px;background:var(--card-neutral);border-radius:8px;text-align:left"><div style="font-size:.85rem;font-weight:600;color:var(--accent-dark);margin-bottom:4px">🎁 Reward${nc.rewardNames.length>1?'s':''}:</div>${nc.rewardNames.map(n=>`<div style="font-size:.85rem;color:var(--text)">• ${n}</div>`).join('')}</div>`:'';
       const title=isFullPlan?'Plan complete!':'Section complete!';
-      const subtitle=isFullPlan?(planBonus>0?'You crushed the whole plan! +'+planBonus+' bonus points!':'You crushed the whole plan!'):`${nc.taskCount} task${nc.taskCount>1?'s':''} done!`;
+      const bonusLine=bonusPaid>0?` +${bonusPaid} bonus point${bonusPaid>1?'s':''}!`:'';
+      const subtitle=(isFullPlan?'You crushed the whole plan!':`${nc.taskCount} task${nc.taskCount>1?'s':''} done!`)+bonusLine;
       const outro=isFullPlan?`<p style="font-size:.85rem;color:var(--text-dim);margin-bottom:16px">Time to enjoy the rest of your day 🌟</p>`:'';
       modal(`<div style="text-align:center"><div style="font-size:2.5rem;margin-bottom:8px">${isFullPlan?'🎉🏆':'🎉'}</div><h2 style="color:var(--accent-dark);margin-bottom:8px">${title}</h2><p style="font-size:.9rem;color:var(--text-dim);margin-bottom:8px">${subtitle}</p>${rewardSection}${outro}<button data-close class="btn bpri" style="width:100%">Nice!</button></div>`);
     },500);
@@ -1273,9 +1358,11 @@ function rCard(t,i,n){
   const hasStreak=t.goal?getGoalStreak(t)>0:(t.type==='daily'?getDailyStreak(t)>0:false);
   if(!hasStreak){
     if(t.type==='one-time'){if(t.goal){const lastEntry=D.pointsHistory.filter(h=>h.taskId===t.id&&h.type==='earned').pop();if(lastEntry){const daysAgo=daysAgoCal(lastEntry.date);ageBadge=`<div style="font-size:.65rem;color:var(--text-dim)">last: ${daysAgo===0?'today':daysAgo+'d ago'}</div>`}else if(t.createdAt){const days=daysAgoCal(t.createdAt);ageBadge=`<div style="font-size:.65rem;color:var(--text-dim)">added ${days>=1?days+'d ago':'today'}</div>`}}else if(t.createdAt){const days=daysAgoCal(t.createdAt);ageBadge=`<div style="font-size:.65rem;color:var(--text-dim)">added ${days>=1?days+'d ago':'today'}</div>`}}
-    if(t.type==='recurring'){if(!t.lastCompleted){const lastAny=D.pointsHistory.filter(h=>h.taskId===t.id&&h.type==='earned').pop();if(!lastAny){ageBadge=`<div style="font-size:.65rem;color:var(--danger-dark)">never completed</div>`}else{const daysAgo=daysAgoCal(lastAny.date);ageBadge=`<div style="font-size:.65rem;color:var(--text-dim)">last: ${daysAgo===0?'today':daysAgo+'d ago'}</div>`}}else{const overdue=recurElapsed(t)-t.cadenceDays;if(overdue>0)ageBadge=`<div style="font-size:.65rem;color:var(--danger-dark)">${overdue}d overdue</div>`}}
-    if(t.type==='daily'){const lastEntry=D.pointsHistory.filter(h=>h.taskId===t.id&&h.type==='earned').pop();if(!lastEntry){ageBadge=`<div style="font-size:.65rem;color:var(--text-dim)">never completed</div>`}else{const daysAgo=daysAgoCal(lastEntry.date);ageBadge=`<div style="font-size:.65rem;color:var(--text-dim)">last: ${daysAgo===0?'today':daysAgo+'d ago'}</div>`}}
-    if(t.type==='evergreen'){const lastEntry=D.pointsHistory.filter(h=>h.taskId===t.id&&h.type==='earned').pop();if(!lastEntry){ageBadge=`<div style="font-size:.65rem;color:var(--text-dim)">never completed</div>`}else{const daysAgo=daysAgoCal(lastEntry.date);ageBadge=`<div style="font-size:.65rem;color:var(--text-dim)">last: ${daysAgo===0?'today':daysAgo+'d ago'}</div>`}}
+    // Derived from lastCompletionDateStr(), NOT t.lastCompleted or a taskId-only scan: both miss
+    // plan-timer completions, so a task finished in the plan every day read "never completed".
+    if(t.type==='recurring'){const lc=lastCompletionDateStr(t);if(!lc){ageBadge=`<div style="font-size:.65rem;color:var(--danger-dark)">never completed</div>`}else{const overdue=recurElapsed(t)-t.cadenceDays;if(overdue>0){ageBadge=`<div style="font-size:.65rem;color:var(--danger-dark)">${overdue}d overdue</div>`}else{const daysAgo=daysAgoCal(lc);ageBadge=`<div style="font-size:.65rem;color:var(--text-dim)">last: ${daysAgo===0?'today':daysAgo+'d ago'}</div>`}}}
+    if(t.type==='daily'){const lc=lastCompletionDateStr(t);if(!lc){ageBadge=`<div style="font-size:.65rem;color:var(--text-dim)">never completed</div>`}else{const daysAgo=daysAgoCal(lc);ageBadge=`<div style="font-size:.65rem;color:var(--text-dim)">last: ${daysAgo===0?'today':daysAgo+'d ago'}</div>`}}
+    if(t.type==='evergreen'){const lc=lastCompletionDateStr(t);if(!lc){ageBadge=`<div style="font-size:.65rem;color:var(--text-dim)">never completed</div>`}else{const daysAgo=daysAgoCal(lc);ageBadge=`<div style="font-size:.65rem;color:var(--text-dim)">last: ${daysAgo===0?'today':daysAgo+'d ago'}</div>`}}
   }
   // Time invested for time-based incomplete tasks
   let investedBadge='';
@@ -2063,7 +2150,9 @@ function taskViz(task,hist){
   } else {
     // Mini calendar for selected month with checkmarks
     const dim=new Date(vizYear,vizMonth+1,0).getDate(),fd=new Date(vizYear,vizMonth,1).getDay();
-    const completedDays=new Set(hist.filter(h=>h.task.includes('✅')).map(h=>h.date.slice(0,10)));
+    // From completionDaysFor(), not from `hist`: the caller strips 0-point ✅ markers, so filtering
+    // `hist` FOR ✅ was guaranteed to come up empty for plan-timer completions (old issue C2).
+    const completedDays=completionDaysFor(task);
     let cells='';for(let i=0;i<fd;i++)cells+='<div style="height:22px"></div>';
     for(let d=1;d<=dim;d++){
       const ds=`${vizYear}-${String(vizMonth+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
@@ -2079,8 +2168,11 @@ function taskViz(task,hist){
 function showTaskDetail(tid){
   vizMonth=new Date().getMonth();vizYear=new Date().getFullYear();
   const task=D.tasks.find(t=>t.id===tid);if(!task)return;
-  const hist=D.pointsHistory.filter(h=>h.taskId===tid&&!h._tracking&&!(h.points===0&&h.task.includes('✅')));
-  const ld=hist.length?new Date(hist[hist.length-1].date.slice(0,10)+'T12:00:00').toLocaleDateString():'Never';
+  const hist=taskHistFor(tid);
+  // "Last" means last COMPLETION. Fall back to the newest logged row so a task that has only been
+  // worked on still shows something rather than 'Never'.
+  const lcDate=lastCompletionDateStr(task);
+  const ld=lcDate?new Date(lcDate+'T12:00:00').toLocaleDateString():(hist.length?new Date(hist[hist.length-1].date.slice(0,10)+'T12:00:00').toLocaleDateString():'Never');
   // Stats: today, this week, this month, lifetime
   const todayH=hist.filter(h=>h.date.slice(0,10)===today());
   const weekH=hist.filter(h=>(new Date()-new Date(h.date))/864e5<7);
@@ -2563,8 +2655,8 @@ function bindAll(){
         else if(t.type==='recurring'){t.lastCompleted=null;save();render()}
         else{save();render()}
         // Clear fired section so popup can re-fire
-        let secI=0;for(let pi=0;pi<D.plan.length;pi++){if(D.plan[pi].type==='break')secI++;if(D.plan[pi].type==='task'&&D.plan[pi].id===t.id)break}
-        const fired=JSON.parse(localStorage.getItem('pt_firedSec_'+td)||'[]');const fi=fired.indexOf(secI);if(fi>=0){fired.splice(fi,1);localStorage.setItem('pt_firedSec_'+td,JSON.stringify(fired))}
+        const secI=planSectionOfTask(t.id);
+        if(secI>=0)unfirePlanSection(secI);
       });
       return;
     }
@@ -2719,7 +2811,7 @@ function bindAll(){
     // Clear section rewards for this section and reindex remaining
     if(D.planSectionRewards){const newRewards={};Object.keys(D.planSectionRewards).forEach(k=>{const ki=parseInt(k);if(ki<si)newRewards[ki]=D.planSectionRewards[ki];else if(ki>si)newRewards[ki-1]=D.planSectionRewards[ki]});D.planSectionRewards=newRewards}
     // Reset fired section tracker (indices shifted)
-    localStorage.removeItem('pt_firedSec_'+today());
+    if(D._planFired)delete D._planFired[today()];
     save();render()}));
   document.querySelectorAll('.plan-sec-move').forEach(b=>b.addEventListener('click',e=>{e.stopPropagation();const si=parseInt(b.dataset.sec),dir=b.dataset.d;
     // Parse sections with their links (shared helper)
@@ -2776,7 +2868,7 @@ function bindAll(){
     }
     save();render();toast(`📋 Loaded "${esc(sp.name)}"`)}));
   document.querySelectorAll('.plan-del-saved').forEach(b=>b.addEventListener('click',e=>{e.stopPropagation();const spi=parseInt(b.dataset.spi);confirmAction(`Delete saved plan "${esc(D.savedPlans[spi]?.name)}"?`,()=>{D.savedPlans.splice(spi,1);D.plan.forEach(item=>{if(item.savedPlanIdx!=null){if(item.savedPlanIdx===spi)delete item.savedPlanIdx;else if(item.savedPlanIdx>spi)item.savedPlanIdx--}});save();render()})}));
-  document.getElementById('plan-clear')?.addEventListener('click',()=>confirmAction('Clear your entire plan?',()=>{D.plan=[];D.planSectionRewards={};localStorage.removeItem('pt_firedSec_'+today());save();render()}));
+  document.getElementById('plan-clear')?.addEventListener('click',()=>confirmAction('Clear your entire plan?',()=>{D.plan=[];D.planSectionRewards={};if(D._planFired)delete D._planFired[today()];save();render()}));
   // History entries
   document.querySelectorAll('.hent-click').forEach(b=>b.addEventListener('click',()=>showHistDetail(parseInt(b.dataset.idx))));
   // Tools
@@ -3446,11 +3538,14 @@ if(!D.savedPlans)D.savedPlans=[];
 {let fixedOrphan=false;
   D.tasks.forEach(t=>{
     if(t.lastCompleted){
-      const has=D.pointsHistory.some(h=>h.taskId===t.id&&h.type==='earned'&&h.task.includes('✅')&&h.date.slice(0,10)===t.lastCompleted.slice(0,10));
+      // Accepts plan-timer evidence (planTasks) too. Matching standalone ✅ rows only meant this
+      // actively DELETED valid lastCompleted values for plan completions, after which rCard fell
+      // back to a scan that found nothing and the card announced "never completed".
+      const has=D.pointsHistory.some(h=>taskCompletedInEntry(t,h)&&h.date.slice(0,10)===t.lastCompleted.slice(0,10));
       if(!has){delete t.lastCompleted;fixedOrphan=true}
     }
     if(t.type==='one-time'&&t.completed){
-      const has=D.pointsHistory.some(h=>h.taskId===t.id&&h.type==='earned'&&h.task.includes('✅'));
+      const has=D.pointsHistory.some(h=>taskCompletedInEntry(t,h));
       if(!has){t.completed=false;delete t.completedAt;fixedOrphan=true}
     }
   });
@@ -3519,6 +3614,12 @@ window.addEventListener('pagehide',()=>{if(localDirty){D._lastModified=Date.now(
 .hdr{background:var(--surface);border-radius:var(--radius);padding:14px 16px;margin-bottom:12px;box-shadow:var(--shadow);border:1px solid var(--border)}
 .fcard{background:var(--surface);border-radius:var(--radius);padding:16px;box-shadow:var(--shadow);border:1px solid var(--border)}
 .tcard{background:var(--card-task);border-radius:var(--radius);padding:12px;margin-bottom:8px;box-shadow:var(--shadow)}
+/* Plan cards: .plan-sw-wrap has overflow:hidden, which makes it a block formatting context, so
+   .tcard's bottom margin can NOT collapse out of it the way it does through .bucket-item on the
+   Tasks tab. Left alone, the wrapper is 8px taller than the card and the absolutely positioned
+   ▲Up/▼Down reveal bars (top:0;bottom:0) hang 8px below it. Move the gap outside the wrapper. */
+.plan-swipe-card>.tcard{margin-bottom:0}
+.plan-sw-wrap{margin-bottom:8px}
 .ctx-menu{position:fixed;background:var(--surface);border:1px solid var(--border);border-radius:10px;box-shadow:0 4px 16px rgba(0,0,0,0.12);padding:4px;z-index:9999}
 .ctx-menu button{display:block;width:100%;text-align:left;padding:8px 14px;border:none;background:none;font-size:.85rem;cursor:pointer;border-radius:6px}
 .ctx-menu button:hover{background:var(--card-neutral)}

@@ -68,18 +68,31 @@ function getGoalProgress(task, pointsHistory, parts) {
 }
 
 // ===== "Is this task already satisfied for its current period?" =====
+// Mirror of taskCompletedInEntry() in index.html — KEEP THE TWO IN SYNC. A plan-timer completion is
+// recorded twice: a 0-point "name ✅" marker carrying taskId, and the grouped '⏱️/🍅 Plan' row's
+// planTasks[], which carries NO taskId. Checking taskId alone misses the second form.
+function taskCompletedInEntry(task, h) {
+  if (h.type !== 'earned') return false;
+  if (h.taskId === task.id && typeof h.task === 'string' && h.task.includes('✅')) return true;
+  return !!(h.planTasks && h.planTasks.some((p) => p.taskId === task.id && p.completed));
+}
+function completedOnDate(task, pointsHistory, dateStr) {
+  return (pointsHistory || []).some((h) => taskCompletedInEntry(task, h) && h.date.slice(0, 10) === dateStr);
+}
 function isTaskDone(task, pointsHistory, parts) {
   if (task.goal && task.goal.target >= 1) {
     const gp = getGoalProgress(task, pointsHistory, parts);
     return !!gp && gp.pct >= 100;
   }
-  if (task.type === 'daily') {
+  // Evergreen belongs here too. It used to fall through to `return false` ("no done state, never
+  // skip"), so an evergreen task with a daily reminder nagged every single day no matter how often
+  // it was actually completed.
+  if (task.type === 'daily' || task.type === 'evergreen') {
     return pointsHistory.some(
-      (h) => h.taskId === task.id && h.type === 'earned' && h.date.slice(0, 10) === parts.dateStr && h.task.includes('✅')
+      (h) => taskCompletedInEntry(task, h) && h.date.slice(0, 10) === parts.dateStr
     );
   }
-  if (task.type === 'one-time') return !!task.completed;
-  // Evergreen tasks (and anything else) have no "done" state — never skip.
+  if (task.type === 'one-time') return !!task.completed || completedOnDate(task, pointsHistory, parts.dateStr);
   return false;
 }
 
@@ -150,7 +163,7 @@ function isEligibleNow(task, data, parts) {
   return true;
 }
 
-module.exports = { tzParts, isEligibleNow, computeRecurringDueDateStr, lastCompletionDateStr, isTaskDone, getGoalProgress };
+module.exports = { tzParts, isEligibleNow, computeRecurringDueDateStr, lastCompletionDateStr, isTaskDone, getGoalProgress, taskCompletedInEntry, completedOnDate };
 
 // ===== Main (only runs when executed directly, not when required for tests) =====
 if (require.main === module) {
