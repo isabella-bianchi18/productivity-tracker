@@ -6,14 +6,26 @@
 
 ## 0. Picking this up again — read this first
 
-Last worked: **2026-08-23**, ending at **5.12.0**. Four consecutive fix passes (5.9.0, 5.10.0,
-5.11.0 audits, then 5.12.0 against four bugs reported from real use). Everything is in the working
-tree but **not yet pushed** — see 12.1 for the file list.
+Last worked: **2026-08-23**, ending at **5.14.0**. Six fix passes: 5.9.0/5.10.0/5.11.0 audits,
+5.12.0 against four user-reported bugs, 5.13.0 closing D1, 5.14.0 fixing the blank-screen cold start.
+See 12.1 for what still needs pushing.
 
-**5.12.0 was driven by user-reported bugs, and the headline lesson is 3.7:** three of the four had
-the same root cause — a plan-timer completion is invisible to any code that scans `h.taskId`,
-because the real record lives in the grouped row's `planTasks[]`, which has no `taskId`. Before
-writing any new query over `pointsHistory`, read 3.7.
+> **⚠️ Deploy hazard, learned the hard way at 5.13.0.** `index.html`, `sw.js` and
+> `scripts/check-reminders.js` were pushed but **`.github/workflows/check-reminders.yml` was not**, so
+> the script fix went live while the cron change silently didn't. The symptom (a reminder still
+> arriving late) looked like a code bug. **After any push, verify each changed file on `main`**, not
+> just the ones you think matter:
+> `https://raw.githubusercontent.com/isabella-bianchi18/productivity-tracker/main/<path>`.
+> The workflow file is the easiest to forget because it lives outside the app tree.
+
+**There is no longer a known data-loss path.** D1 is closed: `check-reminders.js` never writes
+`productivity_data.json` at all now (§8). If you are tempted to make that script write app data
+again, read §8 first — it will reintroduce the bug.
+
+**The headline lesson is still §3.7:** a plan-timer completion is invisible to any code that scans
+`h.taskId`, because the real record lives in the grouped row's `planTasks[]`, which has no `taskId`.
+Three separate reported bugs traced back to it. Read §3.7 before writing any new query over
+`pointsHistory`.
 
 One reported bug is **still unresolved and needs data from the user**: a count-based daily task's
 streak reading wrong. Two real defects were found in that area but neither was confirmed as the
@@ -52,7 +64,7 @@ Single-file PWA (`index.html` + `sw.js`) for personal productivity tracking. Van
 - **GitHub repo**: https://github.com/isabella-bianchi18/productivity-tracker
 - **GitHub Pages**: https://isabella-bianchi18.github.io/productivity-tracker/
 - **Local dev**: User opens `file:///...productivity-tracker/index.html` directly in browser.
-- **Current version**: 5.12.0 (APP_VERSION in index.html, CACHE_VERSION in sw.js — always bumped together)
+- **Current version**: 5.14.0 (APP_VERSION in index.html, CACHE_VERSION in sw.js — always bumped together)
 
 ---
 
@@ -569,6 +581,8 @@ previously did `streak++` on a skip, which meant a task that had only ever been 
 365-day streak.
 
 - `getGoalStreak(task)`: consecutive periods where the goal was met, walking back from the current period. An **incomplete current period doesn't break the run** either — it just doesn't count yet. Adds `task.goalStreakBank`.
+- **`getGoalStreak`/`getDailyStreak` are memoised wrappers** around `computeGoalStreak`/`computeDailyStreak`, cached per render pass in `_streakMemo`. Invalidated by `clearStreakMemo()`, called from `saveL()` (the choke point every mutation funnels through) and the top of `render()`. If you add a mutation path that bypasses `saveL()`, clear the memo yourself. Both compute functions build a per-day index of the task's rows once instead of re-scanning `pointsHistory` per period. Measured ~170 ms → ~27 ms per pass at 40 tasks / ~11,000 rows (see 11.3 for the caveat).
+- Both still count `taskId`-bearing rows only and do **not** look inside `planTasks`, unlike every other completion query (§3.7). That inconsistency is deliberate and tracked as C18.
 - `getDailyStreak(task)`: consecutive days with ✅ entries, same skip rule.
 - `getGoalStreak` handles `daily`/`weekly`/`monthly`; `hourly`/`annually`/`total` return the bank only (no period walk implemented).
 - Boundaries come from `localDateStr()`/`periodEndStr()` — see 3.6.
@@ -611,9 +625,13 @@ from a bookkeeping row. Use `_tracking`.
 - On load: scans all tasks. If `lastCompleted` points to a date with no completion in history → clears it.
 - If one-time `completed=true` but no completion in history → resets.
 - Prevents stale completion flags from old undo bugs.
-- **Both checks go through `taskCompletedInEntry()` (§3.7).** They used to match standalone ✅ rows
-  only, so they actively deleted valid `lastCompleted` values for plan-timer completions — which is
-  what then made the card say "never completed". Fixed in 5.12.0 (was C13).
+- **Both checks honour plan-timer evidence (§3.7).** They used to match standalone ✅ rows only, so
+  they actively deleted valid `lastCompleted` values for plan-timer completions — which is what then
+  made the card say "never completed". Fixed in 5.12.0 (was C13).
+- **This runs before the first paint**, so as of 5.14.0 it builds one `Map<taskId, Set<dateStr>>` in a
+  single pass over `pointsHistory` instead of re-scanning history once per task. The per-task scan was
+  acceptable when the test was a cheap `h.taskId` comparison; adding the `planTasks` check made it
+  materially more expensive at exactly the moment the user is staring at a blank screen.
 
 ---
 
@@ -633,7 +651,9 @@ from a bookkeeping row. Use `_tracking`.
 - Sends web push notification via VAPID.
 - User enrolls via `enablePushReminders()` in Settings, which writes `D.pushSubscription`.
 - Reminder schedules live on `task.reminder` (3.1). Two modals: `showRecurringReminderModal` (recurring tasks, `freq:'recurring-due'`) and `showTaskReminderModal` (everything else — daily / weekly / monthly / once). Both also stamp `D.settings.timezone`.
-- **De-dupe**: `reminder.lastSent` (a date string) is written back to the Gist after a send. That write-back is the cause of open issue **D1** (11.1).
+- **De-dupe lives in a SECOND Gist file, `reminder_state.json`** — `{lastSent:{taskId:'YYYY-MM-DD'}, updatedAt, subscriptionDead?}`. **This script must never PATCH `productivity_data.json`.** Writing it stamped `_lastModified`, and `gistPull` accepts any newer remote without consulting `localDirty`, so every run could discard unpushed local edits (this was D1). The write is gone entirely rather than made safer, which is what actually closes the hole. `lastSentFor()` still reads the legacy `task.reminder.lastSent` as a fallback so the changeover doesn't re-send anything.
+- **Consequence of that:** a dead subscription (404/410) is **not** cleared from `D.pushSubscription` any more — it is recorded as `subscriptionDead` in the state file and logged. Reminders silently stop until re-enabled in Settings. Surfacing that in the app would mean the client reading the state file; not done.
+- **Delivery timing.** `PUSH_OPTS = {urgency:'high', TTL:3600}`: `urgency` asks the push service to deliver now rather than batching for battery, and the TTL makes a message expire after an hour instead of the default four weeks, so a 9pm reminder can't surface after midnight. The cron is `*/5` (GitHub's minimum) — since the script refuses to send before `reminder.time`, the interval *is* the lag budget. GitHub's scheduler is best-effort on top of that. `settings.timezone` silently defaults to `'UTC'`, which would make everything fire hours early; the run log prints `Checking reminders for <date> <hhmm> (<tz>)` to settle that in one line.
 - The script is timezone-explicit (`Intl.DateTimeFormat` + `settings.timezone`) because it runs on a UTC runner, whereas the app relies on `localISO()`. Different mechanisms, same intent — see 3.6.
 - **Its recurring due-date reckoning duplicates the app's** — see 4.4.2. Keep `lastCompletionDateStr()` / `computeRecurringDueDateStr()` in sync with `recurElapsed()` / `recurIsDue()`.
 - **`isTaskDone()` decides whether to stay quiet because you already did the thing.** It goes through
@@ -682,15 +702,22 @@ Dispatched by `playThemeSound(themeName)` in index.html. The sampler's names dif
 
 ## 11. Known Issues & Technical Debt
 
-None of these are regressions from 5.9.0–5.11.0; they are pre-existing, found during the audit and
-deliberately left alone. Roughly in the order worth fixing.
+Mostly pre-existing, found during the 5.9.0–5.11.0 audits and deliberately left alone. Roughly in
+the order worth fixing. **There is no known data-loss bug left** — D1 was the last one.
 
-### 11.1 Needs a decision before coding
+### 11.1 Resolved decisions — do not reopen these
 
-| # | Issue |
-|---|---|
-| **D1** | **`check-reminders.js` write-back can clobber unpushed local edits.** It sets `_lastModified = Date.now()` whenever it sends, and `gistPull` accepts any newer remote without consulting `localDirty` — so every 15 minutes there is a window where `lastSent` bookkeeping discards local work. Preserving the original `_lastModified` fixes the data loss (the script only touches `reminder.lastSent`), but then `lastSent` never reaches your devices, risking a duplicate notification. Other options: keep reminder state in a separate Gist file excluded from conflict detection, or have the client merge `lastSent` on pull rather than replacing `D` wholesale. |
-**D2 is resolved (2026-08-23): yes, an in-plan goal may be set on a task with no goal of its own.**
+**D1 — resolved 2026-08-23.** `check-reminders.js` used to stamp `_lastModified` on every send, and
+`gistPull` accepts any newer remote without consulting `localDirty`, so every run opened a window in
+which unpushed local edits could be silently discarded. Fixed by moving de-dupe state into its own
+Gist file (`reminder_state.json`); the script now never writes `productivity_data.json`. Chosen over
+"preserve the original `_lastModified`" (which would have stopped `lastSent` reaching the devices and
+risked duplicate notifications) and over "merge `lastSent` on pull" (more moving parts in the client
+for no extra benefit). **Tradeoff accepted:** a dead push subscription is no longer cleared in the
+app's data — it's recorded in the state file and logged instead, so reminders just stop until they
+are re-enabled in Settings. See §8.
+
+**D2 — resolved 2026-08-23: yes**, an in-plan goal may be set on a task with no goal of its own.
 Confirmed by the user. It has no effect on the Tasks tab (4.4.1) and only gates the plan card and the
 timer queue. No code change was needed — this was already the behaviour. Do not "fix" it.
 
@@ -698,7 +725,7 @@ timer queue. No code change was needed — this was already the behaviour. Do no
 
 | # | Issue |
 |---|---|
-| **C1** | **Editing a plan sub-task doesn't update the row that drives goals.** `plan-st-edit` updates `planTasks[i]`, the grouped totals, and `D.points`, but never the sibling `_tracking` row that `getGoalProgress` reads. The history detail and the goal bar diverge permanently after an edit. |
+| **C18** | **Streaks are still marker-only.** `computeGoalStreak`/`computeDailyStreak` count `taskId`-bearing rows and never look inside `planTasks` (§3.7), unlike every other completion query. Markers have been written per completion tap since 5.9.0/5.11.0 so day-to-day streaks are correct, but pre-5.9.0 pomodoro plan sessions with repeat completions under-count. Deliberately left alone in 5.13.0 because the S1 work was contracted to change no numbers; fixing it is a behaviour change and should be its own version. |
 | **C14** | **`getGoalProgress` counts a live plan session; `getGoalStreak` can't.** Line ~269 adds `T.planCounts[id]` / `T.planTimes[id]` / `T.planFlatDone[id]`; the streak's inner `met()` has no equivalent term, because those live in memory until `stopSW`/`stopPM` flushes them. So mid-session a card reads `30/30 · 🔥4` when the streak should be 5 — and if the session is never stopped (tab closed, PWA killed) the counts never reach `pointsHistory` at all, so that day is a permanent miss and the streak breaks. Fix by giving both a single shared `periodProgress(task, periodStart)`. **Suspected cause of the user's count-based streak report; unconfirmed.** |
 | **C15** | **A 0-point count log is indistinguishable from a bookkeeping row.** `completeTask` writes one row that is both the ✅ marker and the `count` carrier, with `points = floor(count*ptsAmount/ptsPerCount)`. A coarse rate (1 pt per 10 reps, logging 5) gives 0 points, which matches `isBookkeepingEntry`. The goal bar and streak still count it (they read raw history) but every `realEntries()` surface drops it, so 🔥 and the stats disagree about the same day. Same family as C16. |
 | **C16** | **A task worth 0 points reads "No history yet." forever** — its `completeTask` rows satisfy `isBookkeepingEntry` even for direct, non-plan completions (§3.7). Discriminator available: `completeTask` always sets `category`/`taskType`, plan-timer markers never do. Deferred in 5.12.0 because it changes `realEntries()` globally. |
@@ -707,21 +734,21 @@ timer queue. No code change was needed — this was already the behaviour. Do no
 | **C5** | **Duplicate DOM ids when one task sits in two plan sections.** `plan-load`/`plan-sec-add` don't check other sections, so both cards render `id="imi-count"` / `id="ims-work"` / `id="imi-preview"`, and `getElementById` picks the first — the wrong card responds. Either dedupe on add, or key the inline form by `data-gi`. |
 | **C6** | **`plan-sec-save` never links a newly saved plan back to its section** (the unlinked branch sets no `savedPlanIdx`), and "Save as new" cannot link **section 0** because it only writes to a preceding `break`. So edits after a fresh save don't sync back — which *is* the behaviour the original change request asked for. |
 | **C7** | **`plan-sec-clear` on section 0 removes every `header` item**, including one a previous clear transferred to a later section, orphaning that section's saved-plan link. |
-| **C8** | **Section rewards are keyed by array index.** `plan-sec-clear` reindexes them; `plan-sec-move` does not, so swapping two sections leaves their rewards behind. |
+| ~~**C8**~~ | Fixed in 5.13.0. Section rewards are still keyed by array index, but `swapPlanSectionState()` / `removePlanSectionState()` are now the single sanctioned way to maintain that state and both rewards **and** the paid-bonus tracker move together. Any new code that reorders or deletes sections must call them. |
 | **C9** | **On-deck queue index desync** in `rSW`/`rPM`: `onDeck` is `.filter(Boolean)`-ed but indexed against `T.planQueue[i+1]`, so one missing task shifts every row's times, points and ▲▼ buttons. |
 | **C10** | **Post-drag click leaks** on `.tdet` / `.groc-item` / `.sldet` / `.plan-goal-tap` — none check `dragJustEnded`, so a short desktop drag opens the detail modal on drop. See 4.5. |
 | **C11** | **Pinned-section drag reorders unrelated tasks** by splicing all pinned tasks into `D.tasks` at the first pinned index. |
 | **C12** | **`stopPM` logs nothing** when stopped during a break with `T.totalWork === 0`. |
-| **C17** | **`plan-sec-move` doesn't reset `D._planFired`.** Section indices shift but the fired list doesn't, so after reordering sections a stale index can suppress a real section's popup **or** let an already-paid section pay its bonus a second time. This mattered less when the tracker only gated a popup; as of 5.12.0 it gates points. Same index-fragility family as C8 (which `plan-sec-move` also ignores). |
+| **C19** | **`plan-load` and `plan-add-break` don't touch per-section state at all.** Both only ever append a section at the end, so today's indices stay valid and nothing is wrong — but the invariant is undocumented and one insertion in the middle would break it. If a section is ever inserted anywhere but the end, it must shift `D._planFired` and `planSectionRewards` up, mirroring `removePlanSectionState()`. |
 
 ### 11.3 Structural / performance
 
 | # | Issue |
 |---|---|
-| **S1** | **`getGoalStreak` is O(365 × history) and `rCard` calls it ~3× per card.** With ~40 tasks and a few thousand history rows this dominates every `render()`. Memoise per render pass. |
+| ~~**S1**~~ | Fixed in 5.13.0 — memoised per render pass + per-day index. **4–8× faster across 6 runs (median ~7×), ~170 ms → ~27 ms per pass** on 40 tasks / ~11,000 rows, streaks verified identical to the old algorithm. Caveat: measured headlessly in Node via `vm`, so treat it as the size of the algorithmic win rather than a browser number; the run-to-run spread is machine noise. **`getGoalProgress` was not touched** and still does a full `pointsHistory` scan per call — called from `rCard`, `dailyRetiredToday`, `planTaskDone` and `completeTask`, it is now the largest remaining per-render cost. |
 | **S2** | **Unbounded growth**: `D._highScoreShown` grows forever. (The `pt_firedSec_<date>` localStorage keys are gone as of 5.12.0 — that state moved into `D._planFired`, which self-prunes to today. Old keys are left behind on existing devices but are never read again.) |
 | **S3** | **`deleteTask`/archive leave orphan entries** in `D.plan`, `savedPlans`, `planSectionRewards`. Rendering tolerates them; the arrays just grow. |
-| **S4** | **Blank screen on cold start with sync enabled** — `render()` only runs inside `gistPull().then(...)`, so a slow network shows nothing at all. |
+| ~~**S4**~~ | Fixed in 5.14.0. `render()` now runs unconditionally before the sync branch, so the first paint comes from `localStorage` and the Gist pull just corrects it. **Keep it that way** — moving the first render back inside `gistPull().then(...)` reinstates a blank white screen for the whole round trip, which is what the local copy exists to prevent. Note a version bump also empties the service worker cache (§7), so the load right after any deploy is fully network-bound regardless. |
 | **S5** | **3s auto-sync poll with `If-None-Match:''`** deliberately defeats the API cache: ~1,200 requests/hour per open tab against GitHub's 5,000/hour. |
 | **S6** | **`checkAchievements` retries forever** while any modal is open (1s `setTimeout`, no attempt cap). |
 | **S7** | **`save()` and `saveDirty()` are byte-identical.** Collapse them (~40 call sites). |
@@ -774,10 +801,60 @@ the assertion fails. A test that passes before and after proves nothing. The che
 control is a `HARNESS_MUTATE='["<exact source>","<replacement>"]'` env var that string-replaces the
 fix out before the `vm` run, and to treat "0 assertions failed" under a control as a **harness bug**.
 
-**Emoji census as of 5.12.0** (literal UTF-8, no BOM — verify before/after any scripted rewrite of
+**Emoji census as of 5.14.0** (literal UTF-8, no BOM — verify before/after any scripted rewrite of
 `index.html`): U+2705 ✅ = **62**, U+1F3AF 🎯 = **31**, U+1F3C6 🏆 = **6**.
 
-### 12.1 Fixed in 5.12.0
+Seed `localStorage['pt_v3']` **before** running the app in the `vm` if you are touching anything on
+the startup path. Loading against an empty store exercises none of the reconciliation or first-paint
+behaviour, and both bugs fixed in 5.14.0 were invisible without a realistic seeded profile.
+
+A benchmark is worth writing for any performance claim — build a corpus at the scale §11.3 cites
+(~40 tasks, ~11,000 rows), time the old algorithm against the new one in the same process, and assert
+the results are identical. "It should be faster" is not a finding.
+
+### 12.1 Fixed in 5.14.0
+
+Cold-start responsiveness. 16 harness assertions (including 60 randomised reconciliation profiles),
+6/6 negative controls discriminating.
+
+**Needs pushing:** `index.html`, `sw.js`, `DESIGN.md`, and — still outstanding from 5.13.0 —
+**`.github/workflows/check-reminders.yml`**, which was missed in that push. See the deploy hazard note
+in §0.
+
+| Area | Change |
+|------|--------|
+| Startup | **S4: the app paints from `localStorage` immediately instead of waiting for the Gist.** `render()` was only called inside `gistPull().then(...)`, so with sync enabled a cold start showed a blank white screen for the entire network round trip. Moved above the sync branch; the pull still re-renders when it lands |
+| Startup | Orphan reconciliation (§6.7) now builds one task→completion-days map in a single pass rather than scanning all of `pointsHistory` once per task. It runs before the first paint, and the `planTasks` check added in 5.12.0 had made the per-task scan much more expensive |
+
+Investigated and **not** a code bug: a reminder arriving at 00:44 for a 21:00 schedule. The script
+cannot send before `reminder.time` in the configured timezone, so this is either a notification queued
+by the pre-5.12.0 script (four-week TTL, no completion check) or a stale `settings.timezone` pointing
+west of the user. §8 has the one log line that distinguishes them.
+
+### 12.2 Fixed in 5.13.0
+
+Closes D1 — the last known data-loss path — plus the backlog items it unblocked. 47 harness
+assertions, 14/14 negative controls discriminating, and a benchmark for the performance claim.
+
+**Needs pushing:** `index.html`, `sw.js`, `scripts/check-reminders.js`,
+`.github/workflows/check-reminders.yml`, `DESIGN.md`.
+
+**One-time note:** the first run after deploying creates `reminder_state.json` in the Gist. Nothing
+needs migrating — `lastSentFor()` falls back to the legacy `task.reminder.lastSent`, so no reminder
+that already went out today will be re-sent.
+
+| Area | Change |
+|------|--------|
+| Sync | **D1 closed. `check-reminders.js` no longer writes `productivity_data.json` at all** (§8, §11.1). De-dupe state moved to its own Gist file, so the 15-minutely window in which reminder bookkeeping could discard unpushed local edits is gone rather than narrowed. Tradeoff: a dead push subscription is recorded in the state file and logged instead of being cleared in app data |
+| Reminders | **Delivery timing.** `urgency: 'high'` asks the push service to deliver immediately rather than batching for battery; `TTL: 3600` makes a message expire after an hour instead of the default four weeks, so a 9pm reminder can no longer surface after midnight. Cron tightened from `*/15` to `*/5`, GitHub's minimum — since the script refuses to send before `reminder.time`, the interval *is* the lag budget. The scheduling logic itself was not touched; it was never the problem |
+| Plan | **C17 + C8: per-section state now travels with the sections.** New `swapPlanSectionState()` / `removePlanSectionState()` are the only sanctioned way to maintain it, and they move the paid-bonus tracker **and** the rewards together. Reordering sections used to make a section moved into an already-paid slot lose its bonus while the one moved out could be paid twice; deleting a section **wiped** the tracker outright, which let every already-paid section pay again |
+| Plan | **C1: editing a plan sub-task now updates the row that drives goal progress.** New `syncPlanTrackingRow()`. `plan-st-edit` updated `planTasks`, the grouped totals and the balance but never the sibling `_tracking` row `getGoalProgress` reads, so history and the goal bar diverged permanently and never reconciled. Also creates the tracking row when a sub-task logged with no time/count is edited upward |
+| Performance | **S1: streaks memoised per render pass and indexed by day.** `rCard` called `getGoalStreak` 3× per card and each call re-scanned all of `pointsHistory` for up to 365 periods. `getGoalStreak`/`getDailyStreak` are now thin memoised wrappers over `computeGoalStreak`/`computeDailyStreak`; invalidation hangs off `saveL()` plus the top of `render()`. **Measured 4–8× faster across 6 runs (median ~7×), ~170 ms → ~27 ms per render pass** at 40 tasks / ~11,000 rows, with every streak verified identical to the old algorithm. Measured in Node, so it's the algorithmic win rather than a browser figure |
+
+Deliberately not changed: streaks still ignore `planTasks` (now tracked as **C18**), and
+`getGoalProgress` still does a full scan per call — it is the largest remaining per-render cost.
+
+### 12.3 Fixed in 5.12.0
 
 First pass driven by **user-reported bugs from real use** rather than an audit. 33 harness
 assertions, 9/9 negative controls discriminating.
@@ -799,7 +876,7 @@ assertions, 9/9 negative controls discriminating.
 Not changed: the reminder **schedule** logic. The gate is strictly backward-looking, so early-looking
 sends are a timezone or push-delivery-latency question, not a scheduling one (§8).
 
-### 12.2 Fixed in 5.11.0
+### 12.3 Fixed in 5.11.0
 
 Corrects the 5.10.0 retirement model and unifies the recurring-due logic. 50 harness assertions,
 17/17 negative controls discriminating.
@@ -812,7 +889,7 @@ Corrects the 5.10.0 retirement model and unifies the recurring-due logic. 50 har
 | Recurring | Plan-timer retirement now clears `dueEarly`, so a "due early" task actually sleeps once done |
 | Reminders | `check-reminders.js` derives due dates from the ✅ history (including plan-grouped completions) instead of `task.lastCompleted`, and falls back to `createdAt` — a never-completed recurring task previously got **no reminder ever** |
 
-### 12.3 Fixed in 5.10.0
+### 12.4 Fixed in 5.10.0
 
 Follow-up to the 5.9.0 audit pass, resolving the three decisions left open there. 54 harness
 assertions, 15/15 negative controls discriminating.
@@ -824,7 +901,7 @@ assertions, 15/15 negative controls discriminating.
 | Goals | **Hourly goals now register progress at all.** Added `localHourStr()` / `periodStartStr()` / `periodEndStr()` and removed every `toISOString()`-derived boundary string (3.6) |
 | History | Day summary now shows `✨ N pts earned  +M bonus` — the bare number still matches the calendar cell, but the bonus is no longer invisible (5.2) |
 
-### 12.4 Fixed in 5.9.0
+### 12.5 Fixed in 5.9.0
 
 Audit pass, no new features. All of the below were verified with a headless harness plus negative
 controls.
