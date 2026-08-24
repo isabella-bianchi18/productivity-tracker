@@ -2,10 +2,13 @@ name: Check Reminders
 on:
   workflow_dispatch: {}
   schedule:
-    # Runs every 15 minutes. GitHub's cron scheduler is best-effort and can run
-    # late, especially during high load — reminders are de-duped by date, not
-    # by exact time, so a late run still fires correctly, just not to the minute.
-    - cron: '*/15 * * * *'
+    # Every 5 minutes — GitHub's minimum interval. This is the only lever we have on how
+    # close to the scheduled time a reminder goes out: the script refuses to send before
+    # `reminder.time`, so the wait is however long until the next run fires. 15 minutes meant
+    # up to a quarter hour of built-in lag on top of GitHub's own scheduler delay, which is
+    # best-effort and can be significant under load. De-dupe is per day, so extra runs are
+    # harmless. Delivery speed on the device is handled separately via urgency/TTL in the script.
+    - cron: '*/5 * * * *'
 
 jobs:
   check-reminders:
