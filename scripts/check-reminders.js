@@ -157,6 +157,16 @@ function scheduleMatchesToday(task, parts, pointsHistory) {
 // ===== Full eligibility check for one task =====
 // Where "already sent today" is recorded. The map from reminder_state.json wins; task.reminder.lastSent
 // is the legacy location and is still read so switching over doesn't re-send something already sent.
+// Minutes since midnight, tolerant of an unpadded "9:00". The gate used to compare the two HH:MM
+// strings directly, which is only correct while both are zero-padded — "21:00" < "9:00" is true, so a
+// single unpadded stored time meant the reminder never fired at any hour of the day.
+function hhmmToMinutes(s) {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(String(s == null ? '' : s).trim());
+  if (!m) return null;
+  const h = +m[1], mi = +m[2];
+  if (h > 23 || mi > 59) return null;
+  return h * 60 + mi;
+}
 function lastSentFor(task, lastSentMap) {
   if (lastSentMap && lastSentMap[task.id] != null) return lastSentMap[task.id];
   return task.reminder && task.reminder.lastSent;
@@ -165,7 +175,9 @@ function isEligibleNow(task, data, parts, lastSentMap) {
   const r = task.reminder;
   if (!r || !r.on || !r.time) return false;
   if (lastSentFor(task, lastSentMap) === parts.dateStr) return false; // already sent today
-  if (parts.hhmm < r.time) return false; // not time yet
+  const nowMin = hhmmToMinutes(parts.hhmm), dueMin = hhmmToMinutes(r.time);
+  if (dueMin === null || nowMin === null) return false; // unreadable schedule — never guess
+  if (nowMin < dueMin) return false; // not time yet
   if (!scheduleMatchesToday(task, parts, data.pointsHistory)) return false;
   if (task.type === 'recurring') {
     // Skip if they already did it today (e.g. completed it right when it became due). Uses the
@@ -177,7 +189,7 @@ function isEligibleNow(task, data, parts, lastSentMap) {
   return true;
 }
 
-module.exports = { tzParts, isEligibleNow, computeRecurringDueDateStr, lastCompletionDateStr, isTaskDone, getGoalProgress, taskCompletedInEntry, completedOnDate, lastSentFor, STATE_FILE, PUSH_OPTS };
+module.exports = { tzParts, isEligibleNow, computeRecurringDueDateStr, lastCompletionDateStr, isTaskDone, getGoalProgress, taskCompletedInEntry, completedOnDate, lastSentFor, hhmmToMinutes, STATE_FILE, PUSH_OPTS };
 
 // ===== Main (only runs when executed directly, not when required for tests) =====
 if (require.main === module) {
@@ -258,7 +270,8 @@ async function main() {
       const r = task.reminder;
       const reasons = [];
       if (lastSentFor(task, remState.lastSent) === parts.dateStr) reasons.push("already sent today (lastSent="+lastSentFor(task, remState.lastSent)+")");
-      else if (parts.hhmm < r.time) reasons.push("not time yet (now="+parts.hhmm+", scheduled="+r.time+")");
+      else if (hhmmToMinutes(r.time) === null) reasons.push("unreadable reminder time ("+JSON.stringify(r.time)+") — re-save this reminder in the app");
+      else if (hhmmToMinutes(parts.hhmm) < hhmmToMinutes(r.time)) reasons.push("not time yet (now="+parts.hhmm+", scheduled="+r.time+")");
       else if (!scheduleMatchesToday(task, parts, data.pointsHistory)) {
         if (task.type === "recurring") reasons.push("recurring not due (dueDate="+computeRecurringDueDateStr(task, data.pointsHistory)+", today="+parts.dateStr+", lastCompletion="+lastCompletionDateStr(task, data.pointsHistory)+", createdAt="+(task.createdAt||'').slice(0,10)+", cadence="+task.cadenceDays+"d)");
         else reasons.push("schedule mismatch (freq="+r.freq+", days="+JSON.stringify(r.days)+", weekday="+r.weekday+", todayDow="+parts.weekday+")");
@@ -266,7 +279,9 @@ async function main() {
       else if (task.type !== "recurring" && isTaskDone(task, data.pointsHistory, parts)) reasons.push("task done for period");
       if (reasons.length) { console.log("  SKIP \""+task.name+"\": "+reasons.join("; ")); continue; }
       if (!isEligibleNow(task, data, parts, remState.lastSent)) { console.log("  SKIP \""+task.name+"\": passed manual checks but isEligibleNow=false"); continue; }
-      console.log(`Sending reminder for "${task.name}"...`);
+      // Log the inputs that justified sending, not just the fact of it. A send that looks wrong is
+      // almost always a wrong `tz` or a wrong `r.time`, and both are invisible without this.
+      console.log(`SENDING "${task.name}": now=${parts.dateStr} ${parts.hhmm} (${tz}), scheduled=${r.time}, freq=${r.freq}, type=${task.type}`);
       const payload = JSON.stringify({
         title: '⏰ ' + task.name,
         body: task.type === 'recurring' ? 'This is due again today.' : 'Reminder from your task list.',

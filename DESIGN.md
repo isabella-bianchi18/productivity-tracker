@@ -6,9 +6,14 @@
 
 ## 0. Picking this up again — read this first
 
-Last worked: **2026-08-23**, ending at **5.14.0**. Six fix passes: 5.9.0/5.10.0/5.11.0 audits,
-5.12.0 against four user-reported bugs, 5.13.0 closing D1, 5.14.0 fixing the blank-screen cold start.
-See 12.1 for what still needs pushing.
+Last worked: **2026-08-23**, ending at **5.15.0**. Seven fix passes: 5.9.0/5.10.0/5.11.0 audits,
+5.12.0 against four user-reported bugs, 5.13.0 closing D1, 5.14.0 fixing the blank-screen cold start,
+5.15.0 making the reminder inputs observable. See 12.1 for what still needs pushing.
+
+**Open, and the reason 5.15.0 exists:** a 21:00 reminder keeps arriving just after local midnight.
+Every code path has been ruled out — the gate cannot fire early in the configured timezone. It is a
+**stored input**: either `settings.timezone` or `reminder.time`. Settings → *Reminder diagnostics* now
+shows both. Check it before writing any code.
 
 > **⚠️ Deploy hazard, learned the hard way at 5.13.0.** `index.html`, `sw.js` and
 > `scripts/check-reminders.js` were pushed but **`.github/workflows/check-reminders.yml` was not**, so
@@ -64,7 +69,7 @@ Single-file PWA (`index.html` + `sw.js`) for personal productivity tracking. Van
 - **GitHub repo**: https://github.com/isabella-bianchi18/productivity-tracker
 - **GitHub Pages**: https://isabella-bianchi18.github.io/productivity-tracker/
 - **Local dev**: User opens `file:///...productivity-tracker/index.html` directly in browser.
-- **Current version**: 5.14.0 (APP_VERSION in index.html, CACHE_VERSION in sw.js — always bumped together)
+- **Current version**: 5.15.0 (APP_VERSION in index.html, CACHE_VERSION in sw.js — always bumped together)
 
 ---
 
@@ -661,11 +666,22 @@ from a bookkeeping row. Use `_tracking`.
   in the plan timer counts. **Evergreen is handled there too**; it used to fall through to
   `return false` ("no done state, never skip"), so an evergreen task with a daily reminder nagged
   every single day no matter how often it was actually completed. Fixed in 5.12.0.
-- The time gate is `if (parts.hhmm < r.time) return false` — strictly backward-looking, so the script
-  **cannot** fire before the scheduled time in the configured timezone. If a reminder appears early,
-  suspect the timezone (`settings.timezone`, silently defaulting to `'UTC'`) or push **delivery**
-  latency on a sleeping phone, not the schedule. The run log prints `Checking reminders for <date>
-  <hhmm> (<tz>)`, which settles it in one line.
+- The time gate compares **minutes since midnight** via `hhmmToMinutes()`, and is strictly
+  backward-looking, so the script **cannot** fire before the scheduled time in the configured timezone.
+  It used to compare the two `HH:MM` strings directly, which is only correct while both are
+  zero-padded — `"21:00" < "9:00"` is true, so one unpadded stored time meant a reminder that never
+  fired at any hour. An unreadable time now blocks the send and says so in the log.
+- **If a reminder fires at the wrong hour, the code is almost certainly not the cause — the stored
+  inputs are.** Only two things decide the hour: `settings.timezone` and `reminder.time`. Both are now
+  visible in the app under Settings → *Reminder diagnostics* (12-hour rendering, a warning for an
+  unreadable time, and a warning when the saved zone differs from the device). Read that first; it
+  replaces digging through Actions logs. The run log also prints `Checking reminders for <date> <hhmm>
+  (<tz>)` and, on a send, `SENDING "<task>": now=… scheduled=… freq=… type=…`.
+- **`settings.timezone` is refreshed on every app load** (5.15.0). It used to be written only when a
+  reminder was saved, so a zone captured on another device or before a trip persisted indefinitely —
+  and a zone a few hours west makes a 9pm reminder arrive just after local midnight. Because `settings`
+  is pushed but never pulled (§4.2), that client-side write is the only way the correct zone reaches
+  the job.
 - Safe to `require()` for testing — the entry point is guarded by `require.main === module`. Needs a `web-push` stub when `node_modules` isn't installed (§12).
 
 ---
@@ -812,7 +828,31 @@ A benchmark is worth writing for any performance claim — build a corpus at the
 (~40 tasks, ~11,000 rows), time the old algorithm against the new one in the same process, and assert
 the results are identical. "It should be faster" is not a finding.
 
-### 12.1 Fixed in 5.14.0
+### 12.1 Fixed in 5.15.0
+
+Chasing a reminder that kept arriving just after midnight for a 21:00 schedule, across three
+sightings. 24 harness assertions, 7/7 negative controls discriminating.
+
+**Needs pushing:** `index.html`, `sw.js`, `scripts/check-reminders.js`, `DESIGN.md`.
+
+**Process note worth keeping.** Three rounds were spent on hypotheses that all turned out to be
+wrong — a stale queued notification (disproved once everything was deployed and it recurred), an ICU
+`hour12:false` quirk emitting `"24:07"` (disproved by running `Intl` directly: it yields `"00:07"`),
+and the script's goal branch being blind to `planTasks` (disproved by re-reading §3.4 — a plan
+session's per-task contribution always lands in a `taskId`-bearing bookkeeping row, so counting those
+is correct and complete). The gate provably cannot fire at 00:07 for a 21:00 reminder in the user's
+own timezone, which leaves the two **stored inputs**. Those were invisible from inside the app, which
+is the actual defect: **when the logic is proven and the symptom persists, stop theorising and make
+the inputs observable.**
+
+| Area | Change |
+|------|--------|
+| Reminders | **Settings → Reminder diagnostics**: every enabled reminder's stored time (rendered in 12-hour form), its frequency, the saved timezone, a warning when that zone differs from the device's, and a warning for a time string the job can't read |
+| Reminders | **`settings.timezone` is refreshed on every load**, not just when a reminder is saved. A stale zone a few hours west of the user produces exactly the "9pm reminder at 00:07" symptom, and nothing in the app previously corrected it |
+| Reminders | **Time comparison is numeric** (`hhmmToMinutes()`) instead of lexicographic on `HH:MM`. An unpadded `"9:00"` used to compare as *later* than `"21:00"`, so such a reminder never fired at all; an unreadable time now blocks the send and logs why |
+| Reminders | A send now logs the inputs that justified it (`now`, `tz`, `scheduled`, `freq`, `type`) rather than just announcing itself |
+
+### 12.2 Fixed in 5.14.0
 
 Cold-start responsiveness. 16 harness assertions (including 60 randomised reconciliation profiles),
 6/6 negative controls discriminating.
@@ -831,7 +871,7 @@ cannot send before `reminder.time` in the configured timezone, so this is either
 by the pre-5.12.0 script (four-week TTL, no completion check) or a stale `settings.timezone` pointing
 west of the user. §8 has the one log line that distinguishes them.
 
-### 12.2 Fixed in 5.13.0
+### 12.3 Fixed in 5.13.0
 
 Closes D1 — the last known data-loss path — plus the backlog items it unblocked. 47 harness
 assertions, 14/14 negative controls discriminating, and a benchmark for the performance claim.
@@ -854,7 +894,7 @@ that already went out today will be re-sent.
 Deliberately not changed: streaks still ignore `planTasks` (now tracked as **C18**), and
 `getGoalProgress` still does a full scan per call — it is the largest remaining per-render cost.
 
-### 12.3 Fixed in 5.12.0
+### 12.4 Fixed in 5.12.0
 
 First pass driven by **user-reported bugs from real use** rather than an audit. 33 harness
 assertions, 9/9 negative controls discriminating.

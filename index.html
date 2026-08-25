@@ -25,7 +25,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-seri
 if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
 
 // ===== DATA =====
-const APP_VERSION='5.14.0';
+const APP_VERSION='5.15.0';
 // Ledger rows the app generates itself. Any "how many points did X earn" sum must exclude these or
 // a bonus ends up inflating the figure the next bonus is calculated from.
 const GOAL_BONUS_LABEL='🎯 Daily goal bonus';
@@ -1703,7 +1703,29 @@ function showSettings(){
   const curTheme=(D.settings&&D.settings.theme)||'default';
   const themeOptions=Object.keys(THEME_LABELS).map(k=>`<option value="${k}"${k===curTheme?' selected':''}>${THEME_LABELS[k]}</option>`).join('');
   const pushEnabled=!!D.pushSubscription;
-  modal(`<h2 style="color:var(--accent-dark);margin-bottom:16px">⚙️ Settings</h2><p style="font-size:.85rem;color:var(--text-dim);margin-bottom:8px"><b>Theme</b> (preview — try any one)</p><select id="theme-select" class="inf" style="margin-bottom:12px">${themeOptions}</select><p style="font-size:.85rem;color:var(--text-dim);margin-bottom:8px"><b>Reminders</b> (experimental — testing in progress)</p><button id="push-enable" class="btn ${pushEnabled?'bmut':'bsuc'}" style="width:100%;margin-bottom:4px">${pushEnabled?'🔔 Reminders enabled (tap to re-subscribe)':'🔔 Enable Reminders'}</button><div id="push-st" style="text-align:center;font-size:.8rem;color:var(--text-dim);margin-bottom:12px"></div><p style="font-size:.85rem;color:var(--text-dim);margin-bottom:12px"><b>Gist Sync</b><br><a href="https://gist.github.com/" target="_blank" style="color:var(--accent-dark)">Create secret Gist</a> (file: <code>productivity_data.json</code> with <code>{}</code>)<br><a href="https://github.com/settings/tokens/new?scopes=gist&description=Productivity+Tracker" target="_blank" style="color:var(--accent-dark)">Generate token</a> (classic, gist scope only)</p><input id="sgi" type="text" value="${D.settings.gistId}" placeholder="Gist ID" class="inf"><input id="sgt" type="password" value="${D.settings.token}" placeholder="Token" class="inf"><button id="ssv" class="btn bsuc" style="width:100%;margin-bottom:8px">Save & Sync</button><button id="spl" class="btn bmut" style="width:100%;margin-bottom:8px">⬇️ Pull</button><button id="spu" class="btn bmut" style="width:100%;margin-bottom:8px">⬆️ Push</button><button id="sexp" class="btn bmut" style="width:100%;margin-bottom:8px">📦 Export Backup</button><button id="simp" class="btn bmut" style="width:100%;margin-bottom:8px">📥 Import Backup</button><input id="simp-file" type="file" accept=".json" style="display:none"><div id="sst" style="text-align:center;font-size:.85rem;color:var(--text-dim);margin-top:8px"></div><button data-close class="btn bmut" style="margin-top:12px;width:100%">Close</button><p style="text-align:center;font-size:.75rem;color:var(--text-dim);margin-top:12px">App version: ${APP_VERSION}</p>`);
+  // Reminder diagnostics. The two inputs that decide when a reminder fires — the stored time and the
+  // stored timezone — were previously invisible from inside the app, so diagnosing a mis-timed
+  // reminder meant digging through GitHub Actions logs. Surface them.
+  const remDiag=(()=>{
+    const on=D.tasks.filter(t=>!t.archived&&t.reminder&&t.reminder.on);
+    const savedTz=(D.settings&&D.settings.timezone)||'';
+    let liveTz='';try{liveTz=Intl.DateTimeFormat().resolvedOptions().timeZone||''}catch(e){}
+    // Strict zero-padded HH:MM only. An unpadded "9:00" is a genuine fault worth surfacing, not a
+    // cosmetic one: the reminder job compares times and a value like that sorts wrong.
+    const fmt12=(hhmm)=>{const m=/^([01]\d|2[0-3]):([0-5]\d)$/.exec(hhmm||'');if(!m)return null;const h=+m[1];return `${h%12===0?12:h%12}:${m[2]} ${h>=12?'PM':'AM'}`};
+    const rows=on.length?on.map(t=>{
+      const r=t.reminder,pretty=fmt12(r.time);
+      const warn=pretty?'':' ⚠️ unreadable time — re-save this reminder';
+      return `<div>• ${esc(t.name)}: <b>${esc(pretty||r.time||'(none)')}</b> <span style="opacity:.7">(${esc(r.freq||'?')})</span>${esc(warn)}</div>`;
+    }).join(''):'<div>None enabled.</div>';
+    const tzLine=savedTz
+      ?`<div style="margin-top:4px">Reminder timezone: <b>${esc(savedTz)}</b></div>`
+      :`<div style="margin-top:4px;color:var(--danger-dark)">No timezone saved — the reminder job falls back to UTC.</div>`;
+    const mismatch=(savedTz&&liveTz&&savedTz!==liveTz)
+      ?`<div style="color:var(--danger-dark)">This device is <b>${esc(liveTz)}</b>. Mismatch — reminders will fire at the wrong hour until this updates.</div>`:'';
+    return `<div style="font-size:.75rem;color:var(--text-dim);background:var(--card-neutral);border-radius:8px;padding:8px 10px;margin-bottom:12px;text-align:left"><div style="font-weight:600;margin-bottom:4px">Reminder diagnostics</div>${rows}${tzLine}${mismatch}</div>`;
+  })();
+  modal(`<h2 style="color:var(--accent-dark);margin-bottom:16px">⚙️ Settings</h2><p style="font-size:.85rem;color:var(--text-dim);margin-bottom:8px"><b>Theme</b> (preview — try any one)</p><select id="theme-select" class="inf" style="margin-bottom:12px">${themeOptions}</select><p style="font-size:.85rem;color:var(--text-dim);margin-bottom:8px"><b>Reminders</b> (experimental — testing in progress)</p><button id="push-enable" class="btn ${pushEnabled?'bmut':'bsuc'}" style="width:100%;margin-bottom:4px">${pushEnabled?'🔔 Reminders enabled (tap to re-subscribe)':'🔔 Enable Reminders'}</button><div id="push-st" style="text-align:center;font-size:.8rem;color:var(--text-dim);margin-bottom:12px"></div>${remDiag}<p style="font-size:.85rem;color:var(--text-dim);margin-bottom:12px"><b>Gist Sync</b><br><a href="https://gist.github.com/" target="_blank" style="color:var(--accent-dark)">Create secret Gist</a> (file: <code>productivity_data.json</code> with <code>{}</code>)<br><a href="https://github.com/settings/tokens/new?scopes=gist&description=Productivity+Tracker" target="_blank" style="color:var(--accent-dark)">Generate token</a> (classic, gist scope only)</p><input id="sgi" type="text" value="${D.settings.gistId}" placeholder="Gist ID" class="inf"><input id="sgt" type="password" value="${D.settings.token}" placeholder="Token" class="inf"><button id="ssv" class="btn bsuc" style="width:100%;margin-bottom:8px">Save & Sync</button><button id="spl" class="btn bmut" style="width:100%;margin-bottom:8px">⬇️ Pull</button><button id="spu" class="btn bmut" style="width:100%;margin-bottom:8px">⬆️ Push</button><button id="sexp" class="btn bmut" style="width:100%;margin-bottom:8px">📦 Export Backup</button><button id="simp" class="btn bmut" style="width:100%;margin-bottom:8px">📥 Import Backup</button><input id="simp-file" type="file" accept=".json" style="display:none"><div id="sst" style="text-align:center;font-size:.85rem;color:var(--text-dim);margin-top:8px"></div><button data-close class="btn bmut" style="margin-top:12px;width:100%">Close</button><p style="text-align:center;font-size:.75rem;color:var(--text-dim);margin-top:12px">App version: ${APP_VERSION}</p>`);
   document.getElementById('theme-select')?.addEventListener('change',e=>{D.settings.theme=e.target.value;applyTheme();saveDirty();render();confetti()});
   document.getElementById('push-enable')?.addEventListener('click',async()=>{
     const st=document.getElementById('push-st');
@@ -3632,6 +3654,12 @@ if(D._lastLevel==null){D._lastLevel=getLevel().level;saveL()}
 // gistPull().then() meant a blank white screen for the entire round trip on every cold start, which
 // defeats the point of keeping a local copy at all (old issue S4). The local data is already loaded
 // and valid by this line; the pull just corrects it a moment later.
+// Keep settings.timezone current. It was only ever written when a reminder was SAVED, so a value set
+// on another device — or before a trip — persists silently, and check-reminders.js computes "now" in
+// that stale zone. A zone a few hours west makes a 9pm reminder fire just after local midnight, which
+// is exactly the symptom that took three rounds to pin down. settings is pushed but never pulled
+// (§4.2), so writing it here is what actually gets the correct zone to the reminder job.
+try{const tzNow=Intl.DateTimeFormat().resolvedOptions().timeZone;if(tzNow&&D.settings.timezone!==tzNow){D.settings.timezone=tzNow;saveDirty()}}catch(e){}
 render();
 if(D.settings.gistId&&D.settings.token){gistPull().then(()=>{updateStreak();render();showStartupModals()});startAutoSync()}
 else{showStartupModals()}
