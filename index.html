@@ -25,7 +25,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-seri
 if('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
 
 // ===== DATA =====
-const APP_VERSION='5.15.0';
+const APP_VERSION='5.19.0';
 // Ledger rows the app generates itself. Any "how many points did X earn" sum must exclude these or
 // a bonus ends up inflating the figure the next bonus is calculated from.
 const GOAL_BONUS_LABEL='🎯 Daily goal bonus';
@@ -91,7 +91,19 @@ function removeHistoryRows(rows){
   rows.forEach(r=>{const i=D.pointsHistory.indexOf(r);if(i>=0){delta+=D.pointsHistory[i].points||0;D.pointsHistory.splice(i,1)}});
   return delta;
 }
-async function gistPush(){const{gistId:g,token:t}=D.settings;if(!g||!t)return false;
+async function gistPush(force){const{gistId:g,token:t}=D.settings;if(!g||!t)return false;
+  if(!force&&!pushGuardMuted){
+    if(!remoteSeen)await peekRemote();
+    const _pl=pushLossCheck();
+    if(_pl){
+      pushGuardLast=_pl;
+      // Only prompt when nothing else is on screen; a blocked push during pagehide has no UI at all.
+      if(!document.querySelector('.modal-bg'))showPushGuard(_pl);
+      // localDirty deliberately stays set, so the local change is not lost — it retries on the next
+      // save, visibility change, or manual Push.
+      return 'blocked';
+    }
+  }
   const pushData=JSON.parse(JSON.stringify(D));delete pushData.settings.token;delete pushData.settings.gistId;
   const stampPushed=pushData._lastModified;
   try{const r=await fetch(`https://api.github.com/gists/${g}`,{method:'PATCH',headers:{'Authorization':`token ${t}`,'Content-Type':'application/json','Accept':'application/vnd.github.v3+json'},body:JSON.stringify({files:{'productivity_data.json':{content:JSON.stringify(pushData)}}})});
@@ -101,12 +113,99 @@ async function gistPush(){const{gistId:g,token:t}=D.settings;if(!g||!t)return fa
   if(r.ok&&D._lastModified===stampPushed)localDirty=false;
   return r.ok}catch(e){return false}}
 function debouncedPush(){if(pushTimeout)clearTimeout(pushTimeout);pushTimeout=setTimeout(()=>{gistPush()},2000)}
+// ===== PULL SAFETY GUARD =====
+// Aug 26 2026: a copy of the app that had not synced for three days was opened. It stamped a fresh
+// _lastModified and pushed its stale data to the Gist; every other device then pulled that shrunken
+// copy and replaced its own good data with it — 366 history rows became 291 everywhere. gistPull()
+// used to swap D wholesale on nothing but a newer timestamp, so there was no point at which anything
+// could object. pointsHistory only ever shrinks by targeted deletion (undo, deleting a single row,
+// goal-bonus recalc), so a large drop arriving from the Gist is never a legitimate edit — refuse it
+// and let the user decide.
+let remoteSeen=null;       // {rows,tasks,stamp} of the Gist as last observed — see pushLossCheck
+let pushGuardMuted=false;  // user chose "sync anyway" this session
+let pushGuardLast=null;    // most recent refused push, for the manual Push button
+let pullGuardMuted=false;  // user chose "keep mine" this session; stop re-prompting every 3s
+let pullGuardAccept='';    // signature of a remote the user explicitly chose to accept
+let pullGuardLast=null;    // {sig,loss} of the most recent refusal, for the manual Pull button
+function remoteSig(remote,rows){return String(remote._lastModified||'0')+':'+rows}
+function pullLossCheck(remote){
+  const lr=Array.isArray(D.pointsHistory)?D.pointsHistory.length:0;
+  const rr=Array.isArray(remote.pointsHistory)?remote.pointsHistory.length:0;
+  const lt=Array.isArray(D.tasks)?D.tasks.length:0;
+  const rt=Array.isArray(remote.tasks)?remote.tasks.length:0;
+  if(!lr&&!lt)return null;                      // fresh install — nothing local worth protecting
+  if(lt&&!rt)return{lr,rr,lt,rt};               // remote carries no tasks at all
+  const slack=Math.max(10,Math.floor(lr*0.1));  // absorb ordinary deletions made on another device
+  if(rr<lr-slack)return{lr,rr,lt,rt};
+  return null;
+}
+// Push side of the same protection. This is the direction that actually caused the Aug 26 loss: a
+// copy closed for three days was opened, stamped a fresh _lastModified, and PATCHed its stale data
+// over the Gist. gistPush() never looked at what was already up there, and gistPull() had refused
+// the good remote precisely because its timestamp was older. Compare against what the Gist holds
+// before overwriting it.
+function pushLossCheck(){
+  if(!remoteSeen)return null;                                  // never seen the remote — can't judge
+  if(!remoteSeen.rows&&!remoteSeen.tasks)return null;           // nothing up there worth protecting
+  const lr=Array.isArray(D.pointsHistory)?D.pointsHistory.length:0;
+  const lt=Array.isArray(D.tasks)?D.tasks.length:0;
+  const out={lr,rr:remoteSeen.rows,lt,rt:remoteSeen.tasks};
+  if(remoteSeen.tasks&&!lt)return out;                          // we'd wipe every task in the Gist
+  const slack=Math.max(10,Math.floor(remoteSeen.rows*0.1));
+  if(lr<remoteSeen.rows-slack)return out;
+  return null;
+}
+// Read the Gist without applying it. Only used when a push happens before any pull has landed —
+// on a cold start a save() can beat the startup pull, which is exactly the failure case.
+async function peekRemote(){
+  const{gistId:g,token:t}=D.settings;if(!g||!t)return;
+  try{
+    const r=await fetch(`https://api.github.com/gists/${g}`,{headers:{'Authorization':`token ${t}`,'Accept':'application/vnd.github.v3+json','If-None-Match':''}});
+    if(!r.ok)return;
+    const j=await r.json();const c=j.files['productivity_data.json']?.content;if(!c)return;
+    const rm=JSON.parse(c);
+    remoteSeen={rows:Array.isArray(rm.pointsHistory)?rm.pointsHistory.length:0,tasks:Array.isArray(rm.tasks)?rm.tasks.length:0,stamp:rm._lastModified||0};
+  }catch(e){}
+}
+function showPushGuard(loss){
+  modal(`<div style="text-align:center"><div style="font-size:2rem;margin-bottom:8px">🛑</div><h2 style="color:var(--accent-dark);margin-bottom:8px">This device is behind the cloud</h2><p style="font-size:.85rem;color:var(--text-dim);margin-bottom:12px">This copy of the app has less in it than the cloud does, so it has not been synced up. It's probably a copy that was left closed for a while.</p><div style="font-size:.8rem;text-align:left;background:var(--card-neutral);border-radius:8px;padding:8px 10px;margin-bottom:14px"><div>This device: <b>${loss.lt}</b> tasks, <b>${loss.lr}</b> history entries</div><div>Cloud copy: <b>${loss.rt}</b> tasks, <b>${loss.rr}</b> history entries</div></div><button id="pu-cloud" class="btn bpri" style="width:100%;margin-bottom:8px">Load the cloud copy</button><button id="pu-save" class="btn bmut" style="width:100%;margin-bottom:8px">Save this device's data to a file first</button><button id="pu-force" class="btn bdan" style="width:100%">Sync this device anyway</button><p style="font-size:.75rem;color:var(--text-dim);margin-top:12px">Loading the cloud copy replaces what's on this device. Anything done here since it last synced would be lost — save a file first if you're unsure.</p></div>`);
+  document.getElementById('pu-cloud')?.addEventListener('click',()=>{
+    closeM();pushGuardMuted=false;
+    // force: the stale copy's timestamp is NEWER than the good remote, so an ordinary pull would
+    // report 'current' and do nothing. That combination is the whole bug.
+    gistPull(true).then(r=>{if(r==='updated'){updateStreak();render();toast('☁️ Cloud copy loaded')}else{toast('⚠️ Could not load the cloud copy')}});
+  });
+  document.getElementById('pu-save')?.addEventListener('click',()=>{exportData();toast('💾 Saved a copy to your downloads')});
+  document.getElementById('pu-force')?.addEventListener('click',()=>{
+    pushGuardMuted=true;closeM();
+    gistPush(true).then(ok=>toast(ok===true?'☁️ Cloud copy replaced with this device':'⚠️ Could not reach the cloud'));
+  });
+}
+function showPullGuard(loss,sig){
+  modal(`<div style="text-align:center"><div style="font-size:2rem;margin-bottom:8px">🛑</div><h2 style="color:var(--accent-dark);margin-bottom:8px">Cloud copy looks incomplete</h2><p style="font-size:.85rem;color:var(--text-dim);margin-bottom:12px">The cloud copy has less in it than this device. That usually means an old copy of the app synced over it. Nothing has been changed here yet.</p><div style="font-size:.8rem;text-align:left;background:var(--card-neutral);border-radius:8px;padding:8px 10px;margin-bottom:14px"><div>This device: <b>${loss.lt}</b> tasks, <b>${loss.lr}</b> history entries</div><div>Cloud copy: <b>${loss.rt}</b> tasks, <b>${loss.rr}</b> history entries</div></div><button id="pg-keep" class="btn bpri" style="width:100%;margin-bottom:8px">Keep this device's data</button><button id="pg-cloud" class="btn bmut" style="width:100%">Use the cloud copy anyway</button></div>`);
+  document.getElementById('pg-keep')?.addEventListener('click',()=>{
+    pullGuardMuted=true;closeM();
+    // Repair the Gist immediately. Leaving it alone means every other device keeps pulling the
+    // shrunken copy and keeps prompting about it.
+    D._lastModified=Date.now();localDirty=true;saveL();
+    gistPush(true).then(ok=>toast(ok===true?'☁️ Cloud copy updated from this device':'⚠️ Could not reach the cloud — try Push in Settings'));
+  });
+  document.getElementById('pg-cloud')?.addEventListener('click',()=>{
+    pullGuardAccept=sig;pullGuardMuted=false;closeM();
+    gistPull().then(r=>{if(r==='updated'){updateStreak();render();toast('☁️ Cloud copy loaded')}});
+  });
+}
 let pullInProgress=false;
-async function gistPull(){const{gistId:g,token:t}=D.settings;if(!g||!t)return false;if(pullInProgress)return false;pullInProgress=true;try{const r=await fetch(`https://api.github.com/gists/${g}`,{headers:{'Authorization':`token ${t}`,'Accept':'application/vnd.github.v3+json','If-None-Match':''}});if(!r.ok){pullInProgress=false;return false}const j=await r.json();const c=j.files['productivity_data.json']?.content;if(c){const remote=JSON.parse(c);if(remote._lastModified&&D._lastModified&&remote._lastModified<=D._lastModified){pullInProgress=false;return 'current'}const ls=D.settings;D={...JSON.parse(JSON.stringify(DEFAULT_DATA)),...remote,settings:ls};dataGen++;{const s=new Set();D.tasks=D.tasks.filter(t=>{if(s.has(t.id))return false;s.add(t.id);return true})}
+async function gistPull(force){const{gistId:g,token:t}=D.settings;if(!g||!t)return false;if(pullInProgress)return false;pullInProgress=true;try{const r=await fetch(`https://api.github.com/gists/${g}`,{headers:{'Authorization':`token ${t}`,'Accept':'application/vnd.github.v3+json','If-None-Match':''}});if(!r.ok){pullInProgress=false;return false}const j=await r.json();const c=j.files['productivity_data.json']?.content;if(c){const remote=JSON.parse(c);const _rr=Array.isArray(remote.pointsHistory)?remote.pointsHistory.length:0;remoteSeen={rows:_rr,tasks:Array.isArray(remote.tasks)?remote.tasks.length:0,stamp:remote._lastModified||0};if(!force&&remote._lastModified&&D._lastModified&&remote._lastModified<=D._lastModified){pullInProgress=false;return 'current'}const _sig=remoteSig(remote,_rr);const _loss=force?null:((_sig===pullGuardAccept)?null:pullLossCheck(remote));if(_loss){pullGuardLast={sig:_sig,loss:_loss};pullInProgress=false;if(!pullGuardMuted&&!document.querySelector('.modal-bg'))showPullGuard(_loss,_sig);return 'blocked'}const ls=D.settings;D={...JSON.parse(JSON.stringify(DEFAULT_DATA)),...remote,settings:ls};dataGen++;{const s=new Set();D.tasks=D.tasks.filter(t=>{if(s.has(t.id))return false;s.add(t.id);return true})}
 // dailyGoal lives under settings, which we keep device-local (to protect gistId/token/theme),
 // so it wouldn't otherwise sync. Today's goal is authoritative in the synced dailyGoalLog,
 // so derive it from there: if another device set today's goal, reflect it here.
 {const tdg=D.dailyGoalLog&&D.dailyGoalLog[today()];if(tdg&&tdg!==true)D.settings.dailyGoal=tdg;}
+// Re-run the legacy reconciliation against the data we just accepted, and mark it dirty so the
+// correction actually reaches the Gist. Doing it only at startup meant it was overwritten seconds
+// later by this very pull and never propagated: a spent one-off reminder stayed switched on in the
+// Gist forever, so check-reminders.js kept re-evaluating it and it kept showing in diagnostics.
+if(reconcileLegacyTasks()){D._lastModified=Date.now();localDirty=true;debouncedPush()}
 saveL();pullInProgress=false;return 'updated'}pullInProgress=false}catch(e){pullInProgress=false}return false}
 let syncInterval=null;
 function startAutoSync(){if(syncInterval)return;syncInterval=setInterval(()=>{if(document.visibilityState==='visible'&&!document.querySelector('.modal-bg')&&!(document.activeElement?.matches('input,textarea,select')&&document.activeElement.value))gistPull().then(r=>{if(r==='updated')render()})},3000)}
@@ -1307,7 +1406,10 @@ function rPlan(){
       const secRewardSelect=secAvailRewards.length?`<select class="plan-sec-reward-add inf" data-sec="${si}" style="margin:0;font-size:.75rem;padding:4px 10px;border-radius:20px;background:var(--card-neutral);border:1px dashed var(--border)"><option value="">+ Add reward</option>${secAvailRewards.map(r=>`<option value="${r.id}">🎁 ${esc(r.name)}</option>`).join('')}</select>`:'';
       const secRewardHtml=(secRewardChips||secRewardSelect)?`<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px;align-items:center">${secRewardChips}${secRewardSelect}</div>`:'';
       html+=`<div style="display:flex;gap:6px;margin:4px 0 8px;flex-wrap:wrap"><button class="plan-sec-clear btn bmut" data-sec="${si}" style="font-size:.7rem;padding:4px 8px">🗑️ Clear</button><button class="plan-sec-save btn bmut" data-sec="${si}" style="font-size:.7rem;padding:4px 8px">💾 Save</button><div style="flex:1"></div>${si>0?`<button class="plan-sec-move btn bmut" data-sec="${si}" data-d="up" style="font-size:.7rem;padding:4px 8px">▲ Section</button>`:''}${si<sections.length-1?`<button class="plan-sec-move btn bmut" data-sec="${si}" data-d="down" style="font-size:.7rem;padding:4px 8px">▼ Section</button>`:''}</div>${secRewardHtml}`}
-    else if(sections.length>1){html+=`<div style="display:flex;gap:6px;margin:4px 0 8px"><button class="plan-sec-clear btn bmut" data-sec="${si}" style="font-size:.7rem;padding:4px 8px">🗑️ Delete section</button></div>`}
+    // An empty section still needs its ▲/▼ controls. They used to live only in the branch above,
+    // which is gated on the section having tasks, so an empty section could not be moved — and
+    // emptying a section to reposition it is exactly when you'd want to.
+    else if(sections.length>1){html+=`<div style="display:flex;gap:6px;margin:4px 0 8px;flex-wrap:wrap"><button class="plan-sec-clear btn bmut" data-sec="${si}" style="font-size:.7rem;padding:4px 8px">🗑️ Delete section</button><div style="flex:1"></div>${si>0?`<button class="plan-sec-move btn bmut" data-sec="${si}" data-d="up" style="font-size:.7rem;padding:4px 8px">▲ Section</button>`:''}${si<sections.length-1?`<button class="plan-sec-move btn bmut" data-sec="${si}" data-d="down" style="font-size:.7rem;padding:4px 8px">▼ Section</button>`:''}</div>`}
     // Page break between sections (not after last)
     if(si<sections.length-1){
       html+=`<div style="display:flex;align-items:center;gap:8px;margin:12px 0"><div style="flex:1;height:2px;background:var(--border)"></div><span style="font-size:.7rem;color:var(--text-dim)">— break —</span><div style="flex:1;height:2px;background:var(--border)"></div></div>`;
@@ -1734,12 +1836,12 @@ function showSettings(){
     st.textContent=r.msg;
     if(r.ok){const btn=document.getElementById('push-enable');btn.textContent='🔔 Reminders enabled (tap to re-subscribe)';btn.classList.remove('bsuc');btn.classList.add('bmut')}
   });
-  document.getElementById('ssv')?.addEventListener('click',async()=>{D.settings.gistId=document.getElementById('sgi').value.trim();D.settings.token=document.getElementById('sgt').value.trim();saveL();const s=document.getElementById('sst');s.textContent='Syncing...';const pulled=await gistPull();if(pulled){updateStreak();s.textContent='✅ Synced!';startAutoSync();closeM();render()}else{s.textContent='❌ Failed — check credentials'}});
-  document.getElementById('spl')?.addEventListener('click',async()=>{const s=document.getElementById('sst');s.textContent='Pulling...';const ok=await gistPull();s.textContent=ok?'✅ Pulled!':'❌ Failed';if(ok){updateStreak();closeM();render()}});
-  document.getElementById('spu')?.addEventListener('click',async()=>{const s=document.getElementById('sst');s.textContent='Pushing...';const ok=await gistPush();s.textContent=ok?'✅ Pushed!':'❌ Failed'});
+  document.getElementById('ssv')?.addEventListener('click',async()=>{D.settings.gistId=document.getElementById('sgi').value.trim();D.settings.token=document.getElementById('sgt').value.trim();saveL();const s=document.getElementById('sst');s.textContent='Syncing...';const pulled=await gistPull();if(pulled==='blocked'){s.textContent='🛑 Cloud copy looks incomplete';pullGuardMuted=false;if(pullGuardLast)showPullGuard(pullGuardLast.loss,pullGuardLast.sig);return}if(pulled){updateStreak();s.textContent='✅ Synced!';startAutoSync();closeM();render()}else{s.textContent='❌ Failed — check credentials'}});
+  document.getElementById('spl')?.addEventListener('click',async()=>{const s=document.getElementById('sst');s.textContent='Pulling...';const ok=await gistPull();if(ok==='blocked'){s.textContent='🛑 Cloud copy looks incomplete';pullGuardMuted=false;if(pullGuardLast)showPullGuard(pullGuardLast.loss,pullGuardLast.sig);return}s.textContent=ok?'✅ Pulled!':'❌ Failed';if(ok){updateStreak();closeM();render()}});
+  document.getElementById('spu')?.addEventListener('click',async()=>{const s=document.getElementById('sst');s.textContent='Pushing...';const ok=await gistPush();if(ok==='blocked'){s.textContent='🛑 This device is behind the cloud';if(pushGuardLast)showPushGuard(pushGuardLast);return}s.textContent=ok===true?'✅ Pushed!':'❌ Failed'});
   document.getElementById('sexp')?.addEventListener('click',exportData);
   document.getElementById('simp')?.addEventListener('click',()=>document.getElementById('simp-file')?.click());
-  document.getElementById('simp-file')?.addEventListener('change',e=>{const f=e.target.files[0];if(!f)return;const r=new FileReader();r.onload=ev=>{try{const imported=JSON.parse(ev.target.result);const ls=D.settings;D={...JSON.parse(JSON.stringify(DEFAULT_DATA)),...imported,settings:ls};saveDirty();updateStreak();closeM();render();toast('📥 Backup restored!')}catch(err){toast('❌ Invalid file')}};r.readAsText(f)});
+  document.getElementById('simp-file')?.addEventListener('change',e=>{const f=e.target.files[0];if(!f)return;const r=new FileReader();r.onload=ev=>{try{const imported=JSON.parse(ev.target.result);const ls=D.settings;D={...JSON.parse(JSON.stringify(DEFAULT_DATA)),...imported,settings:ls};reconcileLegacyTasks();saveDirty();updateStreak();closeM();render();toast('📥 Backup restored!')}catch(err){toast('❌ Invalid file')}};r.readAsText(f)});
 }
 function showGoalSettingModal(){
   const hasGoal = D.settings.dailyGoal > 0;
@@ -3647,6 +3749,38 @@ if(!D.savedPlans)D.savedPlans=[];
   if(fixedOrphan)saveL();
 }
 {const seen=new Set();const before=D.tasks.length;D.tasks=D.tasks.filter(t=>{if(seen.has(t.id))return false;seen.add(t.id);return true});if(D.tasks.length<before){console.log("Deduped "+(before-D.tasks.length)+" task(s)");saveL()}}
+// Housekeeping for legacy tasks. Both of these are things check-reminders.js cannot fix itself: it
+// must never write productivity_data.json (§8), so anything that needs to change task data has to
+// happen here.
+// Returns true if it changed anything, so the caller decides whether the correction merely needs
+// storing locally or needs to reach the Gist. Must stay idempotent: it runs on every pull that
+// applies new data.
+function reconcileLegacyTasks(){let fixedLegacy=false;const tdL=today();
+  // Earliest ledger date per task, so a missing createdAt is backfilled from evidence rather than
+  // stamped "today" — which would make a task you've had for months look brand new.
+  const firstSeen={};
+  D.pointsHistory.forEach(h=>{
+    const d=h.date.slice(0,10);
+    const note=(id)=>{if(!id)return;if(!firstSeen[id]||d<firstSeen[id])firstSeen[id]=d};
+    if(h.taskId)note(h.taskId);
+    if(h.planTasks)h.planTasks.forEach(p=>note(p.taskId));
+  });
+  D.tasks.forEach(t=>{
+    // A recurring task with NEITHER createdAt nor a completion gets no reminder at all, because the
+    // reminder job has nothing to anchor its cadence to (§8). Old tasks predate createdAt entirely.
+    if(!t.createdAt){t.createdAt=(firstSeen[t.id]||tdL)+'T00:00:00.000Z';fixedLegacy=true}
+    // A one-off reminder whose date has passed can never fire again, but it stays switched on and is
+    // re-evaluated on every single run. Retire it.
+    if(t.reminder&&t.reminder.on&&t.reminder.freq==='once'&&t.reminder.date&&t.reminder.date<tdL){
+      t.reminder.on=false;fixedLegacy=true;
+    }
+  });
+  return fixedLegacy;
+}
+// Startup pass, for the offline case. saveL() only — bumping _lastModified here would make this
+// device look newer than the Gist before the first pull has even run, which is the stale-overwrite
+// shape described in D3/D4. The pull below re-runs this and handles propagation.
+if(reconcileLegacyTasks())saveL();
 // Seed achievements tracker on first run so existing achievements don't popup
 if(!D._unlockedAchievements){D._unlockedAchievements=getAchievements().filter(a=>a.done).map(a=>a.name);saveL()}
 if(D._lastLevel==null){D._lastLevel=getLevel().level;saveL()}
@@ -3661,7 +3795,9 @@ if(D._lastLevel==null){D._lastLevel=getLevel().level;saveL()}
 // (§4.2), so writing it here is what actually gets the correct zone to the reminder job.
 try{const tzNow=Intl.DateTimeFormat().resolvedOptions().timeZone;if(tzNow&&D.settings.timezone!==tzNow){D.settings.timezone=tzNow;saveDirty()}}catch(e){}
 render();
-if(D.settings.gistId&&D.settings.token){gistPull().then(()=>{updateStreak();render();showStartupModals()});startAutoSync()}
+// If the pull was refused by the safety guard it has already opened its own modal — don't let the
+// startup modals paint over the one thing the user needs to answer.
+if(D.settings.gistId&&D.settings.token){gistPull().then(r=>{updateStreak();render();if(r!=='blocked')showStartupModals()});startAutoSync()}
 else{showStartupModals()}
 function checkDayChange(){
   const t=today();

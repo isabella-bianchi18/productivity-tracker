@@ -6,14 +6,34 @@
 
 ## 0. Picking this up again — read this first
 
-Last worked: **2026-08-23**, ending at **5.15.0**. Seven fix passes: 5.9.0/5.10.0/5.11.0 audits,
+Last worked: **2026-08-26**, ending at **5.19.0**. Eleven fix passes: 5.9.0/5.10.0/5.11.0 audits,
 5.12.0 against four user-reported bugs, 5.13.0 closing D1, 5.14.0 fixing the blank-screen cold start,
-5.15.0 making the reminder inputs observable. See 12.1 for what still needs pushing.
+5.15.0 making the reminder inputs observable, 5.16.0 clearing legacy-task cruft, 5.17.0/5.18.0 the
+pull and push safety guards, 5.19.0 making the 5.16.0 cleanup actually persist. See 12.1 for what
+still needs pushing.
 
-**Open, and the reason 5.15.0 exists:** a 21:00 reminder keeps arriving just after local midnight.
-Every code path has been ruled out — the gate cannot fire early in the configured timezone. It is a
-**stored input**: either `settings.timezone` or `reminder.time`. Settings → *Reminder diagnostics* now
-shows both. Check it before writing any code.
+**A correction written with `saveL()` does not survive.** The startup pull replaces `D` wholesale
+moments later. Any startup repair that must last has to be re-applied after the pull and marked
+dirty — see 12.1. This bit the 5.16.0 reminder cleanup for three versions without being noticed.
+
+**Three days of data were lost on 2026-08-26 and recovered from Gist revision history.** Read D3 and
+D4 in §11.1 before touching sync. Both directions are now guarded — receive-side in 5.17.0 (D3),
+send-side in 5.18.0 (D4). Last-write-wins on `_lastModified` alone is **not** sufficient, because
+"last write" can come from a copy that has been closed for days and will carry the newer timestamp.
+Neither guard is cosmetic; do not simplify either away.
+
+**Open: a 21:00 reminder arrives just after local midnight.** Best current explanation, not yet
+confirmed: `settings.timezone` was **absent** from the Gist (these reminders predate the app ever
+recording it), so the job fell back to `'UTC'` and sent at 21:00 UTC = **17:00 Eastern**; with the
+pre-5.13.0 script there was no TTL, so the message sat queued until the phone next woke. 5.15.0
+refreshes the timezone on every app load, which should fix it going forward.
+
+**Evidence that pinned the send time** — and the lesson: an Actions log at **19:57** local read
+`already sent today`, which the gate makes impossible for a 21:00 reminder. That single line disproved
+three earlier hypotheses (stale queued notification, an ICU `hour12` quirk, phone-side delivery lag)
+and is the only reason the UTC-fallback theory surfaced. **Get the log before theorising.** Confirm via
+`reminder_state.json` → `updatedAt`: ~`21:00Z` means the UTC fallback, ~`01:00Z` means it really did
+send at 21:00 local and the theory is wrong.
 
 > **⚠️ Deploy hazard, learned the hard way at 5.13.0.** `index.html`, `sw.js` and
 > `scripts/check-reminders.js` were pushed but **`.github/workflows/check-reminders.yml` was not**, so
@@ -69,7 +89,7 @@ Single-file PWA (`index.html` + `sw.js`) for personal productivity tracking. Van
 - **GitHub repo**: https://github.com/isabella-bianchi18/productivity-tracker
 - **GitHub Pages**: https://isabella-bianchi18.github.io/productivity-tracker/
 - **Local dev**: User opens `file:///...productivity-tracker/index.html` directly in browser.
-- **Current version**: 5.15.0 (APP_VERSION in index.html, CACHE_VERSION in sw.js — always bumped together)
+- **Current version**: 5.17.0 (APP_VERSION in index.html, CACHE_VERSION in sw.js — always bumped together)
 
 ---
 
@@ -82,9 +102,12 @@ productivity-tracker/
 ├── manifest.json       — PWA manifest (name: "Done!", standalone display)
 ├── appicon.png         — app icon (180×180, declared at 192 and 512 in manifest)
 ├── scripts/
-│   └── check-reminders.js — GitHub Actions script for push notifications
+│   ├── check-reminders.js — GitHub Actions script for push notifications
+│   ├── send-test-push.js — one-off "does push work at all" probe (manual only)
+│   └── package.json      — pins web-push 3.6.7; the Action runs `npm install` here
 ├── .github/workflows/
-│   └── check-reminders.yml — runs every 15 min for reminder notifications
+│   ├── check-reminders.yml — cron */5, the ONLY scheduled sender
+│   └── test-push.yml       — `workflow_dispatch` only, no schedule; runs send-test-push.js
 ├── theme-sampler.html  — standalone sampler (dev-only, not linked from app)
 ├── pet-sampler.html    — standalone sampler (dev-only)
 ├── sound-sampler.html  — standalone sampler (dev-only)
@@ -362,7 +385,7 @@ Exception: `${g}` inside the Gist API URLs is a gist ID, not markup — do not e
 | `save()` | Filter corrupted plan entries + set `_lastModified` + set `localDirty` + saveL + debouncedPush |
 | `saveDirty()` | Currently **byte-identical to `save()`**, including the plan filter. Kept only because ~40 call sites use it; collapse them when convenient. |
 | `gistPush()` | PATCH to Gist API. Strips credentials from payload. Clears `localDirty` **only on a confirmed `r.ok` and only if `_lastModified` did not change during the request** — clearing it up front meant a failed push (offline, expired token) left data unpushed with nothing to retrigger it. |
-| `gistPull()` | GET from Gist. Returns `'updated'` (new data applied) or `'current'` (no change). Uses `If-None-Match:''` to bust API cache. Increments `dataGen` when it replaces `D`. |
+| `gistPull()` | GET from Gist. Returns `'updated'` (new data applied), `'current'` (remote not newer), or `'blocked'` (refused by the safety guard below — `D` untouched). Uses `If-None-Match:''` to bust API cache. Increments `dataGen` when it replaces `D`. **Callers must treat `'blocked'` as a failure**: it is truthy, so `ok ? 'Pulled!' : 'Failed'` reports success for a refused pull. |
 | `startAutoSync()` | 3-second interval pull. Only renders on `'updated'`. Suppressed during modals/focused inputs with content. |
 
 **`settings` is pushed but never pulled.** `gistPush` strips only `token` and `gistId`, so
@@ -372,6 +395,36 @@ local object, which is what makes it feel device-local. Today's goal is recovere
 deriving it from the synced `dailyGoalLog`.
 
 **Conflict resolution**: Last-write-wins via `_lastModified` timestamp. Pull skips overwrite if remote ≤ local.
+
+**Pull safety guard (5.17.0).** Last-write-wins alone is not safe, because "last write" can come
+from a copy of the app that has been closed for days. `gistPull()` now runs `pullLossCheck(remote)`
+after the timestamp comparison and returns `'blocked'` instead of replacing `D` when either:
+
+- the remote has **fewer than `local − max(10, 10% of local)` history rows**, or
+- local has tasks and the **remote has none**.
+
+`pointsHistory` only ever shrinks by targeted deletion (`removeHistoryRows`, deleting a single
+entry, goal-bonus recalc) — there is no pruning anywhere — so a large drop arriving from the Gist
+is never a legitimate edit. On a block, `showPullGuard()` offers "keep this device's data" (which
+sets `pullGuardMuted` and immediately re-pushes local, repairing the Gist so other devices stop
+tripping the same guard) or "use the cloud copy anyway" (records the remote's signature in
+`pullGuardAccept` so the next pull lets it through).
+
+Three things this must keep doing, all covered by the harness in §11.1/D3:
+`pullGuardMuted` stops the 3-second poll re-prompting; the prompt is suppressed while another
+modal is open; and the startup pull skips `showStartupModals()` on `'blocked'` so the version
+popup can't paint over the one question the user needs to answer. A first sync onto a fresh
+install must still work — hence the `!lr && !lt` early return.
+
+**Push side (5.18.0, D4).** `gistPush(force)` applies the mirror-image check via `pushLossCheck()`,
+comparing local against `remoteSeen` — what `gistPull()` last observed in the Gist, recorded on every
+branch including `'current'` and `'blocked'`, so it normally costs no extra request. `peekRemote()`
+covers the cold-start case where a `save()` beats the first pull. A blocked push returns `'blocked'`
+and leaves `localDirty` set, so the change retries rather than being dropped.
+
+**Callers must compare against `true`, not truthiness.** Both `gistPush` and `gistPull` return
+`'blocked'`, which is truthy; `ok ? 'Pushed!' : 'Failed'` reports success for a refused write. The
+four call sites in Settings (`ssv`, `spl`, `spu`) and `showPullGuard` are already correct.
 
 **`dataGen`**: incremented on every pull that replaces `D`. Any deferred callback holding a
 snapshot of `D` must capture `dataGen` and bail if it changed — see 4.4.
@@ -733,6 +786,51 @@ for no extra benefit). **Tradeoff accepted:** a dead push subscription is no lon
 app's data — it's recorded in the state file and logged instead, so reminders just stop until they
 are re-enabled in Settings. See §8.
 
+**D3 — resolved 2026-08-26.** Data-loss incident and the pull guard (§4.2). At 07:23 local a copy of
+the app that had not synced since Aug 23 was opened; it stamped a fresh `_lastModified` and pushed,
+taking the Gist from 366 history rows / 1,981 points down to 291 / 1,590. Every other device then
+pulled that copy and replaced its own good data. "Pull" could not undo it: the timestamp guard
+refuses a remote older than local, which is precisely the case here. Recovered by downloading the
+10:58 PM Aug 25 Gist revision and using **Import Backup**, which has no timestamp check
+(`D = {...DEFAULT_DATA, ...imported, settings: ls}` then `saveDirty()`).
+
+Chosen fix: refuse the incoming data and ask. Rejected "always keep the larger side automatically"
+— it removes the user's say and would be wrong whenever they genuinely delete a lot. Rejected
+"rolling local backup key in localStorage" as the primary fix — worth having, but it protects one
+device rather than stopping the spread.
+
+The user-facing runbook lives in `recovery/RECOVERY.md`, with `recovery/recover.ps1` to list recent
+revisions by counts. Verification harness: extracts the guard + `gistPull` out of `index.html` and
+runs it in a `vm` sandbox against synthetic local/remote pairs, including the real incident numbers.
+Confirmed by three negative controls (disable the row check, disable the task-less check, make the
+guard over-eager). **Note:** a remote that is empty trips *both* signals, so testing the task-less
+branch needs a remote with 0 tasks but intact history, or the test proves nothing.
+
+**D4 — resolved 2026-08-26.** Push-side guard, the direction that actually caused the loss.
+`gistPush(force)` now runs `pushLossCheck()` before the PATCH and returns `'blocked'` instead of
+writing, on the same two signals as the pull guard but measured against the Gist.
+
+How it knows what the Gist holds without doubling request volume: `gistPull()` records
+`remoteSeen = {rows, tasks, stamp}` on **every** branch that parsed the file, including `'current'`
+and `'blocked'` — the branches that don't apply the data still saw it. The 3-second poll therefore
+keeps it fresh for free. `peekRemote()` is the fallback for the one case that can't rely on it: a
+`save()` firing before the startup pull lands. That ordering is not hypothetical — it is how the
+Aug 26 incident got its opening, because line ~3688 calls `saveDirty()` on a timezone change during
+load, which schedules a push 2s later regardless of whether the pull has returned.
+
+`gistPull(force)` skips both the timestamp comparison and the loss check. Needed because the stale
+copy's `_lastModified` is *newer* than the good remote's, so an ordinary pull answers `'current'` and
+does nothing — the exact reason "Pull" could not rescue the user. `showPushGuard()`'s "load the cloud
+copy" uses it.
+
+If `peekRemote()` cannot read the Gist, the push proceeds. Refusing would strand local changes on the
+device whenever the network is flaky, which is a worse failure than the one being prevented.
+
+**Correction to the record:** an earlier revision of this file said D4 was "deferred at the user's
+request." That was wrong. The user was offered section-clear confirmation, the pull guard, and an
+import guard, and chose the pull guard; the push side was not on that list, because it was only
+identified while implementing the pull guard. Do not attribute deferrals that were never offered.
+
 **D2 — resolved 2026-08-23: yes**, an in-plan goal may be set on a task with no goal of its own.
 Confirmed by the user. It has no effect on the Tasks tab (4.4.1) and only gates the plan card and the
 timer queue. No code change was needed — this was already the behaviour. Do not "fix" it.
@@ -828,7 +926,88 @@ A benchmark is worth writing for any performance claim — build a corpus at the
 (~40 tasks, ~11,000 rows), time the old algorithm against the new one in the same process, and assert
 the results are identical. "It should be faster" is not a finding.
 
-### 12.1 Fixed in 5.15.0
+### 12.1 Fixed in 5.19.0
+
+**The 5.16.0 one-off-reminder retirement never worked on a synced device.** The startup block wrote
+its correction with `saveL()`, which neither stamps `_lastModified` nor pushes. The startup
+`gistPull()` runs seconds later, and any newer remote replaced `D` wholesale — putting
+`reminder.on:true` straight back. So the Gist kept the spent reminder enabled forever,
+`check-reminders.js` kept re-evaluating it every 5 minutes, and it kept appearing in the Settings
+diagnostics panel (which lists only `reminder.on===true`, so it was reporting the truth).
+
+It could accidentally work: if the pull happened to return `'current'` the correction survived in
+memory and rode along on the next `save()`. That is why it was not obvious.
+
+Fixed by extracting the block into `reconcileLegacyTasks()` (returns whether it changed anything,
+and is idempotent) and calling it from three places:
+
+| Call site | Persistence | Why |
+|---|---|---|
+| Startup | `saveL()` only | Bumping the stamp before the first pull is the stale-overwrite shape from D3/D4. Do not "improve" this to `saveDirty()` |
+| End of `gistPull()`, after `D` is replaced | stamp + `localDirty` + `debouncedPush()` | The correction has to reach the Gist or the reminder job never sees it |
+| Import Backup handler | covered by the existing `saveDirty()` | Restoring an old backup reintroduces the old data. This is what the user actually hit after the Aug 26 recovery: the Aug 25 file predated the fix and carried the reminder back in switched on |
+
+Guard against regression: reconciliation must only mark data dirty when it **actually changed
+something**, or every pull triggers a push and devices fight each other. The harness asserts a clean
+pull leaves `localDirty` false.
+
+| Area | Change |
+|------|--------|
+| Reminders | Spent one-off reminders now genuinely retire, and the correction propagates to the Gist |
+| Reminders | `createdAt` backfill has the same three call sites, so a restored backup no longer leaves recurring tasks unanchored |
+| Plan | **Empty sections now render their ▲/▼ move buttons.** The whole button row lived inside `if(secItems.length)`, so a section could not be reordered once emptied — and emptying a section to move it is exactly when you'd want to. The `.plan-sec-move` handler is index-based and already handled empty sections; only the markup was missing |
+
+16 reconciliation assertions + 38 sync-guard regression assertions. 3 negative controls on the
+reconciliation, all discriminating — notably, reverting the pull-side call reproduces the original
+symptom exactly (reminder still on after the pull, Gist still holding it on).
+
+**Needs pushing:** `index.html`, `sw.js`, `DESIGN.md`.
+
+### 12.2 Fixed in 5.17.0 + 5.18.0
+
+Sync safety guards in both directions, after three days of data were lost and recovered (D3/D4,
+§11.1). 5.17.0 was never deployed, so both land in one push; the version is still bumped twice in
+case it was.
+
+51 harness assertions; 5 negative controls, all discriminating. Two lessons worth keeping: one
+control initially showed 0 failures, which exposed a test that wasn't isolating the branch it claimed
+to cover (an empty remote trips *both* signals — see D3); and deleting the `remoteSeen` assignment is
+the control that proves the push guard is using the cached snapshot rather than issuing its own GET.
+
+| Area | Change |
+|------|--------|
+| Sync | `gistPull(force)` returns `'blocked'` and leaves `D` alone when the remote lost more than `max(10, 10%)` of local history rows, or has no tasks while local does. `showPullGuard()` asks; "keep mine" re-pushes to repair the Gist |
+| Sync | `gistPush(force)` returns `'blocked'` and writes nothing when local is smaller than the Gist by the same margin, or has no tasks while the Gist does. `showPushGuard()` offers load-cloud / save-to-file / push-anyway. `localDirty` stays set so the change retries |
+| Sync | `gistPull()` records `remoteSeen` on every parsed branch, so the push check is normally free. `peekRemote()` covers a push that beats the first pull of a cold start |
+| Sync | `force` on both bypasses the guards *and* the timestamp comparison — required because the stale copy holds the newer `_lastModified`, which is why "Pull" couldn't rescue the user |
+| Sync | Settings **Pull**/**Push**/**Sync** no longer report success for a refused operation (`'blocked'` is truthy) |
+| Startup | Startup pull skips `showStartupModals()` on `'blocked'`, so the version popup can't paint over the guard prompt |
+| Docs | `recovery/RECOVERY.md` + `recovery/recover.ps1` — user-facing recovery runbook, lists recent Gist revisions by counts and hides bookkeeping-only revisions |
+
+**Needs pushing:** `index.html`, `sw.js`, `DESIGN.md`.
+
+**Still open, offered and not yet chosen:** confirmation on the per-section plan clear button (one
+unconfirmed tap wipes a whole section — the Aug 25 22:58 plan truncation), and rejecting an
+Import Backup whose file contains no `tasks` array (importing `reminder_state.json` by mistake
+empties everything and syncs it).
+
+### 12.3 Fixed in 5.16.0
+
+Cleanup of legacy-task cruft surfaced by reading a real Actions log. 29 harness assertions, 10/10
+negative controls discriminating.
+
+**Needs pushing:** `index.html`, `sw.js`, `scripts/check-reminders.js`, `DESIGN.md`.
+
+| Area | Change |
+|------|--------|
+| Reminders | **A one-off reminder whose date has passed is switched off on app load.** It could never fire again but stayed enabled and was re-evaluated on every run forever. Done in the app, **not** the script — the script must never write `productivity_data.json` (§8), so anything touching task data belongs client-side. A one-off dated *today* is left alone; it still has hours left |
+| Reminders | **`createdAt` is backfilled on load** from the earliest ledger row for that task, including rows nested in a grouped plan entry, falling back to today only when there is no history at all. Tasks predating the field had none, and a recurring task with neither `createdAt` nor a completion gets **no reminder ever** (§8) |
+| Reminders | `computeRecurringDueDateStr()` takes an optional `todayStr` and anchors on it as a last resort instead of returning `null`. Belt-and-braces behind the backfill above |
+| Logging | **Mismatch reasons now name the field that actually governs the schedule.** A one-off printed `days=undefined, weekday=undefined` — the two fields irrelevant to it — while omitting the `date` that decides it. `scheduleMismatchReason()` branches per freq, and a spent one-off says so explicitly |
+
+Housekeeping is idempotent across loads, asserted directly.
+
+### 12.2 Fixed in 5.15.0
 
 Chasing a reminder that kept arriving just after midnight for a 21:00 schedule, across three
 sightings. 24 harness assertions, 7/7 negative controls discriminating.
@@ -852,7 +1031,7 @@ the inputs observable.**
 | Reminders | **Time comparison is numeric** (`hhmmToMinutes()`) instead of lexicographic on `HH:MM`. An unpadded `"9:00"` used to compare as *later* than `"21:00"`, so such a reminder never fired at all; an unreadable time now blocks the send and logs why |
 | Reminders | A send now logs the inputs that justified it (`now`, `tz`, `scheduled`, `freq`, `type`) rather than just announcing itself |
 
-### 12.2 Fixed in 5.14.0
+### 12.3 Fixed in 5.14.0
 
 Cold-start responsiveness. 16 harness assertions (including 60 randomised reconciliation profiles),
 6/6 negative controls discriminating.
@@ -871,7 +1050,7 @@ cannot send before `reminder.time` in the configured timezone, so this is either
 by the pre-5.12.0 script (four-week TTL, no completion check) or a stale `settings.timezone` pointing
 west of the user. §8 has the one log line that distinguishes them.
 
-### 12.3 Fixed in 5.13.0
+### 12.4 Fixed in 5.13.0
 
 Closes D1 — the last known data-loss path — plus the backlog items it unblocked. 47 harness
 assertions, 14/14 negative controls discriminating, and a benchmark for the performance claim.
@@ -894,7 +1073,7 @@ that already went out today will be re-sent.
 Deliberately not changed: streaks still ignore `planTasks` (now tracked as **C18**), and
 `getGoalProgress` still does a full scan per call — it is the largest remaining per-render cost.
 
-### 12.4 Fixed in 5.12.0
+### 12.5 Fixed in 5.12.0
 
 First pass driven by **user-reported bugs from real use** rather than an audit. 33 harness
 assertions, 9/9 negative controls discriminating.
