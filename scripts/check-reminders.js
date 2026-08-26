@@ -12,9 +12,18 @@ const webpush = require('web-push');
 // See the write-back section of main() for why that matters.
 const STATE_FILE = 'reminder_state.json';
 // Push delivery options. `urgency: 'high'` asks the push service to deliver promptly rather than
-// batching for battery, and the TTL tells it to give up after an hour instead of holding the message
-// for the default four weeks — a 9pm reminder that lands after midnight is worse than none.
-const PUSH_OPTS = { urgency: 'high', TTL: 3600 };
+// batching for battery.
+//
+// TTL was 3600. That was wrong, and silently lost reminders: `lastSent` is recorded as soon as the
+// push service ACCEPTS the message, which is not the same as the device receiving it. If the phone
+// stayed asleep for an hour the service discarded the message, but the task was already marked sent
+// for the day, so it never retried and the reminder simply never arrived. Six hours, chosen so a
+// late reminder still shows up — the user's stated preference over losing it — while never
+// resurfacing a full day later.
+//
+// The notification body deliberately does NOT state the scheduled time. It was added here and the
+// user asked for it out; do not reintroduce it as a way of explaining a late reminder.
+const PUSH_OPTS = { urgency: 'high', TTL: 21600 };
 
 // ===== Timezone-aware date/time helpers =====
 // D.settings.timezone is an IANA name (e.g. "America/New_York"), captured
@@ -120,24 +129,52 @@ function lastCompletionDateStr(task, pointsHistory) {
   }
   return last;
 }
-function computeRecurringDueDateStr(task, pointsHistory) {
+function computeRecurringDueDateStr(task, pointsHistory, todayStr) {
   if (task.dueEarly) return task.dueEarly.slice(0, 10);
   // Never completed: fall back to createdAt so there is still exactly ONE transition day to fire
   // on. Previously this returned null, so a recurring task that had never been completed got no
   // reminder at all — ever — even though the app lists it as due. Anchoring on createdAt keeps the
   // "fires once, on the day it becomes due" promise instead of nagging every outstanding day.
-  const base = lastCompletionDateStr(task, pointsHistory) || (task.createdAt ? task.createdAt.slice(0, 10) : null);
-  if (!base) return null; // legacy task with no createdAt and no completions — nothing to anchor to
+  // Last resort: anchor on today. A legacy task with neither a completion nor a createdAt used to
+  // return null here, which meant NO reminder ever — silently, forever. Anchoring on today makes it
+  // become due in cadenceDays instead. The app also backfills createdAt on load, so this is a net.
+  const base = lastCompletionDateStr(task, pointsHistory)
+    || (task.createdAt ? task.createdAt.slice(0, 10) : null)
+    || todayStr
+    || null;
+  if (!base) return null;
   const d = new Date(`${base}T00:00:00Z`);
   d.setUTCDate(d.getUTCDate() + (task.cadenceDays || 1));
   return d.toISOString().slice(0, 10);
 }
 
 // ===== Does today match this task's configured schedule? =====
+// Explain a mismatch in terms of the field that actually governs this freq. Printing `days` and
+// `weekday` for a one-off — where only `date` matters, and both of those are undefined — made the log
+// actively misleading rather than merely unhelpful.
+function scheduleMismatchReason(task, parts) {
+  const r = task.reminder || {};
+  if (task.type === 'recurring') return 'recurring not due';
+  switch (r.freq) {
+    case 'daily':
+      return `not scheduled for this weekday (days=${JSON.stringify(r.days || [])}, todayDow=${parts.weekday})`;
+    case 'weekly':
+      return `not this weekday (weekday=${r.weekday}, todayDow=${parts.weekday})`;
+    case 'monthly':
+      return `not this day of month (dayOfMonth=${r.dayOfMonth}, today=${parts.day})`;
+    case 'once':
+      if (!r.date) return 'one-off with no date set';
+      return r.date < parts.dateStr
+        ? `one-off date has passed (date=${r.date}, today=${parts.dateStr}) — it can never fire again, switch it off`
+        : `one-off not due yet (date=${r.date}, today=${parts.dateStr})`;
+    default:
+      return `unrecognised freq (${JSON.stringify(r.freq)})`;
+  }
+}
 function scheduleMatchesToday(task, parts, pointsHistory) {
   const r = task.reminder;
   if (task.type === 'recurring') {
-    return computeRecurringDueDateStr(task, pointsHistory) === parts.dateStr;
+    return computeRecurringDueDateStr(task, pointsHistory, parts.dateStr) === parts.dateStr;
   }
   switch (r.freq) {
     case 'daily':
@@ -189,7 +226,7 @@ function isEligibleNow(task, data, parts, lastSentMap) {
   return true;
 }
 
-module.exports = { tzParts, isEligibleNow, computeRecurringDueDateStr, lastCompletionDateStr, isTaskDone, getGoalProgress, taskCompletedInEntry, completedOnDate, lastSentFor, hhmmToMinutes, STATE_FILE, PUSH_OPTS };
+module.exports = { tzParts, isEligibleNow, computeRecurringDueDateStr, lastCompletionDateStr, isTaskDone, getGoalProgress, taskCompletedInEntry, completedOnDate, lastSentFor, hhmmToMinutes, scheduleMismatchReason, STATE_FILE, PUSH_OPTS };
 
 // ===== Main (only runs when executed directly, not when required for tests) =====
 if (require.main === module) {
@@ -273,8 +310,8 @@ async function main() {
       else if (hhmmToMinutes(r.time) === null) reasons.push("unreadable reminder time ("+JSON.stringify(r.time)+") — re-save this reminder in the app");
       else if (hhmmToMinutes(parts.hhmm) < hhmmToMinutes(r.time)) reasons.push("not time yet (now="+parts.hhmm+", scheduled="+r.time+")");
       else if (!scheduleMatchesToday(task, parts, data.pointsHistory)) {
-        if (task.type === "recurring") reasons.push("recurring not due (dueDate="+computeRecurringDueDateStr(task, data.pointsHistory)+", today="+parts.dateStr+", lastCompletion="+lastCompletionDateStr(task, data.pointsHistory)+", createdAt="+(task.createdAt||'').slice(0,10)+", cadence="+task.cadenceDays+"d)");
-        else reasons.push("schedule mismatch (freq="+r.freq+", days="+JSON.stringify(r.days)+", weekday="+r.weekday+", todayDow="+parts.weekday+")");
+        if (task.type === "recurring") reasons.push("recurring not due (dueDate="+computeRecurringDueDateStr(task, data.pointsHistory, parts.dateStr)+", today="+parts.dateStr+", lastCompletion="+lastCompletionDateStr(task, data.pointsHistory)+", createdAt="+((task.createdAt||'(none)').slice(0,10))+", cadence="+task.cadenceDays+"d)");
+        else reasons.push(scheduleMismatchReason(task, parts));
       } else if (task.type === "recurring" && lastCompletionDateStr(task, data.pointsHistory) === parts.dateStr) reasons.push("recurring completed today already");
       else if (task.type !== "recurring" && isTaskDone(task, data.pointsHistory, parts)) reasons.push("task done for period");
       if (reasons.length) { console.log("  SKIP \""+task.name+"\": "+reasons.join("; ")); continue; }
@@ -282,9 +319,13 @@ async function main() {
       // Log the inputs that justified sending, not just the fact of it. A send that looks wrong is
       // almost always a wrong `tz` or a wrong `r.time`, and both are invisible without this.
       console.log(`SENDING "${task.name}": now=${parts.dateStr} ${parts.hhmm} (${tz}), scheduled=${r.time}, freq=${r.freq}, type=${task.type}`);
+      // The tag MUST be per task. It was the constant 'pt-reminder', and a tag replaces any
+      // notification already showing under the same tag — so two reminders due in the same window
+      // collapsed into one and the first was silently swallowed.
       const payload = JSON.stringify({
         title: '⏰ ' + task.name,
         body: task.type === 'recurring' ? 'This is due again today.' : 'Reminder from your task list.',
+        tag: 'pt-' + task.id,
       });
       await webpush.sendNotification(subscription, payload, PUSH_OPTS);
       remState.lastSent[task.id] = parts.dateStr;

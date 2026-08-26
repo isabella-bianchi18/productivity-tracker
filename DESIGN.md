@@ -711,7 +711,10 @@ from a bookkeeping row. Use `_tracking`.
 - Reminder schedules live on `task.reminder` (3.1). Two modals: `showRecurringReminderModal` (recurring tasks, `freq:'recurring-due'`) and `showTaskReminderModal` (everything else — daily / weekly / monthly / once). Both also stamp `D.settings.timezone`.
 - **De-dupe lives in a SECOND Gist file, `reminder_state.json`** — `{lastSent:{taskId:'YYYY-MM-DD'}, updatedAt, subscriptionDead?}`. **This script must never PATCH `productivity_data.json`.** Writing it stamped `_lastModified`, and `gistPull` accepts any newer remote without consulting `localDirty`, so every run could discard unpushed local edits (this was D1). The write is gone entirely rather than made safer, which is what actually closes the hole. `lastSentFor()` still reads the legacy `task.reminder.lastSent` as a fallback so the changeover doesn't re-send anything.
 - **Consequence of that:** a dead subscription (404/410) is **not** cleared from `D.pushSubscription` any more — it is recorded as `subscriptionDead` in the state file and logged. Reminders silently stop until re-enabled in Settings. Surfacing that in the app would mean the client reading the state file; not done.
-- **Delivery timing.** `PUSH_OPTS = {urgency:'high', TTL:3600}`: `urgency` asks the push service to deliver now rather than batching for battery, and the TTL makes a message expire after an hour instead of the default four weeks, so a 9pm reminder can't surface after midnight. The cron is `*/5` (GitHub's minimum) — since the script refuses to send before `reminder.time`, the interval *is* the lag budget. GitHub's scheduler is best-effort on top of that. `settings.timezone` silently defaults to `'UTC'`, which would make everything fire hours early; the run log prints `Checking reminders for <date> <hhmm> (<tz>)` to settle that in one line.
+- **Delivery timing.** `PUSH_OPTS = {urgency:'high', TTL:21600}`: `urgency` asks the push service to deliver now rather than batching for battery. **The TTL was 3600 and that silently lost reminders — do not lower it back.** `remState.lastSent` is written the moment `sendNotification()` resolves, which only means the push service *accepted* the message, not that the device received it. A phone asleep past the expiry meant the service dropped the message while the task was already marked sent for the day, so it never retried and the reminder never arrived, with nothing recording the loss. Six hours: long enough that a sleeping phone still gets it, short enough that it can't resurface a full day later. The user's stated preference is late over lost. Genuinely fixing this would need delivery receipts, which Web Push does not provide.
+- **Notification `tag` must stay per task** (`'pt-' + task.id`). It was the constant `'pt-reminder'`, and a tag *replaces* any notification already showing under the same tag — so two reminders due in the same window collapsed into one and the earlier one vanished. With a 20:00 and a 21:00 reminder and any scheduler delay, that is easy to hit.
+- **Do not put the scheduled time in the notification body.** It was added as a way to make a late reminder self-explanatory; the user asked for it removed (2026-08-26).
+- **`D.pushSubscription` holds exactly one subscription**, overwritten by whichever device last enabled reminders, and it syncs — so enabling on a second device silently stops the first from receiving anything. Confirmed **not** an issue in practice: the user subscribes on their phone only (2026-08-26). Left as-is deliberately; revisit only if a second device is ever enrolled. The cron is `*/5` (GitHub's minimum) — since the script refuses to send before `reminder.time`, the interval *is* the lag budget. GitHub's scheduler is best-effort on top of that. `settings.timezone` silently defaults to `'UTC'`, which would make everything fire hours early; the run log prints `Checking reminders for <date> <hhmm> (<tz>)` to settle that in one line.
 - The script is timezone-explicit (`Intl.DateTimeFormat` + `settings.timezone`) because it runs on a UTC runner, whereas the app relies on `localISO()`. Different mechanisms, same intent — see 3.6.
 - **Its recurring due-date reckoning duplicates the app's** — see 4.4.2. Keep `lastCompletionDateStr()` / `computeRecurringDueDateStr()` in sync with `recurElapsed()` / `recurIsDue()`.
 - **`isTaskDone()` decides whether to stay quiet because you already did the thing.** It goes through
@@ -962,6 +965,17 @@ reconciliation, all discriminating — notably, reverting the pull-side call rep
 symptom exactly (reminder still on after the pull, Gist still holding it on).
 
 **Needs pushing:** `index.html`, `sw.js`, `DESIGN.md`.
+
+**Also needs pushing, no version bump (script only):** `scripts/check-reminders.js` — two reminder
+delivery bugs, see §8. TTL 3600 → 21600 (a phone asleep past the expiry lost the reminder outright,
+because `lastSent` had already been recorded), and the notification `tag` is now per task instead of
+one shared constant (two reminders in the same window collapsed into one). 14 assertions against the
+real module with `web-push` stubbed.
+
+**Reminder items still open, offered and not taken:** a dead push subscription stops reminders
+permanently with nothing surfaced in the app (the state file records it; the client never reads it),
+and there is no on-demand test send — `workflow_dispatch` exists but only sends what is genuinely
+due, so the chain can't be proven at a moment of the user's choosing.
 
 ### 12.2 Fixed in 5.17.0 + 5.18.0
 
