@@ -711,6 +711,24 @@ from a bookkeeping row. Use `_tracking`.
 - Reminder schedules live on `task.reminder` (3.1). Two modals: `showRecurringReminderModal` (recurring tasks, `freq:'recurring-due'`) and `showTaskReminderModal` (everything else — daily / weekly / monthly / once). Both also stamp `D.settings.timezone`.
 - **De-dupe lives in a SECOND Gist file, `reminder_state.json`** — `{lastSent:{taskId:'YYYY-MM-DD'}, updatedAt, subscriptionDead?}`. **This script must never PATCH `productivity_data.json`.** Writing it stamped `_lastModified`, and `gistPull` accepts any newer remote without consulting `localDirty`, so every run could discard unpushed local edits (this was D1). The write is gone entirely rather than made safer, which is what actually closes the hole. `lastSentFor()` still reads the legacy `task.reminder.lastSent` as a fallback so the changeover doesn't re-send anything.
 - **Consequence of that:** a dead subscription (404/410) is **not** cleared from `D.pushSubscription` any more — it is recorded as `subscriptionDead` in the state file and logged. Reminders silently stop until re-enabled in Settings. Surfacing that in the app would mean the client reading the state file; not done.
+- **MEASURED 2026-08-27: GitHub's scheduler is the dominant source of reminder unreliability, not this
+  code.** 300 scheduled runs over Aug 18–27 (~34/day against 288 requested at `*/5`): **minimum gap 16
+  min, median 36, p90 60, max 587.** Not one gap was under 16 minutes, so `*/5` buys nothing over
+  `*/15` — the honoured floor is ~16 min either way. Worse, there is a **nightly hole spanning
+  20:00–21:30 Eastern** (= around 00:00 UTC, when everyone's cron piles up): 86–107 min every evening
+  Aug 18–23, and on Aug 26 a **587-minute gap from 20:53 to 06:40 the next morning**. A 20:00 or 21:00
+  reminder therefore lands in the worst window every single night. The Aug 26 21:00 reminder was never
+  evaluated at all: by the next run the date had rolled over, `nowMin < dueMin` was true again, and it
+  was dropped. **Before blaming the eligibility logic for a missed reminder, check the run cadence.**
+- **A reminder whose due time passes with no run before midnight is lost, silently.** As of 2026-08-27
+  the script logs `MISSED "<task>": was due <date> at <time>...`, guarded so it does not fire when the
+  reminder was legitimately skipped (already sent, or the task was done that day). This is diagnostics
+  only — it does not recover the reminder. A bounded cross-midnight catch-up was considered and not
+  built: it would deliver a 21:00 reminder at 02:00, and the user has objected to post-midnight
+  notifications before. Needs an explicit decision, not an assumption.
+- **The real fix is to stop depending on GitHub cron for timing** — an external punctual scheduler
+  hitting `workflow_dispatch`, or moving the job to a platform whose cron is honoured. Not done:
+  needs the user's accounts and secrets.
 - **Delivery timing.** `PUSH_OPTS = {urgency:'high', TTL:21600}`: `urgency` asks the push service to deliver now rather than batching for battery. **The TTL was 3600 and that silently lost reminders — do not lower it back.** `remState.lastSent` is written the moment `sendNotification()` resolves, which only means the push service *accepted* the message, not that the device received it. A phone asleep past the expiry meant the service dropped the message while the task was already marked sent for the day, so it never retried and the reminder never arrived, with nothing recording the loss. Six hours: long enough that a sleeping phone still gets it, short enough that it can't resurface a full day later. The user's stated preference is late over lost. Genuinely fixing this would need delivery receipts, which Web Push does not provide.
 - **Notification `tag` must stay per task** (`'pt-' + task.id`). It was the constant `'pt-reminder'`, and a tag *replaces* any notification already showing under the same tag — so two reminders due in the same window collapsed into one and the earlier one vanished. With a 20:00 and a 21:00 reminder and any scheduler delay, that is easy to hit.
 - **Do not put the scheduled time in the notification body.** It was added as a way to make a late reminder self-explanatory; the user asked for it removed (2026-08-26).

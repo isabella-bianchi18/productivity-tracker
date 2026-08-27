@@ -48,6 +48,17 @@ function tzParts(tz) {
 function daysInMonth(year, month1indexed) {
   return new Date(year, month1indexed, 0).getDate();
 }
+// A parts-like object for a different calendar date, for asking "was this due yesterday?".
+// Only the date fields are shifted; hhmm is meaningless here and is left as the caller's.
+function shiftParts(parts, deltaDays) {
+  const d = new Date(`${parts.dateStr}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + deltaDays);
+  const dateStr = d.toISOString().slice(0, 10);
+  return {
+    dateStr, hhmm: parts.hhmm, weekday: d.getUTCDay(),
+    day: d.getUTCDate(), month: d.getUTCMonth() + 1, year: d.getUTCFullYear(),
+  };
+}
 
 // ===== Goal progress (ported from getGoalProgress() in index.html) =====
 function periodStartStr(period, parts) {
@@ -226,7 +237,7 @@ function isEligibleNow(task, data, parts, lastSentMap) {
   return true;
 }
 
-module.exports = { tzParts, isEligibleNow, computeRecurringDueDateStr, lastCompletionDateStr, isTaskDone, getGoalProgress, taskCompletedInEntry, completedOnDate, lastSentFor, hhmmToMinutes, scheduleMismatchReason, STATE_FILE, PUSH_OPTS };
+module.exports = { tzParts, shiftParts, isEligibleNow, computeRecurringDueDateStr, lastCompletionDateStr, isTaskDone, getGoalProgress, taskCompletedInEntry, completedOnDate, lastSentFor, hhmmToMinutes, scheduleMismatchReason, STATE_FILE, PUSH_OPTS };
 
 // ===== Main (only runs when executed directly, not when required for tests) =====
 if (require.main === module) {
@@ -305,6 +316,21 @@ async function main() {
   for (const task of tasks) {
     try {
       const r = task.reminder;
+      // Visibility for the failure mode a cron audit turned up on 2026-08-27: GitHub honours only
+      // about one in eight of the requested runs (median gap 36 min, worst observed 587 min). If no
+      // run happens between a reminder's due time and midnight, the date rolls over, the gate says
+      // "not time yet", and the reminder is dropped with nothing recorded anywhere. Say it out loud
+      // so a miss is diagnosable instead of invisible.
+      if (hhmmToMinutes(r.time) !== null) {
+        const yp = shiftParts(parts, -1);
+        const sentYesterday = lastSentFor(task, remState.lastSent) === yp.dateStr;
+        const doneYesterday = task.type === 'recurring'
+          ? lastCompletionDateStr(task, data.pointsHistory) === yp.dateStr
+          : isTaskDone(task, data.pointsHistory, yp);
+        if (!sentYesterday && !doneYesterday && scheduleMatchesToday(task, yp, data.pointsHistory)) {
+          console.log(`  MISSED "${task.name}": was due ${yp.dateStr} at ${r.time}, never sent, and the day has rolled over. No run occurred between the due time and midnight.`);
+        }
+      }
       const reasons = [];
       if (lastSentFor(task, remState.lastSent) === parts.dateStr) reasons.push("already sent today (lastSent="+lastSentFor(task, remState.lastSent)+")");
       else if (hhmmToMinutes(r.time) === null) reasons.push("unreadable reminder time ("+JSON.stringify(r.time)+") — re-save this reminder in the app");
