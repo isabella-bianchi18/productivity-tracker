@@ -1,5 +1,5 @@
 // Service worker with cache busting for PWA updates
-const CACHE_VERSION = 'v5.19.0';
+const CACHE_VERSION = 'v5.20.0';
 
 self.addEventListener('install', e => {
   self.skipWaiting();
@@ -43,6 +43,11 @@ self.addEventListener('push', e => {
       body: data.body || '',
       icon: 'icon.png',
       badge: 'icon.png',
+      // Tags are per task, so the same tag recurs every day for a daily reminder. Without
+      // renotify, a notification that REPLACES one already sitting in Notification Center arrives
+      // silently — no sound, no banner — so an undismissed reminder from yesterday would swallow
+      // today's without trace.
+      renotify: true,
       tag: data.tag || 'pt-reminder'
     })
   );

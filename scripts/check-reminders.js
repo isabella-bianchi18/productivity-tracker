@@ -289,10 +289,10 @@ async function main() {
   console.log(`Total tasks: ${allTasks.length}, with reminder field: ${withReminder.length}, with reminder.on=true: ${withReminderOn.length}`);
   if (withReminder.length > 0 && withReminderOn.length === 0) {
     console.log("Sample reminder objects (first 3):");
-    withReminder.slice(0, 3).forEach(t => console.log(`  "${t.name}": ${JSON.stringify(t.reminder)}`));
+    withReminder.slice(0, 3).forEach(t => console.log(`  task ${t.id}: ${JSON.stringify(t.reminder)}`));
   }
   if (withReminderOn.length > 0) {
-    withReminderOn.forEach(t => console.log(`  ENABLED: "${t.name}" reminder=${JSON.stringify(t.reminder)}`));
+    withReminderOn.forEach(t => console.log(`  ENABLED: task ${t.id} reminder=${JSON.stringify(t.reminder)}`));
   }
 
   const subscription = data.pushSubscription;
@@ -328,7 +328,7 @@ async function main() {
           ? lastCompletionDateStr(task, data.pointsHistory) === yp.dateStr
           : isTaskDone(task, data.pointsHistory, yp);
         if (!sentYesterday && !doneYesterday && scheduleMatchesToday(task, yp, data.pointsHistory)) {
-          console.log(`  MISSED "${task.name}": was due ${yp.dateStr} at ${r.time}, never sent, and the day has rolled over. No run occurred between the due time and midnight.`);
+          console.log(`  MISSED task ${task.id}: was due ${yp.dateStr} at ${r.time}, never sent, and the day has rolled over. No run occurred between the due time and midnight.`);
         }
       }
       const reasons = [];
@@ -340,11 +340,11 @@ async function main() {
         else reasons.push(scheduleMismatchReason(task, parts));
       } else if (task.type === "recurring" && lastCompletionDateStr(task, data.pointsHistory) === parts.dateStr) reasons.push("recurring completed today already");
       else if (task.type !== "recurring" && isTaskDone(task, data.pointsHistory, parts)) reasons.push("task done for period");
-      if (reasons.length) { console.log("  SKIP \""+task.name+"\": "+reasons.join("; ")); continue; }
-      if (!isEligibleNow(task, data, parts, remState.lastSent)) { console.log("  SKIP \""+task.name+"\": passed manual checks but isEligibleNow=false"); continue; }
+      if (reasons.length) { console.log("  SKIP task "+task.id+": "+reasons.join("; ")); continue; }
+      if (!isEligibleNow(task, data, parts, remState.lastSent)) { console.log("  SKIP task "+task.id+": passed manual checks but isEligibleNow=false"); continue; }
       // Log the inputs that justified sending, not just the fact of it. A send that looks wrong is
       // almost always a wrong `tz` or a wrong `r.time`, and both are invisible without this.
-      console.log(`SENDING "${task.name}": now=${parts.dateStr} ${parts.hhmm} (${tz}), scheduled=${r.time}, freq=${r.freq}, type=${task.type}`);
+      console.log(`SENDING task ${task.id}: now=${parts.dateStr} ${parts.hhmm} (${tz}), scheduled=${r.time}, freq=${r.freq}, type=${task.type}`);
       // The tag MUST be per task. It was the constant 'pt-reminder', and a tag replaces any
       // notification already showing under the same tag — so two reminders due in the same window
       // collapsed into one and the first was silently swallowed.
@@ -353,12 +353,17 @@ async function main() {
         body: task.type === 'recurring' ? 'This is due again today.' : 'Reminder from your task list.',
         tag: 'pt-' + task.id,
       });
-      await webpush.sendNotification(subscription, payload, PUSH_OPTS);
+      // Log what the push service actually answered. "lastSent recorded" only ever meant "no
+      // exception thrown"; without the status code there is no way to tell an accepted-but-never-
+      // displayed notification from one that was never accepted.
+      const res = await webpush.sendNotification(subscription, payload, PUSH_OPTS);
+      const apnsId = res && res.headers ? (res.headers['apns-id'] || res.headers['apns-unique-id'] || '') : '';
+      console.log(`  push accepted: status=${res ? res.statusCode : '?'}${apnsId ? ` apns-id=${apnsId}` : ''}`);
       remState.lastSent[task.id] = parts.dateStr;
       stateChanged = true;
       sentCount++;
     } catch (err) {
-      console.error(`Failed to send for "${task.name}":`, err.statusCode || '', err.body || err.message);
+      console.error(`Failed to send for task ${task.id}:`, err.statusCode || '', err.body || err.message);
       if (err.statusCode === 404 || err.statusCode === 410) {
         subscriptionDead = true;
       }
