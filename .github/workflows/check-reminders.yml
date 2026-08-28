@@ -2,13 +2,21 @@ name: Check Reminders
 on:
   workflow_dispatch: {}
   schedule:
-    # Every 5 minutes — GitHub's minimum interval. This is the only lever we have on how
-    # close to the scheduled time a reminder goes out: the script refuses to send before
-    # `reminder.time`, so the wait is however long until the next run fires. 15 minutes meant
-    # up to a quarter hour of built-in lag on top of GitHub's own scheduler delay, which is
-    # best-effort and can be significant under load. De-dupe is per day, so extra runs are
-    # harmless. Delivery speed on the device is handled separately via urgency/TTL in the script.
-    - cron: '*/5 * * * *'
+    # REVERTED TO */15 on 2026-08-28. Do not raise the frequency again without measuring.
+    #
+    # This was */15 until 2026-08-24, when it was changed to */5 to cut the lag between a reminder's
+    # due time and the next run. Measured outcome, runs actually honoured per day:
+    #   Aug 18-23 (*/15): 22, 35, 33, 34, 41, 40
+    #   Aug 24-25 (*/5) : 34, 39      <- no better, and never a gap under 16 min
+    #   Aug 26-28 (*/5) : 21, 2, 1    <- collapse
+    # Asking for 288 runs a day and having ~35 honoured appears to get the workflow progressively
+    # deprioritised. Causation is not proven — a GitHub-wide issue can't be ruled out — but */15 is
+    # the only setting with ten days of steady throughput behind it, and */5 demonstrably bought
+    # nothing even while it was working.
+    #
+    # The honoured floor was never below 16 minutes at either setting, so the cron is NOT the lever
+    # for punctuality. The fix for that is an external scheduler calling workflow_dispatch below.
+    - cron: '*/15 * * * *'
 
 jobs:
   check-reminders:
