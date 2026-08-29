@@ -947,7 +947,38 @@ A benchmark is worth writing for any performance claim — build a corpus at the
 (~40 tasks, ~11,000 rows), time the old algorithm against the new one in the same process, and assert
 the results are identical. "It should be faster" is not a finding.
 
-### 12.1 Fixed in 5.19.0
+### 12.1 Fixed in 5.20.0 + 5.21.0
+
+**5.21.0 — a real completion could be hidden from history because it scored 0 points (this is C16,
+confirmed with live data).** `isBookkeepingEntry()` classified any row with `points===0` and a `✅` in
+its label as a completion marker. But `completeTask()` writes **one** row for "log time and mark
+done", and that row has exactly that shape whenever the logged time rounds down to zero points —
+4 minutes on a 1pt/10min task. The only record of the work was therefore hidden from the history
+list, the day summary and `taskHistFor()`, while `lastCompleted` was still set, so the task went to
+sleep with nothing on the calendar to explain why. Four such rows were found in the user's ledger
+(Aug 19, Aug 23 ×2, Aug 28).
+
+The discriminator is measured work: markers written by `stopSW`/`stopPM` carry no `minutes` and no
+`count`, and `completeTask()` rows always carry one or the other. So `points===0 && ✅` is only a
+marker when `!(minutes>0 || count>0)`. Because `completeTask()` writes a single row, un-hiding it
+cannot double-count; `_tracking` rows are still caught by the first clause. 19 assertions over the
+real row shapes, 2 negative controls.
+
+**Related, NOT a bug:** a `daily` task with a `weekly` goal disappears for the rest of the week once
+the weekly target is met — the retirement threshold (§3.x) is scoped to the goal period, not the day.
+Observed with a 10-minute weekly target already at 20 minutes. Surprising, but working as designed;
+do not "fix" without a decision.
+
+**5.20.0 — the reminder cron was reverted from `*/5` to `*/15`.** See §8: honoured runs collapsed from
+~35/day to 2/day and then 1/day over Aug 26–28 under `*/5`. Also `renotify: true` in `sw.js` (a
+same-tag notification replacing one still in Notification Center arrives silently, and tags are now
+per task so the same tag recurs daily), and the push service's response status is now logged, because
+"lastSent recorded" only ever meant "no exception thrown".
+
+**Needs pushing:** `index.html`, `sw.js`, `scripts/check-reminders.js`,
+`.github/workflows/check-reminders.yml`, `DESIGN.md`.
+
+### 12.2 Fixed in 5.19.0
 
 **The 5.16.0 one-off-reminder retirement never worked on a synced device.** The startup block wrote
 its correction with `saveL()`, which neither stamps `_lastModified` nor pushes. The startup
@@ -995,7 +1026,7 @@ permanently with nothing surfaced in the app (the state file records it; the cli
 and there is no on-demand test send — `workflow_dispatch` exists but only sends what is genuinely
 due, so the chain can't be proven at a moment of the user's choosing.
 
-### 12.2 Fixed in 5.17.0 + 5.18.0
+### 12.3 Fixed in 5.17.0 + 5.18.0
 
 Sync safety guards in both directions, after three days of data were lost and recovered (D3/D4,
 §11.1). 5.17.0 was never deployed, so both land in one push; the version is still bumped twice in
